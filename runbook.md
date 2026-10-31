@@ -208,17 +208,36 @@ delay measured from the end of the preceding run. Their effective schedules are
 profile-owned; `application-kubernetes.yml` deliberately does not override
 either cadence.
 
-| Active profile(s) | Order-ingestion delay | Fulfillment delay | Scheduled apply mode |
-| --- | --- | --- | --- |
-| Base configuration before a profile override | 1 hour | 1 hour | Disabled (safe base default) |
-| Default local `sandbox,local` | 1 minute | 1 minute | Enabled |
-| `sandbox,kubernetes` | 5 minutes | 5 minutes | Enabled |
-| `dev,kubernetes` | 5 minutes | 5 minutes | Enabled |
-| `prod,kubernetes` | 1 hour | 1 hour | Enabled |
+| Active profile(s) | Order-ingestion delay | Fulfillment delay | Order-ingestion apply | Fulfillment apply | `lego.environment.production` |
+| --- | --- | --- | --- | --- | --- |
+| Base configuration before a profile override | 1 hour | 1 hour | Disabled (safe base default) | Disabled | `false` |
+| Default local `sandbox,local` | 1 minute | 1 minute | Enabled (local DB only) | **Disabled (dry-run)** | `false` |
+| `sandbox,kubernetes` | 5 minutes | 5 minutes | Enabled (local DB only) | **Disabled (dry-run)** | `false` |
+| `dev,kubernetes` | 5 minutes | 5 minutes | Enabled (local DB only) | **Disabled (dry-run)** | `false` |
+| `prod,kubernetes` | 1 hour | 1 hour | Enabled | Enabled | `true` |
 
 `application-prod.yml` makes the production cadence explicit. For a controlled
 dry run, override either job's `apply` property to `false`; setting `enabled` to
 `false` stops that job entirely.
+
+#### Orders are PROD-only writes
+
+All LCMS environments share one BrickLink account and one ShipStation account, so
+every order is a real buyer order. **Only PROD may write to orders**: ShipStation
+order create/update, BrickLink order shipping/status updates, and Drive Thru emails
+to buyers. Lower environments (local, sandbox, dev) may only read orders.
+
+- Order ingestion (`BricklinkOpenOrderProbeJob`) only reads from BrickLink. With
+  `apply=true` it writes staged orders into the environment's own database.
+- Fulfillment (`FulfillmentSyncService`) performs the external writes. It applies
+  only when **both** `lego.fulfillment.sync.scheduled.apply=true` **and**
+  `lego.environment.production=true`. Otherwise it runs dry-run mapping. If apply
+  is requested outside production, every run logs
+  `fulfillment.sync_job.apply_suppressed` and skips candidates with
+  `SKIPPED_NON_PRODUCTION`.
+- `lego.environment.production` defaults to `false` and is set to `true` only in
+  `application-prod.yml`. Never set it in another profile or through an
+  environment override.
 
 ### `BricklinkOpenOrderProbeJob`
 
@@ -1018,7 +1037,8 @@ Schedule and selection settings:
 | `lego.fulfillment.sync.scheduled.lock-at-most-for` | `10m` | ShedLock duration | Maximum distributed lock duration. |
 | `lego.fulfillment.sync.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
 | `lego.fulfillment.sync.scheduled.batch-size` | `25` | Integer; effective value is at least `1` | Maximum marketplace orders selected per run. |
-| `lego.fulfillment.sync.scheduled.apply` | `false` | `true`, `false` | If `false`, maps staged orders only. If `true`, performs ShipStation and BrickLink mutations. |
+| `lego.fulfillment.sync.scheduled.apply` | `false` | `true`, `false` | If `false`, maps staged orders only. If `true` **and** `lego.environment.production=true`, performs ShipStation and BrickLink mutations. |
+| `lego.environment.production` | `false` | `true` only in `application-prod.yml` | Production gate for all real-order writes. When `false`, apply is suppressed even if requested. |
 
 Candidate requirements:
 
@@ -1031,10 +1051,11 @@ Candidate requirements:
 
 Operational modes:
 
-| `apply` | Behavior |
-| --- | --- |
-| `false` | Dry run. Loads staged marketplace orders, maps ShipStation order payloads, logs counters, emits metrics, and makes no ShipStation or BrickLink client calls. |
-| `true` | Live fulfillment sync. Finds an existing ShipStation order by order number, creates or updates unshipped ShipStation orders, or reconciles shipped ShipStation orders back to BrickLink. |
+| `apply` | `lego.environment.production` | Behavior |
+| --- | --- | --- |
+| `false` | any | Dry run. Loads staged marketplace orders, maps ShipStation order payloads, logs counters, emits metrics, and makes no ShipStation or BrickLink client calls. Candidates are skipped as `SKIPPED_DRY_RUN`. |
+| `true` | `false` | **Suppressed** dry run. Same as above, plus a `fulfillment.sync_job.apply_suppressed` warning each run; candidates are skipped as `SKIPPED_NON_PRODUCTION`. Lower environments must never write to real orders. |
+| `true` | `true` | Live fulfillment sync (PROD only). Finds an existing ShipStation order by order number, creates or updates unshipped ShipStation orders, or reconciles shipped ShipStation orders back to BrickLink. |
 
 Live fulfillment behavior when `apply=true`:
 
@@ -1071,7 +1092,8 @@ Important logs:
 
 | Event | Meaning |
 | --- | --- |
-| `fulfillment.sync_job.started` | Job started with provider, marketplace code, statuses, batch size, and apply mode. |
+| `fulfillment.sync_job.started` | Job started with provider, marketplace code, statuses, batch size, effective `apply`, `applyRequested`, and `production`. |
+| `fulfillment.sync_job.apply_suppressed` | WARN. Apply was requested in a non-production runtime and was forced to dry-run. Fix the profile; lower environments must not request fulfillment apply. |
 | `fulfillment.sync_job.payload_missing` | A candidate lacks one or both required raw payloads. |
 | `fulfillment.sync_job.order_mapped` | One candidate mapped successfully and reports action, ShipStation order id when available, and tracking presence. |
 | `fulfillment.sync_job.order_failed` | One candidate failed; job continues. |
@@ -1421,7 +1443,7 @@ Backed by `FulfillmentSyncProperties`.
 | `lego.fulfillment.metrics-tag` | `fulfillment` | Non-blank string | Low-cardinality provider tag for metrics. |
 | `lego.fulfillment.statuses` | `PENDING`, `UPDATED`, `READY`, `PROCESSING`, `PAID`, `PACKED` | Marketplace external status strings; code trims, uppercases, and de-duplicates | Candidate marketplace-order statuses after the canonical-invoice eligibility gate. |
 | `lego.fulfillment.sync.scheduled.enabled` | `false` | `true`, `false` | Creates scheduled fulfillment job/service beans when true. |
-| `lego.fulfillment.sync.scheduled.apply` | `false` | `true`, `false` | Enables ShipStation and BrickLink writes when true. Keep false for dry-run mapping validation. |
+| `lego.fulfillment.sync.scheduled.apply` | `false` | `true`, `false` | Requests ShipStation and BrickLink writes. Effective only when `lego.environment.production=true` (PROD); suppressed to dry-run elsewhere. |
 | `lego.fulfillment.sync.scheduled.batch-size` | `25` | Integer; effective value at least `1` | Candidate marketplace order limit per run. |
 | `lego.fulfillment.sync.scheduled.fixed-delay-ms` | `3600000` in code and base YAML; profile cadence above overrides it | Long milliseconds, >= 0 | Delay between runs. |
 | `lego.fulfillment.sync.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | First-run startup delay. |
@@ -2097,7 +2119,7 @@ Set `enabled=false` if the job should stop entirely.
 5. Confirm the selected order has an `INVOICED` canonical order link and active canonical transaction-item links, then watch `fulfillment.sync_job.order_mapped` and confirm `orderNumber=BL-{bricklinkOrderId}`, item counts, image URLs, insurance options, international options, and shipping service choices are correct.
 6. Confirm `/actuator/prometheus` exposes `fulfillment_sync`, `fulfillment_sync_duration`, and `fulfillment_sync_order`.
 7. Set a small `lego.fulfillment.sync.scheduled.batch-size` before first live apply validation.
-8. Set `lego.fulfillment.sync.scheduled.apply=true` only after dry-run mapping and credentials are verified.
+8. Set `lego.fulfillment.sync.scheduled.apply=true` only in PROD (`lego.environment.production=true`), and only after dry-run mapping and credentials are verified. In local, sandbox, and dev, apply stays `false`, and the service suppresses it anyway.
 9. Watch `fulfillment.sync_job.completed` for `ordersCreated`, `ordersUpdated`, `ordersShippedReconciled`, `ordersSkipped`, and `ordersFailed`.
 10. Confirm ShipStation contains one order per BrickLink order number, the local canonical shipment has the ShipStation shipment ID/carrier/service/tracking and transaction-item links, and BrickLink is updated only after ShipStation reports the order shipped with tracking.
 
@@ -2979,7 +3001,8 @@ order by ai.sort_order;
 | Pricing apply-readiness job reports `NO_WORK` | No latest, unapplied `PROPOSED` decisions match the configured marketplace service/status | Run the decision job first and inspect latest decision state per active listing. |
 | Pricing apply-readiness job reports `NO_READY_DECISIONS` | Selected proposed decisions were skipped by fixed-price, missing-price, currency, reason-code, confidence, comparable-count, stale-snapshot, absolute movement, percent movement, or max movement guards | Review `BricklinkPricingApplyReadinessResult` counters and the persisted `pricing_apply_readiness` latest-state query. |
 | BrickLink AJAX calls start failing after a fast test run | BrickLink may be throttling or temporarily banning the external IP | Stop the scheduled job, keep `bricklink.ajax.rate-limit.enabled=true`, keep `minimum-delay-ms >= 2000`, and wait before retrying. |
-| Fulfillment sync maps orders but creates no ShipStation orders | `lego.fulfillment.sync.scheduled.apply=false` | This is dry-run mapping mode. Set apply true only after staged payloads and credentials are verified. |
+| Fulfillment sync maps orders but creates no ShipStation orders | `lego.fulfillment.sync.scheduled.apply=false`, or a non-production runtime (`lego.environment.production=false`) | This is dry-run mapping mode, and it is expected in local/sandbox/dev. In PROD, set apply true only after staged payloads and credentials are verified. |
+| `fulfillment.sync_job.apply_suppressed` warning every run | Fulfillment apply requested in a non-production runtime | Expected safety behavior. Set `lego.fulfillment.sync.scheduled.apply=false` in that profile. Never set `lego.environment.production=true` outside PROD. |
 | Fulfillment sync reports `PAYLOADS_MISSING` | BrickLink order sync has not stored latest `ORDER_RESPONSE` and `ORDER_ITEMS_RESPONSE` payloads for candidates | Run BrickLink order sync with `apply=true` first and confirm `marketplace_order_payload` rows exist. |
 | Fulfillment candidate fails with duplicate ShipStation orders | More than one ShipStation order exists for the same `BL-{orderId}` order number | Resolve the duplicate in ShipStation before re-running live fulfillment apply. |
 | Shipped ShipStation order does not update BrickLink | ShipStation shipment has no non-voided tracking number | Add/verify tracking in ShipStation, then let the next fulfillment run reconcile it. |
@@ -2998,6 +3021,7 @@ order by ai.sort_order;
 - Treat all `/internal/*` endpoints as administrative operations. They should remain behind trusted network/access controls.
 - Prefer sync-plan and repair-plan endpoints over the legacy direct sync endpoint for manual image-hosting operations.
 - Before enabling write-side marketplace sync, confirm the marketplace sync tables and constraints exist in the target database.
+- Only PROD may write to real orders (ShipStation, BrickLink order status, Drive Thru). Never set `lego.environment.production=true` outside `application-prod.yml`.
 - Before enabling fulfillment apply mode, confirm BrickLink order sync has written current staged payloads and start with a small fulfillment batch size.
 - Do not use fulfillment sync as the source of local accounting truth yet; transaction finalization, payment/cost/shipping rows, and marketplace order transaction links remain deferred.
 
