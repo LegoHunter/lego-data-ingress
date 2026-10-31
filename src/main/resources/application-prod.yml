@@ -1,4 +1,8 @@
 lego:
+  # The only runtime allowed to write to real orders (ShipStation, BrickLink order status,
+  # Drive Thru emails). See HOMELAB-14.
+  environment:
+    production: true
   bricklink:
     orders:
       sync:

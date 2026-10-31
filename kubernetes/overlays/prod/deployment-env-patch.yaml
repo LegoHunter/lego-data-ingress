@@ -9,4 +9,4 @@ spec:
         - name: lego-data-ingress
           env:
             - name: SPRING_PROFILES_ACTIVE
-              value: dev,kubernetes
+              value: prod,kubernetes

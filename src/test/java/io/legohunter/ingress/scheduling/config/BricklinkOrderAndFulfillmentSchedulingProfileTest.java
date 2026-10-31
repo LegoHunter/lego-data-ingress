@@ -1,6 +1,7 @@
 package io.legohunter.ingress.scheduling.config;
 
 import io.legohunter.egress.fulfillment.FulfillmentSyncProperties;
+import io.legohunter.ingress.config.environment.LegoEnvironmentProperties;
 import io.legohunter.ingress.source.bricklink.orders.BricklinkOrderSyncProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
@@ -14,6 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BricklinkOrderAndFulfillmentSchedulingProfileTest {
     private static final String ORDER_SCHEDULE = "lego.bricklink.orders.sync.scheduled.";
     private static final String FULFILLMENT_SCHEDULE = "lego.fulfillment.sync.scheduled.";
+    private static final String ENVIRONMENT_PRODUCTION = "lego.environment.production";
 
     @Test
     void unboundPropertiesUseSafeHourlyDefaults() {
@@ -34,6 +36,12 @@ class BricklinkOrderAndFulfillmentSchedulingProfileTest {
         assertThat(schedule.fulfillmentFixedDelayMs()).isEqualTo(3_600_000L);
         assertThat(schedule.orderEnabled()).isFalse();
         assertThat(schedule.fulfillmentEnabled()).isFalse();
+        assertThat(schedule.production()).isFalse();
+    }
+
+    @Test
+    void unboundEnvironmentDefaultsToNonProduction() {
+        assertThat(new LegoEnvironmentProperties().isProduction()).isFalse();
     }
 
     @Test
@@ -45,6 +53,7 @@ class BricklinkOrderAndFulfillmentSchedulingProfileTest {
 
         assertThat(defaultProfiles).containsExactly("sandbox", "local");
         assertCadence(effectiveSchedule(defaultProfiles), 60_000L);
+        assertNonProductionOrderWrites(effectiveSchedule(defaultProfiles));
     }
 
     @Test
@@ -58,13 +67,30 @@ class BricklinkOrderAndFulfillmentSchedulingProfileTest {
         assertCadence(effectiveSchedule("prod", "kubernetes"), 3_600_000L);
     }
 
+    @Test
+    void onlyProductionProfileMayWriteToRealOrders() {
+        assertNonProductionOrderWrites(effectiveSchedule("sandbox", "local"));
+        assertNonProductionOrderWrites(effectiveSchedule("sandbox", "kubernetes"));
+        assertNonProductionOrderWrites(effectiveSchedule("dev", "kubernetes"));
+
+        EffectiveSchedule production = effectiveSchedule("prod", "kubernetes");
+        assertThat(production.production()).isTrue();
+        assertThat(production.fulfillmentApply()).isTrue();
+    }
+
     private void assertCadence(EffectiveSchedule schedule, long expectedDelayMs) {
         assertThat(schedule.orderFixedDelayMs()).isEqualTo(expectedDelayMs);
         assertThat(schedule.fulfillmentFixedDelayMs()).isEqualTo(expectedDelayMs);
         assertThat(schedule.orderEnabled()).isTrue();
         assertThat(schedule.orderApply()).isTrue();
         assertThat(schedule.fulfillmentEnabled()).isTrue();
-        assertThat(schedule.fulfillmentApply()).isTrue();
+    }
+
+    private void assertNonProductionOrderWrites(EffectiveSchedule schedule) {
+        // Order sync may stage real orders into the environment's own database (read-only towards
+        // BrickLink), but fulfillment must never write to ShipStation or BrickLink orders.
+        assertThat(schedule.production()).isFalse();
+        assertThat(schedule.fulfillmentApply()).isFalse();
     }
 
     private EffectiveSchedule effectiveSchedule(String... profiles) {
@@ -79,7 +105,8 @@ class BricklinkOrderAndFulfillmentSchedulingProfileTest {
                 Boolean.parseBoolean(required(effective, ORDER_SCHEDULE + "enabled")),
                 Boolean.parseBoolean(required(effective, ORDER_SCHEDULE + "apply")),
                 Boolean.parseBoolean(required(effective, FULFILLMENT_SCHEDULE + "enabled")),
-                Boolean.parseBoolean(required(effective, FULFILLMENT_SCHEDULE + "apply"))
+                Boolean.parseBoolean(required(effective, FULFILLMENT_SCHEDULE + "apply")),
+                Boolean.parseBoolean(required(effective, ENVIRONMENT_PRODUCTION))
         );
     }
 
@@ -112,7 +139,8 @@ class BricklinkOrderAndFulfillmentSchedulingProfileTest {
             boolean orderEnabled,
             boolean orderApply,
             boolean fulfillmentEnabled,
-            boolean fulfillmentApply
+            boolean fulfillmentApply,
+            boolean production
     ) {
     }
 }

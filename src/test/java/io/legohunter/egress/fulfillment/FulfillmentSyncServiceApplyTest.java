@@ -21,6 +21,7 @@ import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
+import io.legohunter.ingress.config.environment.LegoEnvironmentProperties;
 import io.legohunter.data.dto.Carrier;
 import io.legohunter.data.dto.Transactions;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -40,6 +41,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class FulfillmentSyncServiceApplyTest {
@@ -52,6 +54,7 @@ class FulfillmentSyncServiceApplyTest {
     private ShipStationRestClient shipStationRestClient;
     private BricklinkRestClient bricklinkRestClient;
     private FulfillmentSyncProperties properties;
+    private LegoEnvironmentProperties environmentProperties;
     private ObjectMapper objectMapper;
     private FulfillmentSyncService service;
 
@@ -66,6 +69,9 @@ class FulfillmentSyncServiceApplyTest {
         shipStationRestClient = mock(ShipStationRestClient.class);
         bricklinkRestClient = mock(BricklinkRestClient.class);
         properties = new FulfillmentSyncProperties();
+        environmentProperties = new LegoEnvironmentProperties();
+        // Existing scenarios describe PROD behavior; non-production suppression is covered separately.
+        environmentProperties.setProduction(true);
         properties.getSync().getScheduled().setApply(true);
         objectMapper = new ObjectMapper().findAndRegisterModules();
         when(canonicalShipmentReconciliationService.findInvoicedOrder(any(MarketplaceOrder.class)))
@@ -87,6 +93,7 @@ class FulfillmentSyncServiceApplyTest {
                 orderItemImageResolver,
                 new FulfillmentSyncMetricsService(new SimpleMeterRegistry()),
                 properties,
+                environmentProperties,
                 objectMapper
         );
     }
@@ -187,6 +194,52 @@ class FulfillmentSyncServiceApplyTest {
         assertThat(orderCaptor.getValue().getRemarks()).isNull();
         verify(bricklinkRestClient).updateOrderStatus("100", com.bricklink.api.rest.model.v1.OrderStatus.SHIPPED);
         verify(bricklinkRestClient).sendDriveThru("100", true);
+    }
+
+    @Test
+    void runOnceNeverWritesNewOrderToShipStationOutsideProductionEvenWhenApplyRequested() throws Exception {
+        environmentProperties.setProduction(false);
+        MarketplaceOrder marketplaceOrder = marketplaceOrder(20, "100");
+        stagePayloads(marketplaceOrder, order("100", "PAID"), List.of(orderItem(3001L)));
+
+        FulfillmentSyncResult result = service.runOnce();
+
+        assertThat(result.applied()).isFalse();
+        assertThat(result.ordersMapped()).isEqualTo(1);
+        assertThat(result.ordersSkipped()).isEqualTo(1);
+        assertThat(result.ordersCreated()).isZero();
+        assertThat(result.ordersUpdated()).isZero();
+        assertNoExternalOrderWrites();
+    }
+
+    @Test
+    void runOnceNeverReconcilesShippedOrderToBricklinkOutsideProductionEvenWhenApplyRequested() throws Exception {
+        environmentProperties.setProduction(false);
+        MarketplaceOrder marketplaceOrder = marketplaceOrder(20, "100");
+        stagePayloads(marketplaceOrder, order("100", "PAID"), List.of(orderItem(3001L)));
+        when(shipStationRestClient.getOrders(Map.of("orderNumber", "BL-100")))
+                .thenReturn(OrdersList.builder()
+                        .orders(List.of(ShipStationOrder.builder()
+                                .orderId(42L)
+                                .orderNumber("BL-100")
+                                .orderStatus(com.shipstation.api.rest.model.OrderStatus.SHIPPED.label())
+                                .build()))
+                        .build());
+
+        FulfillmentSyncResult result = service.runOnce();
+
+        assertThat(result.applied()).isFalse();
+        assertThat(result.ordersShippedReconciled()).isZero();
+        assertThat(result.ordersSkipped()).isEqualTo(1);
+        assertNoExternalOrderWrites();
+    }
+
+    private void assertNoExternalOrderWrites() {
+        // Non-production runs must not even look up ShipStation orders: every lookup leads to a write.
+        verifyNoInteractions(shipStationRestClient, bricklinkRestClient);
+        verify(canonicalShipmentReconciliationService, never()).persistTrackedShipment(any(), any(), any());
+        verify(itemInventoryDao, never()).updateInventoryState(any(), any(), any());
+        verify(marketplaceOrderDao, never()).update(any());
     }
 
     private void stagePayloads(MarketplaceOrder marketplaceOrder, Order order, List<OrderItem> orderItems) throws Exception {

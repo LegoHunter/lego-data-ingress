@@ -20,6 +20,7 @@ import io.legohunter.data.dto.Carrier;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderItem;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
+import io.legohunter.ingress.config.environment.LegoEnvironmentProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -48,6 +49,8 @@ public class FulfillmentSyncService {
     private static final boolean SEND_DRIVE_THRU_COPY_TO_ME = true;
     private static final int UNKNOWN_DRIVE_THRU_RECENCY_DAYS = 10;
     private static final String SOLD = "SOLD";
+    static final String SKIPPED_DRY_RUN = "SKIPPED_DRY_RUN";
+    static final String SKIPPED_NON_PRODUCTION = "SKIPPED_NON_PRODUCTION";
 
     private static final TypeReference<List<OrderItem>> ORDER_ITEMS_TYPE = new TypeReference<>() {
     };
@@ -63,23 +66,37 @@ public class FulfillmentSyncService {
     private final FulfillmentOrderItemImageResolver orderItemImageResolver;
     private final FulfillmentSyncMetricsService metricsService;
     private final FulfillmentSyncProperties properties;
+    private final LegoEnvironmentProperties environmentProperties;
     private final ObjectMapper objectMapper;
 
     public FulfillmentSyncResult runOnce() {
         long startedAt = System.currentTimeMillis();
         FulfillmentSyncProperties.Scheduled scheduled = properties.getSync().getScheduled();
         int batchSize = scheduled.effectiveBatchSize();
-        boolean apply = scheduled.isApply();
+        boolean applyRequested = scheduled.isApply();
+        boolean production = environmentProperties.isProduction();
+        // Orders are real buyer orders on the single shared BrickLink/ShipStation accounts, so
+        // only PROD may write to them. Any other environment is forced to dry-run mapping.
+        boolean apply = applyRequested && production;
+        String skipReason = applyRequested ? SKIPPED_NON_PRODUCTION : SKIPPED_DRY_RUN;
         String marketplaceCode = properties.effectiveMarketplaceCode();
         List<String> statuses = properties.effectiveStatuses();
 
+        if (applyRequested && !production) {
+            log.warn(
+                    "fulfillment.sync_job.apply_suppressed provider={} reason=non_production_environment applyRequested=true production=false",
+                    properties.effectiveMetricsTag()
+            );
+        }
         log.info(
-                "fulfillment.sync_job.started provider={} marketplaceCode={} statuses={} batchSize={} apply={}",
+                "fulfillment.sync_job.started provider={} marketplaceCode={} statuses={} batchSize={} apply={} applyRequested={} production={}",
                 properties.effectiveMetricsTag(),
                 marketplaceCode,
                 statuses,
                 batchSize,
-                apply
+                apply,
+                applyRequested,
+                production
         );
 
         Set<MarketplaceOrder> candidates = marketplaceOrderDao.findFulfillmentCandidates(
@@ -141,7 +158,8 @@ public class FulfillmentSyncService {
                         canonicalOrder.get(),
                         loadedOrder.get(),
                         shipStationOrder,
-                        apply
+                        apply,
+                        skipReason
                 );
                 counters.add(action);
                 log.info(
@@ -221,10 +239,13 @@ public class FulfillmentSyncService {
             CanonicalShipmentReconciliationService.CanonicalFulfillmentOrder canonicalOrder,
             LoadedBricklinkOrder loadedOrder,
             ShipStationOrder desiredOrder,
-            boolean apply
+            boolean apply,
+            String skipReason
     ) {
+        // Every external write below (ShipStation create/update, shipment persistence, BrickLink
+        // order update/status, Drive Thru email, local SOLD marking) is reachable only when apply.
         if (!apply) {
-            return FulfillmentOrderAction.skipped("SKIPPED_DRY_RUN", null, false);
+            return FulfillmentOrderAction.skipped(skipReason, null, false);
         }
 
         Optional<ShipStationOrder> existingOrder = findExistingShipStationOrder(desiredOrder.getOrderNumber());

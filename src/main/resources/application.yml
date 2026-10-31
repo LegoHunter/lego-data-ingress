@@ -6,6 +6,11 @@ spring:
 
 
 lego:
+  # Runtime environment identity. Only application-prod.yml may set production=true.
+  # Non-production runtimes never write to real orders (ShipStation, BrickLink order
+  # status, Drive Thru emails) because all environments share one BrickLink/ShipStation account.
+  environment:
+    production: false
   bricklink:
     pricing:
       crawl:
