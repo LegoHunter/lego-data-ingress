@@ -21,6 +21,7 @@ import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderItem;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
+import io.legohunter.ingress.config.environment.LegoEnvironmentProperties;
 import io.legohunter.data.dto.Carrier;
 import io.legohunter.data.dto.Transactions;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -55,6 +56,7 @@ class FulfillmentSyncServiceTest {
     private CanonicalShipmentReconciliationService canonicalShipmentReconciliationService;
     private FulfillmentOrderItemImageResolver orderItemImageResolver;
     private FulfillmentSyncProperties properties;
+    private LegoEnvironmentProperties environmentProperties;
     private ObjectMapper objectMapper;
     private FulfillmentSyncService service;
 
@@ -69,6 +71,9 @@ class FulfillmentSyncServiceTest {
         canonicalShipmentReconciliationService = mock(CanonicalShipmentReconciliationService.class);
         orderItemImageResolver = mock(FulfillmentOrderItemImageResolver.class);
         properties = new FulfillmentSyncProperties();
+        environmentProperties = new LegoEnvironmentProperties();
+        // Existing scenarios describe PROD behavior; non-production suppression is covered separately.
+        environmentProperties.setProduction(true);
         objectMapper = new ObjectMapper().findAndRegisterModules();
         when(canonicalShipmentReconciliationService.findInvoicedOrder(any(MarketplaceOrder.class)))
                 .thenReturn(Optional.of(canonicalOrder()));
@@ -89,6 +94,7 @@ class FulfillmentSyncServiceTest {
                 orderItemImageResolver,
                 new FulfillmentSyncMetricsService(new SimpleMeterRegistry()),
                 properties,
+                environmentProperties,
                 objectMapper
         );
     }

@@ -153,7 +153,9 @@ lego:
     sync:
       scheduled:
         enabled: true
-        apply: true
+        # Orders are PROD-only writes (HOMELAB-14). Non-prod maps orders in dry-run only;
+        # FulfillmentSyncService also suppresses apply whenever lego.environment.production=false.
+        apply: false
         fixed-delay-ms: 300000
 
 kafka:
