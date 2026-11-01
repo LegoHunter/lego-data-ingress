@@ -1,3 +1,27 @@
+spring:
+  config:
+    import:
+      - file:${import-path}/database-configuration.yml
+      - file:${import-path}/kafka-configuration.yml
+      - file:${import-path}/minio-configuration.yml
+      - file:${import-path}/flickr-configuration.yml
+      - file:${import-path}/bitly-configuration.yml
+      - file:${import-path}/bricklink-client-api-keys.yml
+      - file:${import-path}/shipstation-configuration.yml
+  datasource:
+    database-key-name: rasppi5-01-lego-prod
+    hikari:
+      connection-timeout: 10000
+      idle-timeout: 30000
+      connection-test-query: SELECT 1
+      initialization-fail-timeout: 10000
+      auto-commit: false
+      login-timeout: 10000
+      minimum-idle: 10
+      maximum-pool-size: 40
+      validation-timeout: 10000
+      pool-name: rasppi5-01-mysql-jdbc-pool
+
 lego:
   # The only runtime allowed to write to real orders (ShipStation, BrickLink order status,
   # Drive Thru emails). See HOMELAB-14.
