@@ -5,7 +5,7 @@ namespace: services-prod
 
 labels:
   - pairs:
-      app.kubernetes.io/instance: dev
+      app.kubernetes.io/instance: prod
 
 resources:
   - ../../base
@@ -22,7 +22,7 @@ replicas:
 patches:
   - path: deployment-env-patch.yaml
   - path: deployment-resources-patch.yaml
-  - path: deployment-dev-patch.yaml
+  - path: deployment-prod-patch.yaml
     target:
       group: apps
       version: v1

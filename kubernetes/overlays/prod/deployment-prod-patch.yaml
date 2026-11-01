@@ -1,12 +1,12 @@
 - op: replace
   path: /spec/template/metadata/labels/app.kubernetes.io~1instance
-  value: dev
+  value: prod
 - op: replace
   path: /spec/template/spec/containers/0/volumeMounts/0/name
-  value: services-dev-external-secret
+  value: services-prod-external-secret
 - op: replace
   path: /spec/template/spec/volumes/0/name
-  value: services-dev-external-secret
+  value: services-prod-external-secret
 - op: replace
   path: /spec/template/spec/volumes/0/secret/secretName
-  value: services-dev-external-secret
+  value: services-prod-external-secret
