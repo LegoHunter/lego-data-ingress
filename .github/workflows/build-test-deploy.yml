@@ -6,8 +6,9 @@ name: Build Test Deploy
 #     DEPLOY_PROD_ENABLED  - merges of develop into main deploy to services-prod
 #   Set them per repository (Settings > Secrets and variables > Actions > Variables) or once for
 #   the LegoHunter organization; a repository variable overrides the organization one.
-#   Unset or any other value means the gate is shut: the image is still built and pushed, the
-#   deploy job is skipped (not failed) and the run shows a notice. SANDBOX is not gated.
+#   Unset or any other value means the gate is shut: the environment's Maven build, Quay image
+#   build/push and deploy jobs are all skipped (not failed), and a small "<ENV> deploy gate"
+#   job adds a notice explaining why. SANDBOX is not gated.
 
 on:
   push:
@@ -117,9 +118,23 @@ jobs:
           kubectl rollout restart deployment lego-data-ingress -n services-sandbox
           kubectl rollout status deployment lego-data-ingress -n services-sandbox --timeout=5m
 
+  dev-deploy-gate:
+    name: DEV deploy gate
+    # Runs only when the DEV gate is shut, to explain why the DEV jobs were skipped.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/') && vars.DEPLOY_DEV_ENABLED != 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Report shut gate
+        run: |
+          msg="DEV deploy gate is shut (DEPLOY_DEV_ENABLED is not 'true'). DEV Maven build, image build/push and deploy were skipped."
+          echo "::notice title=DEV deploy skipped::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+
   dev-maven-build:
     name: DEV Maven deploy
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    # Gate: see the header comment.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/') && vars.DEPLOY_DEV_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -145,7 +160,8 @@ jobs:
 
   dev-container-build:
     name: DEV container build and push
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    # Gate: see the header comment.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/') && vars.DEPLOY_DEV_ENABLED == 'true'
     needs: dev-maven-build
     runs-on: ubuntu-latest
     permissions:
@@ -176,14 +192,6 @@ jobs:
           tags: ${{ github.event.pull_request.merge_commit_sha }}
           username: ${{ vars.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_TOKEN }}
-      - name: Report DEV deploy gate
-        if: vars.DEPLOY_DEV_ENABLED != 'true'
-        env:
-          IMAGE: quay.io/tvattima/lego-data-ingress:${{ github.event.pull_request.merge_commit_sha }}
-        run: |
-          msg="DEV deploy gate is shut (DEPLOY_DEV_ENABLED is not 'true'). Pushed $IMAGE; Deploy DEV will be skipped."
-          echo "::notice title=DEV deploy skipped::$msg"
-          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
 
   deploy-dev:
     name: Deploy DEV
@@ -206,9 +214,23 @@ jobs:
           kubectl rollout restart deployment lego-data-ingress -n services-dev
           kubectl rollout status deployment lego-data-ingress -n services-dev --timeout=5m
 
+  prod-deploy-gate:
+    name: PROD deploy gate
+    # Runs only when the PROD gate is shut, to explain why the PROD jobs were skipped.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.head_ref == 'develop' && vars.DEPLOY_PROD_ENABLED != 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Report shut gate
+        run: |
+          msg="PROD deploy gate is shut (DEPLOY_PROD_ENABLED is not 'true'). PROD Maven build, image build/push and deploy were skipped."
+          echo "::notice title=PROD deploy skipped::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+
   prod-maven-build:
     name: PROD Maven deploy
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.head_ref == 'develop'
+    # Gate: see the header comment.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.head_ref == 'develop' && vars.DEPLOY_PROD_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -234,7 +256,8 @@ jobs:
 
   prod-container-build:
     name: PROD container build and push
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.head_ref == 'develop'
+    # Gate: see the header comment.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.head_ref == 'develop' && vars.DEPLOY_PROD_ENABLED == 'true'
     needs: prod-maven-build
     runs-on: ubuntu-latest
     permissions:
@@ -265,14 +288,6 @@ jobs:
           tags: ${{ github.event.pull_request.merge_commit_sha }}
           username: ${{ vars.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_TOKEN }}
-      - name: Report PROD deploy gate
-        if: vars.DEPLOY_PROD_ENABLED != 'true'
-        env:
-          IMAGE: quay.io/tvattima/lego-data-ingress:${{ github.event.pull_request.merge_commit_sha }}
-        run: |
-          msg="PROD deploy gate is shut (DEPLOY_PROD_ENABLED is not 'true'). Pushed $IMAGE; Deploy PROD will be skipped."
-          echo "::notice title=PROD deploy skipped::$msg"
-          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
 
   deploy-prod:
     name: Deploy PROD
