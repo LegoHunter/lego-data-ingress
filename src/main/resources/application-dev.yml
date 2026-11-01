@@ -9,7 +9,7 @@ spring:
       - file:${import-path}/bricklink-client-api-keys.yml
       - file:${import-path}/shipstation-configuration.yml
   datasource:
-    database-key-name: rasppi5-01-lego-sandbox
+    database-key-name: rasppi5-01-lego-dev
     hikari:
       connection-timeout: 10000
       idle-timeout: 30000
