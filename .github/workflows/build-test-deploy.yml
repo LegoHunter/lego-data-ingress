@@ -1,5 +1,14 @@
 name: Build Test Deploy
 
+# Deploy gates
+#   DEV and PROD deploys only run when the matching GitHub Actions variable is exactly 'true':
+#     DEPLOY_DEV_ENABLED   - merges of feature/* into develop deploy to services-dev
+#     DEPLOY_PROD_ENABLED  - merges of develop into main deploy to services-prod
+#   Set them per repository (Settings > Secrets and variables > Actions > Variables) or once for
+#   the LegoHunter organization; a repository variable overrides the organization one.
+#   Unset or any other value means the gate is shut: the image is still built and pushed, the
+#   deploy job is skipped (not failed) and the run shows a notice. SANDBOX is not gated.
+
 on:
   push:
     branches:
@@ -167,10 +176,19 @@ jobs:
           tags: ${{ github.event.pull_request.merge_commit_sha }}
           username: ${{ vars.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_TOKEN }}
+      - name: Report DEV deploy gate
+        if: vars.DEPLOY_DEV_ENABLED != 'true'
+        env:
+          IMAGE: quay.io/tvattima/lego-data-ingress:${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          msg="DEV deploy gate is shut (DEPLOY_DEV_ENABLED is not 'true'). Pushed $IMAGE; Deploy DEV will be skipped."
+          echo "::notice title=DEV deploy skipped::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
 
   deploy-dev:
     name: Deploy DEV
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    # Gate: see the header comment.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/') && vars.DEPLOY_DEV_ENABLED == 'true'
     needs: dev-container-build
     runs-on: [arc-runner]
     steps:
@@ -247,10 +265,19 @@ jobs:
           tags: ${{ github.event.pull_request.merge_commit_sha }}
           username: ${{ vars.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_TOKEN }}
+      - name: Report PROD deploy gate
+        if: vars.DEPLOY_PROD_ENABLED != 'true'
+        env:
+          IMAGE: quay.io/tvattima/lego-data-ingress:${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          msg="PROD deploy gate is shut (DEPLOY_PROD_ENABLED is not 'true'). Pushed $IMAGE; Deploy PROD will be skipped."
+          echo "::notice title=PROD deploy skipped::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
 
   deploy-prod:
     name: Deploy PROD
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.head_ref == 'develop'
+    # Gate: see the header comment.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.head_ref == 'develop' && vars.DEPLOY_PROD_ENABLED == 'true'
     needs: prod-container-build
     runs-on: [arc-runner]
     steps:
