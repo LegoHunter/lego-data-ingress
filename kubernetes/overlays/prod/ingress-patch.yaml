@@ -1,6 +1,6 @@
 - op: replace
   path: /spec/routes/0/match
-  value: Host(`lego-data-ingress.dev.internal.legohunter.io`)
+  value: Host(`lego-data-ingress.prod.internal.legohunter.io`)
 - op: replace
   path: /spec/tls/secretName
-  value: dev-internal-legohunter-io-tls
+  value: prod-internal-legohunter-io-tls
