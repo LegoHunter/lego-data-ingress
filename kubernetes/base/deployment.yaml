@@ -27,6 +27,9 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+      # HOMELAB-26 E10: room for the 10s preStop pause plus Spring Boot's graceful shutdown
+      # (spring.lifecycle.timeout-per-shutdown-phase, 30s by default) before SIGKILL.
+      terminationGracePeriodSeconds: 45
       containers:
         - name: lego-data-ingress
           image: quay.io/tvattima/lego-data-ingress
@@ -37,6 +40,13 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # HOMELAB-26 E10: keep serving for 10s after the pod starts terminating, so Traefik drops
+          # it from its endpoints before Spring begins shutting down (and reporting readiness
+          # OUT_OF_SERVICE). Without this, every deploy returned 502/503 to callers for ~2s.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 10
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
