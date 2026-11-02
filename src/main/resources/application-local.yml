@@ -83,7 +83,8 @@ lego:
       mode: DRY_RUN
       environment-code: local
       production: false
-      non-prod-stock-room-id: A
+      # Same stockroom as SANDBOX (HOMELAB-20). local always runs marketplace sync as DRY_RUN.
+      non-prod-stock-room-id: C
       scheduled:
         enabled: false
   fulfillment:

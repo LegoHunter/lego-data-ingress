@@ -11,6 +11,11 @@ spring:
     database-key-name: test
 
 lego:
+  bricklink:
+    marketplace-sync:
+      # This file replaces src/main/resources/application.yml on the test classpath, so it must set
+      # the non-prod stockroom itself or the HOMELAB-20 startup check refuses to start (SANDBOX=C).
+      non-prod-stock-room-id: C
   object-storage:
     buckets:
       final-photo: lego-photos-sandbox

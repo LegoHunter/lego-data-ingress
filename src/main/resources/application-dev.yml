@@ -33,6 +33,11 @@ lego:
           enabled: true
           apply: true
           fixed-delay-ms: 300000
+    pricing:
+      apply:
+        # Must match marketplace-sync.environment-code; both are written onto sync requests and the
+        # app refuses to start if they differ (HOMELAB-20). It used to fall back to "local" here.
+        environment-code: dev
     marketplace-sync:
       enabled: true
       mode: APPLY
@@ -43,7 +48,8 @@ lego:
       production: false
       require-system-remarks-block: true
       non-prod-require-stock-room: true
-      non-prod-stock-room-id: A
+      # HOMELAB-20: DEV owns stockroom B. A is reserved for PROD, C for SANDBOX.
+      non-prod-stock-room-id: B
       remarks-max-length: 1024
       scheduled:
         enabled: true

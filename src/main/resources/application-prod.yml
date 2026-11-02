@@ -28,6 +28,17 @@ lego:
   environment:
     production: true
   bricklink:
+    # Marketplace sync and pricing apply carry their own copies of the environment facts. They must
+    # agree with lego.environment.production and with each other, and the environment code must be
+    # a known LegoEnvironment, or the app refuses to start (HOMELAB-20). Without these, PROD would
+    # fall back to environment code "local" and apply the lower-environment rules. The non-prod
+    # stockroom setting does not apply to PROD. (One shared block is planned in HOMELAB-19/22.)
+    pricing:
+      apply:
+        environment-code: prod
+    marketplace-sync:
+      production: true
+      environment-code: prod
     orders:
       sync:
         scheduled:

@@ -13,6 +13,7 @@ import io.legohunter.data.dto.ExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.MarketplaceListingSyncRequest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -31,6 +32,14 @@ import static org.mockito.Mockito.when;
 
 class BricklinkMarketplaceSyncServiceTest {
     private final BricklinkMarketplaceSyncProperties properties = new BricklinkMarketplaceSyncProperties();
+
+    @BeforeEach
+    void sandboxOwnsStockroomC() {
+        // Every test here runs as environment "sandbox", whose own stockroom is C (HOMELAB-20).
+        // There is no code default any more, so it must be set explicitly.
+        properties.setNonProdStockRoomId("C");
+    }
+
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao = mock(MarketplaceListingSyncRequestDao.class);
     private final MarketplaceListingDao marketplaceListingDao = mock(MarketplaceListingDao.class);
     private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao = mock(BricklinkMarketplaceListingDao.class);
@@ -267,7 +276,7 @@ class BricklinkMarketplaceSyncServiceTest {
         Inventory inventory = new Inventory();
         inventory.setInventory_id(12345L);
         inventory.setIs_stock_room(true);
-        inventory.setStock_room_id("A");
+        inventory.setStock_room_id("C");
         inventory.setRemarks(remarks);
         return inventory;
     }

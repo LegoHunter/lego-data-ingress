@@ -103,7 +103,8 @@ lego:
       production: false
       require-system-remarks-block: true
       non-prod-require-stock-room: true
-      non-prod-stock-room-id: A
+      # HOMELAB-20: no code default. local/SANDBOX=C, DEV=B; A is reserved for PROD (startup check).
+      non-prod-stock-room-id: C
       remarks-max-length: 1024
       scheduled:
         enabled: false

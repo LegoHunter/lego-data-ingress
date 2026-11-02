@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BricklinkMarketplaceSyncPropertiesTest {
     @Test
@@ -41,6 +42,20 @@ class BricklinkMarketplaceSyncPropertiesTest {
         assertThat(properties.effectiveEnvironmentCode()).isEqualTo("sandbox");
         assertThat(properties.effectiveNonProdStockRoomId()).isEqualTo("B");
         assertThat(properties.effectiveRemarksMaxLength()).isOne();
+    }
+
+    @Test
+    void hasNoDefaultNonProdStockroomAndFailsInsteadOfFallingBackToA() {
+        BricklinkMarketplaceSyncProperties properties = new BricklinkMarketplaceSyncProperties();
+
+        assertThat(properties.getNonProdStockRoomId()).isNull();
+        assertThatThrownBy(properties::effectiveNonProdStockRoomId)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("non-prod-stock-room-id is not set");
+
+        properties.setNonProdStockRoomId("  ");
+        assertThatThrownBy(properties::effectiveNonProdStockRoomId)
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test

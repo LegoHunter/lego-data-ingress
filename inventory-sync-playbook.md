@@ -93,7 +93,7 @@ Before starting, confirm:
   `1.0.3-marketplace-listing-unit-price-nullable.yaml`. Verify `information_schema.columns.is_nullable = 'YES'`
   before creating an unpriced draft. Do not seed a fake price to work around a schema mismatch.
 - You know whether this is a manual-price path or a Pricing Plane path.
-- You know the target environment and its stockroom. Never infer the stockroom from memory; verify the active ingress configuration.
+- You know the target environment and its stockroom: SANDBOX = `C`, DEV = `B`; `A` is PROD only (HOMELAB-20). The app refuses to start with a lower environment set to `A` or to another environment's stockroom.
 - If this is a new listing in a non-production environment, the intended visibility is stockroom-only.
 
 For a new inventory item, the important input fields are the BrickLink item number, `newOrUsed`, completeness, box number, condition codes, one unit of quantity, item-level costs, and a payment/accounting-complete transaction.
@@ -263,9 +263,9 @@ The `bricklink.colorId` value is item-type dependent:
 - SET catalog items (`itemTypeCode` `S` or `SET`) must use `0` (Not Applicable); `null` is normalized to `0`.
 - Color-specific catalog items require a positive color ID. Replace `0` with the intended BrickLink color ID.
 
-The current sandbox redeploy configuration uses stockroom `C`. If the active deployment uses a
-different non-production stockroom, use that configured value; the service will normalize the
-stored draft to its non-production stockroom setting.
+SANDBOX uses stockroom `C` and DEV uses `B` (HOMELAB-20). Both services refuse to start if a lower
+environment is configured with `A` or with another environment's stockroom, and the service
+normalizes the stored draft to its own stockroom.
 
 A representative request with a manually supplied price is:
 
@@ -992,7 +992,7 @@ The active deployment configuration is more authoritative than a checked-in prof
 
 | Configuration source | Pricing apply mode | Marketplace sync | Non-prod stockroom |
 | --- | --- | --- | --- |
-| `origin/develop` profile at the time this playbook was written | `DRY_RUN` | `APPLY` | `A` |
+| `origin/develop` profile at the time this playbook was written | `DRY_RUN` | `APPLY` | `A` (superseded: `C` since HOMELAB-20) |
 | `feature/force-sandbox-redeploy` profile used for the sandbox redeploy workflow | `APPLY_LOCAL_AND_ENQUEUE_SYNC` | `APPLY` | `C` |
 
 The redeploy branch is the one intended to kick off the current sandbox deployment. Verify the running ConfigMap/environment and ingress image before relying on either row. A branch file is not proof of what Kubernetes has loaded.
