@@ -10,6 +10,15 @@ name: Build Test Deploy
 #   build/push and deploy jobs are all skipped (not failed), and a small "<ENV> deploy gate"
 #   job adds a notice explaining why. SANDBOX is not gated.
 
+# Environments
+#   SANDBOX  every push to feature/** runs the tests, builds an image tagged with the pushed commit
+#            SHA and deploys it to services-sandbox, so sandbox runs exactly what was last pushed.
+#            Sandbox is shared: the most recent push from any feature branch wins (HOMELAB-26 B5).
+#   PR       a pull request from feature/* into develop only runs the tests, against the branch
+#            merged with the latest develop. It does not build an image or deploy.
+#   DEV      merge of feature/* into develop (gated, see above).
+#   PROD     merge of develop into main (gated, see above).
+
 on:
   push:
     branches:
@@ -25,9 +34,10 @@ on:
       - closed
 
 jobs:
-  feature-test:
-    name: Feature branch tests
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/')
+  pr-test:
+    name: PR tests
+    # Tests the feature branch merged with the latest develop, before it is merged. No deploy.
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -46,7 +56,8 @@ jobs:
 
   sandbox-maven-build:
     name: Sandbox Maven deploy
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    # Runs the tests as part of the Maven build. github.sha is the pushed feature-branch commit.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -70,7 +81,7 @@ jobs:
 
   sandbox-container-build:
     name: Sandbox container build and push
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/')
     needs: sandbox-maven-build
     runs-on: ubuntu-latest
     permissions:
@@ -102,8 +113,13 @@ jobs:
 
   deploy-sandbox:
     name: Deploy sandbox
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/')
     needs: sandbox-container-build
+    # One sandbox deploy at a time; a newer push replaces any deploy still waiting, so the
+    # latest push is the one that ends up running.
+    concurrency:
+      group: deploy-sandbox
+      cancel-in-progress: false
     runs-on: [arc-runner]
     steps:
       - uses: actions/checkout@v4
