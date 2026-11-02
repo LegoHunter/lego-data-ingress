@@ -43,7 +43,8 @@ lego:
       production: false
       require-system-remarks-block: true
       non-prod-require-stock-room: true
-      non-prod-stock-room-id: A
+      # HOMELAB-20: DEV owns stockroom B. A is reserved for PROD, C for SANDBOX.
+      non-prod-stock-room-id: B
       remarks-max-length: 1024
       scheduled:
         enabled: true

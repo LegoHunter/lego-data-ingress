@@ -21,7 +21,13 @@ public class BricklinkMarketplaceSyncProperties {
     private boolean production = false;
     private boolean requireSystemRemarksBlock = true;
     private boolean nonProdRequireStockRoom = true;
-    private String nonProdStockRoomId = "A";
+    /**
+     * The stockroom every lot this lower environment creates or updates must sit in: C for SANDBOX
+     * (and local), B for DEV. No default: A is reserved for PROD, and an unset value would
+     * otherwise silently share a stockroom. Checked at startup by
+     * {@link BricklinkMarketplaceSyncEnvironmentValidator} (HOMELAB-20).
+     */
+    private String nonProdStockRoomId;
     private int remarksMaxLength = 1024;
     private Scheduled scheduled = new Scheduled();
 
@@ -54,9 +60,13 @@ public class BricklinkMarketplaceSyncProperties {
         return !production;
     }
 
+    /**
+     * The configured non-prod stockroom, normalized. Fails rather than falling back to a default,
+     * so a lower environment can never quietly write into another environment's stockroom.
+     */
     public String effectiveNonProdStockRoomId() {
         if (nonProdStockRoomId == null || nonProdStockRoomId.isBlank()) {
-            return "A";
+            throw new IllegalStateException("lego.bricklink.marketplace-sync.non-prod-stock-room-id is not set (SANDBOX=C, DEV=B; HOMELAB-20)");
         }
         return nonProdStockRoomId.trim().toUpperCase();
     }

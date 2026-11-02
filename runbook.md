@@ -833,7 +833,7 @@ Non-prod safety contract:
 | --- | --- |
 | Production flag | When `lego.bricklink.marketplace-sync.production=false` or the property is omitted, the worker treats the runtime as non-production and applies the non-prod safety requirements. |
 | Stockroom-only | In non-production, remote BrickLink inventory must have `is_stock_room=true`. `LISTING_CREATE` also forces the create payload to stockroom-only regardless of request visibility. |
-| Expected stockroom | `stock_room_id` must match `lego.bricklink.marketplace-sync.non-prod-stock-room-id`, default `A`. |
+| Expected stockroom | `stock_room_id` must match `lego.bricklink.marketplace-sync.non-prod-stock-room-id`: `C` for SANDBOX and local, `B` for DEV. There is no default, and `A` is rejected outside PROD (HOMELAB-20). |
 | System remarks block | Remote `remarks` must contain exactly one valid `[SYSTEM_BEGIN] ... [SYSTEM_END]` block when `require-system-remarks-block=true`. For `LISTING_CREATE`, the worker generates and merges this block into the create payload before calling BrickLink. |
 | Managed marker | `LEGOHUNTER_MANAGED=true` must be present in the system block. |
 | Environment match | `LEGOHUNTER_ENV` must match `lego.bricklink.marketplace-sync.environment-code`. |
@@ -889,8 +889,8 @@ Settings:
 | `lego.bricklink.marketplace-sync.environment-code` | `local` | Short environment code | Runtime environment used for safety checks and remarks block generation. |
 | `lego.bricklink.marketplace-sync.production` | `false` | `true`, `false` | Explicitly marks the runtime as production. Omitted or `false` means non-production safety checks apply, regardless of the environment name. |
 | `lego.bricklink.marketplace-sync.require-system-remarks-block` | `true` | `true`, `false` | Requires matching system remarks ownership data before remote writes. |
-| `lego.bricklink.marketplace-sync.non-prod-require-stock-room` | `true` | `true`, `false` | Requires stockroom-only inventory in non-prod environments. |
-| `lego.bricklink.marketplace-sync.non-prod-stock-room-id` | `A` | BrickLink stockroom id | Expected non-prod stockroom. |
+| `lego.bricklink.marketplace-sync.non-prod-require-stock-room` | `true` | `true` only, outside PROD | Requires stockroom-only inventory in non-prod environments. `false` is rejected at startup outside PROD (HOMELAB-20). |
+| `lego.bricklink.marketplace-sync.non-prod-stock-room-id` | none (must be set) | `C` (SANDBOX, local), `B` (DEV) | Expected non-prod stockroom. `A` is reserved for PROD and rejected at startup in lower environments (HOMELAB-20). |
 | `lego.bricklink.marketplace-sync.remarks-max-length` | `1024` | Integer; effective value at least `1` | Local maximum generated BrickLink remarks length. |
 | `lego.bricklink.marketplace-sync.scheduled.enabled` | `false` | `true`, `false` | Creates the scheduled sync worker only when `enabled=true`. |
 | `lego.bricklink.marketplace-sync.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between sync scans. |
@@ -3153,9 +3153,9 @@ The recent sandbox redeploy branch was intentionally used to run the complete pa
 | Apply | `APPLY_LOCAL_AND_ENQUEUE_SYNC`; initial delay 240 seconds; fixed delay 10 minutes |
 | Marketplace sync | `APPLY`; `production=false`; stockroom-only; initial delay 300 seconds; fixed delay 10 minutes |
 
-The redeploy branch used stockroom `C` for sandbox. The checked-in `develop` profile
-and the running Kubernetes ConfigMap can differ from a force-redeploy branch, so verify
-the bound profile and pod environment before relying on this table. Local remains
+SANDBOX uses stockroom `C` (HOMELAB-20; the checked-in profile now sets it, and the app
+refuses to start with `A`). Verify the bound profile and pod environment before relying
+on the rest of this table. Local remains
 effectively `DRY_RUN`; sandbox/dev are real BrickLink account operations constrained to
 non-public stockroom inventory and managed system remarks.
 

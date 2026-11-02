@@ -28,6 +28,12 @@ lego:
   environment:
     production: true
   bricklink:
+    # Marketplace sync has its own production flag; it must agree with lego.environment.production
+    # or the app refuses to start (HOMELAB-20). Without this, PROD marketplace sync would apply the
+    # lower-environment rules and force every PROD lot into a stockroom. The non-prod stockroom
+    # setting does not apply to PROD. (One shared flag is planned in HOMELAB-19/HOMELAB-22.)
+    marketplace-sync:
+      production: true
     orders:
       sync:
         scheduled:
