@@ -19,7 +19,8 @@ class BricklinkMarketplaceSyncEnvironmentValidatorTest {
     void refusesToStartWithSandboxInStockroomA() {
         assertThatThrownBy(() -> validator(lowerEnvironment("sandbox", "A"), environment(false)).afterPropertiesSet())
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("HOMELAB-20")
+                .hasMessageContaining("Unsafe BrickLink marketplace-sync configuration")
+                .hasMessageNotContaining("HOMELAB")
                 .hasMessageContaining("must not be A outside PROD");
     }
 

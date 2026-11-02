@@ -31,7 +31,7 @@ public class BricklinkMarketplaceSyncEnvironmentValidator implements Initializin
     public void afterPropertiesSet() {
         List<String> violations = violations(marketplaceSyncProperties, environmentProperties);
         if (!violations.isEmpty()) {
-            throw new IllegalStateException("Unsafe BrickLink marketplace-sync configuration (HOMELAB-20):\n - "
+            throw new IllegalStateException("Unsafe BrickLink marketplace-sync configuration:\n - "
                     + String.join("\n - ", violations));
         }
     }

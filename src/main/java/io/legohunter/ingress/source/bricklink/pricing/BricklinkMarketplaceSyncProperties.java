@@ -66,7 +66,7 @@ public class BricklinkMarketplaceSyncProperties {
      */
     public String effectiveNonProdStockRoomId() {
         if (nonProdStockRoomId == null || nonProdStockRoomId.isBlank()) {
-            throw new IllegalStateException("lego.bricklink.marketplace-sync.non-prod-stock-room-id is not set (SANDBOX=C, DEV=B; HOMELAB-20)");
+            throw new IllegalStateException("lego.bricklink.marketplace-sync.non-prod-stock-room-id is not set (SANDBOX=C, DEV=B)");
         }
         return nonProdStockRoomId.trim().toUpperCase();
     }
