@@ -15,7 +15,6 @@ spec:
       labels:
         app: lego-data-ingress   # selector label (required)
         app.kubernetes.io/name: lego-data-ingress
-        app.kubernetes.io/instance: sandbox
         app.kubernetes.io/version: "1.0.0"
         app.kubernetes.io/component: api
         app.kubernetes.io/part-of: lego-platform
@@ -79,16 +78,19 @@ spec:
                 -XX:MaxGCPauseMillis=200
                 -XX:+UseContainerSupport
           volumeMounts:
-            - name: services-sandbox-external-secret
+            # Credentials for the environment (secretName set by each overlay). Must stay first:
+            # the overlays patch volumes/0.
+            - name: external-secret
               mountPath: /etc/.credentials
               readOnly: true
-            # Must stay after the secret: the dev/prod overlays patch volumeMounts/0 and volumes/0.
+            # Must stay after the secret: the overlays patch volumes/0.
             - name: tmp
               mountPath: /tmp
       volumes:
-        - name: services-sandbox-external-secret
+        - name: external-secret
           secret:
-            secretName: services-sandbox-external-secret
+            # Placeholder: every overlay replaces it with services-<env>-external-secret (HOMELAB-26 E6).
+            secretName: set-by-overlay
         # java.io.tmpdir: Tomcat work and multipart files, ImageIO stream caches (lego-imaging
         # ImageScalingService), image-hosting photo temp files, JVM hsperfdata.
         - name: tmp
