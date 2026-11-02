@@ -75,6 +75,18 @@ class RuntimeHardeningTest {
         assertThat((List<?>) at(deployment, "spec", "template", "spec", "volumes")).hasSize(2);
     }
 
+    @Test
+    void podKeepsServingWhileTraefikDrainsIt() {
+        // HOMELAB-26 E10: without the preStop pause, Traefik kept routing to a terminating pod for ~2s
+        // and every deploy returned 502/503 to callers; 45s leaves room for the pause plus Spring's
+        // 30s graceful shutdown.
+        Map<String, Object> deployment = load("base/deployment.yaml");
+
+        assertThat(at(deployment, "spec", "template", "spec", "containers", 0, "lifecycle"))
+                .isEqualTo(Map.of("preStop", Map.of("sleep", Map.of("seconds", 10))));
+        assertThat(at(deployment, "spec", "template", "spec", "terminationGracePeriodSeconds")).isEqualTo(45);
+    }
+
     @SuppressWarnings("unchecked")
     private static Object at(Object node, Object... keys) {
         Object current = node;
