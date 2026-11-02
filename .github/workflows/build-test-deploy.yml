@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          java-version: '22'
+          java-version: '21'
           distribution: temurin
           cache: maven
       - name: Run Maven tests
@@ -66,7 +66,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          java-version: '22'
+          java-version: '21'
           distribution: temurin
           cache: maven
       - name: Build and deploy Maven snapshot
@@ -163,7 +163,7 @@ jobs:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
       - uses: actions/setup-java@v4
         with:
-          java-version: '22'
+          java-version: '21'
           distribution: temurin
           cache: maven
       - name: Build and deploy Maven snapshot
@@ -259,7 +259,7 @@ jobs:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
       - uses: actions/setup-java@v4
         with:
-          java-version: '22'
+          java-version: '21'
           distribution: temurin
           cache: maven
       - name: Build and deploy Maven snapshot
