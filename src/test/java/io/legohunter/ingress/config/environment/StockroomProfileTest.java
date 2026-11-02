@@ -2,6 +2,7 @@ package io.legohunter.ingress.config.environment;
 
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncEnvironmentValidator;
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncProperties;
+import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyProperties;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
@@ -18,7 +19,8 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * Every real Spring profile combination binds to a BrickLink stockroom setup that the startup
- * check accepts, with each lower environment in its own stockroom (HOMELAB-20).
+ * check accepts: each lower environment in its own stockroom, PROD known as PROD, and pricing apply
+ * naming the same environment as marketplace sync (HOMELAB-20).
  *
  * <p>The profiles are the ones that actually run: a pod runs {@code <env>,kubernetes} (see
  * {@link KubernetesOverlayProfileTest}), and a developer workstation runs the default
@@ -31,16 +33,18 @@ class StockroomProfileTest {
 
     @ParameterizedTest(name = "{0}")
     @CsvSource({
-            "'sandbox,kubernetes', false, C",
-            "'dev,kubernetes',     false, B",
-            "'sandbox,local',      false, C",
+            "'sandbox,kubernetes', sandbox, C",
+            "'dev,kubernetes',     dev,     B",
+            "'sandbox,local',      local,   C",
     })
-    void eachLowerEnvironmentUsesItsOwnStockroom(String profiles, boolean production, String stockroom) {
+    void eachLowerEnvironmentUsesItsOwnStockroom(String profiles, String environmentCode, String stockroom) {
         Properties effective = configuration(profiles);
         BricklinkMarketplaceSyncProperties marketplaceSync = marketplaceSync(effective);
 
-        assertThat(environment(effective).isProduction()).isEqualTo(production);
-        assertThat(marketplaceSync.isProduction()).isEqualTo(production);
+        assertThat(environment(effective).isProduction()).isFalse();
+        assertThat(marketplaceSync.isProduction()).isFalse();
+        assertThat(marketplaceSync.effectiveEnvironmentCode()).isEqualTo(environmentCode);
+        assertThat(pricingApply(effective).effectiveEnvironmentCode()).isEqualTo(environmentCode);
         assertThat(marketplaceSync.isNonProdRequireStockRoom()).isTrue();
         assertThat(marketplaceSync.effectiveNonProdStockRoomId()).isEqualTo(stockroom);
         assertStartupCheckPasses(effective);
@@ -53,17 +57,25 @@ class StockroomProfileTest {
 
         assertThat(environment(effective).isProduction()).isTrue();
         assertThat(marketplaceSync(effective).isProduction()).isTrue();
+        assertThat(marketplaceSync(effective).effectiveEnvironmentCode()).isEqualTo("prod");
+        assertThat(pricingApply(effective).effectiveEnvironmentCode()).isEqualTo("prod");
         assertStartupCheckPasses(effective);
     }
 
     private static void assertStartupCheckPasses(Properties effective) {
-        assertThatCode(() -> new BricklinkMarketplaceSyncEnvironmentValidator(marketplaceSync(effective), environment(effective)).afterPropertiesSet())
+        assertThatCode(() -> new BricklinkMarketplaceSyncEnvironmentValidator(marketplaceSync(effective), pricingApply(effective), environment(effective)).afterPropertiesSet())
                 .doesNotThrowAnyException();
     }
 
     private static BricklinkMarketplaceSyncProperties marketplaceSync(Properties effective) {
         return new Binder(new MapConfigurationPropertySource(effective))
                 .bind("lego.bricklink.marketplace-sync", Bindable.ofInstance(new BricklinkMarketplaceSyncProperties()))
+                .get();
+    }
+
+    private static BricklinkPricingApplyProperties pricingApply(Properties effective) {
+        return new Binder(new MapConfigurationPropertySource(effective))
+                .bind("lego.bricklink.pricing.apply", Bindable.ofInstance(new BricklinkPricingApplyProperties()))
                 .get();
     }
 

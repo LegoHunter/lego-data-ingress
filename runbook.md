@@ -833,7 +833,7 @@ Non-prod safety contract:
 | --- | --- |
 | Production flag | When `lego.bricklink.marketplace-sync.production=false` or the property is omitted, the worker treats the runtime as non-production and applies the non-prod safety requirements. |
 | Stockroom-only | In non-production, remote BrickLink inventory must have `is_stock_room=true`. `LISTING_CREATE` also forces the create payload to stockroom-only regardless of request visibility. |
-| Expected stockroom | `stock_room_id` must match `lego.bricklink.marketplace-sync.non-prod-stock-room-id`: `C` for SANDBOX and local, `B` for DEV. There is no default, and `A` is rejected outside PROD (HOMELAB-20). |
+| Expected stockroom | `stock_room_id` must match `lego.bricklink.marketplace-sync.non-prod-stock-room-id`: `C` for SANDBOX and local, `B` for DEV. There is no default, and `A` is rejected outside PROD. The rules are shared with lego-data-service (`BricklinkStockroomPolicy` and `LegoEnvironment` in lego-data). The environment code must be `local`, `sandbox`, `dev` or `prod`, and must agree with `production`. Pricing apply's environment code must equal marketplace sync's (HOMELAB-20). |
 | System remarks block | Remote `remarks` must contain exactly one valid `[SYSTEM_BEGIN] ... [SYSTEM_END]` block when `require-system-remarks-block=true`. For `LISTING_CREATE`, the worker generates and merges this block into the create payload before calling BrickLink. |
 | Managed marker | `LEGOHUNTER_MANAGED=true` must be present in the system block. |
 | Environment match | `LEGOHUNTER_ENV` must match `lego.bricklink.marketplace-sync.environment-code`. |
