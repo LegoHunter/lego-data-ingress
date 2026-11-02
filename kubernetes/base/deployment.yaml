@@ -20,9 +20,24 @@ spec:
         app.kubernetes.io/component: api
         app.kubernetes.io/part-of: lego-platform
     spec:
+      # HOMELAB-26 E8: never run as root; default seccomp filter; volumes group-owned by the app user.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: lego-data-ingress
           image: quay.io/tvattima/lego-data-ingress
+          # HOMELAB-26 E8: no privilege escalation, no Linux capabilities, read-only image filesystem.
+          # The only writable path is /tmp (volume "tmp" below).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -67,8 +82,16 @@ spec:
             - name: services-sandbox-external-secret
               mountPath: /etc/.credentials
               readOnly: true
+            # Must stay after the secret: the dev/prod overlays patch volumeMounts/0 and volumes/0.
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: services-sandbox-external-secret
           secret:
             secretName: services-sandbox-external-secret
+        # java.io.tmpdir: Tomcat work and multipart files, ImageIO stream caches (lego-imaging
+        # ImageScalingService), image-hosting photo temp files, JVM hsperfdata.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
       restartPolicy: Always

@@ -1,4 +1,11 @@
-FROM amazoncorretto:21-alpine-jdk
+# JRE only (HOMELAB-26 E8): no compiler or JDK tools in the runtime image. Corretto publishes no
+# Alpine JRE, so this is Eclipse Temurin, also an OpenJDK 21 LTS build.
+FROM eclipse-temurin:21-jre-alpine
 ARG JAR_FILE=target/*.jar
 COPY ${JAR_FILE} app.jar
+# Run as an unprivileged, numeric user so Kubernetes can verify runAsNonRoot. No RUN adduser: the
+# arm64 image is built on amd64 runners without emulation, so the image has no RUN steps. The UID
+# has no /etc/passwd entry, hence HOME=/tmp (the only writable path; see deployment.yaml).
+ENV HOME=/tmp
+USER 10001:10001
 ENTRYPOINT ["java","-jar","/app.jar"]
