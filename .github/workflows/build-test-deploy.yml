@@ -102,6 +102,8 @@ jobs:
           tags: ${{ github.sha }}
           platforms: linux/arm64
           containerfiles: ./kubernetes/Containerfile
+          # Feature-branch images are throwaway; DEV and PROD images must never expire (HOMELAB-26 B6).
+          labels: quay.expires-after=26w
       - name: Push to Quay
         uses: redhat-actions/push-to-registry@v2
         with:
