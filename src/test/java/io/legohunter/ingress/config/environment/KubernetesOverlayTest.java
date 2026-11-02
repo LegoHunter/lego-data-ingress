@@ -12,73 +12,82 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Every Kubernetes overlay must target its own environment: namespace, instance label, mounted
- * ExternalSecret, hostname and TLS certificate (HOMELAB-26 B4). The Spring profile is checked by
- * {@link KubernetesOverlayProfileTest}. The base is
- * written for SANDBOX, so the DEV and PROD overlays must patch each of those values; an overlay
- * that forgets one would run against, or claim the routing of, another environment.
+ * ExternalSecret, hostname and TLS certificate (HOMELAB-26 B3/B4). Since E6 the base names no
+ * environment at all, so every overlay (sandbox included) must set each of those values itself;
+ * an overlay that forgot one would fail safe (placeholder secret / host) instead of running against,
+ * or claiming the routing of, another environment.
  */
 class KubernetesOverlayTest {
 
+    private static final String APP = "lego-data-ingress";
     private static final Path KUBERNETES = Path.of("kubernetes");
+    private static final Pattern ANY_ENVIRONMENT = Pattern.compile("sandbox|\\bdev\\b|\\bprod\\b");
 
-    private static final String INSTANCE_LABEL = "/spec/template/metadata/labels/app.kubernetes.io~1instance";
-    private static final String MOUNT_NAME = "/spec/template/spec/containers/0/volumeMounts/0/name";
-    private static final String VOLUME_NAME = "/spec/template/spec/volumes/0/name";
     private static final String SECRET_NAME = "/spec/template/spec/volumes/0/secret/secretName";
     private static final String HOST_MATCH = "/spec/routes/0/match";
     private static final String TLS_SECRET = "/spec/tls/secretName";
 
     @ParameterizedTest
     @ValueSource(strings = {"sandbox", "dev", "prod"})
-    void overlayTargetsItsOwnNamespaceAndInstance(String env) {
+    void overlayTargetsItsOwnNamespaceAndInstanceIncludingThePod(String env) {
         Map<String, Object> kustomization = load("overlays/%s/kustomization.yaml".formatted(env));
 
         assertThat(kustomization.get("namespace")).isEqualTo("services-" + env);
         assertThat(at(kustomization, "labels", 0, "pairs", "app.kubernetes.io/instance")).isEqualTo(env);
+        // The base has no instance label, so the overlay must put it on the pod template too.
+        assertThat(at(kustomization, "labels", 0, "includeTemplates")).isEqualTo(true);
     }
 
     @Test
-    void baseIsWrittenForSandbox() {
+    void baseNamesNoEnvironment() throws IOException {
+        try (Stream<Path> files = Files.list(KUBERNETES.resolve("base"))) {
+            assertThat(files.toList()).allSatisfy(file -> assertThat(ANY_ENVIRONMENT.matcher(Files.readString(file)).find())
+                    .as("%s mentions an environment", file).isFalse());
+        }
         Map<String, Object> deployment = load("base/deployment.yaml");
         Map<String, Object> ingress = load("base/ingress.yaml");
 
-        assertThat(at(deployment, "spec", "template", "metadata", "labels", "app.kubernetes.io/instance"))
-                .isEqualTo("sandbox");
-        assertThat(at(deployment, "spec", "template", "spec", "containers", 0, "volumeMounts", 0, "name"))
-                .isEqualTo("services-sandbox-external-secret");
-        assertThat(at(deployment, "spec", "template", "spec", "volumes", 0, "name"))
-                .isEqualTo("services-sandbox-external-secret");
-        assertThat(at(deployment, "spec", "template", "spec", "volumes", 0, "secret", "secretName"))
-                .isEqualTo("services-sandbox-external-secret");
-        assertThat(at(ingress, "spec", "routes", 0, "match"))
-                .isEqualTo("Host(`lego-data-ingress.sandbox.internal.legohunter.io`)");
-        assertThat(at(ingress, "spec", "tls", "secretName")).isEqualTo("sandbox-internal-legohunter-io-tls");
+        assertThat(KubernetesOverlayTest.<Map<String, Object>>cast(at(deployment, "spec", "template", "metadata", "labels")))
+                .doesNotContainKey("app.kubernetes.io/instance");
+        assertThat(at(deployment, "spec", "template", "spec", "containers", 0, "volumeMounts", 0, "name")).isEqualTo("external-secret");
+        assertThat(at(deployment, "spec", "template", "spec", "volumes", 0, "name")).isEqualTo("external-secret");
+        assertThat(at(deployment, "spec", "template", "spec", "volumes", 0, "secret", "secretName")).isEqualTo("set-by-overlay");
+        assertThat(at(ingress, "spec", "routes", 0, "match")).isEqualTo("Host(`%s.set-by-overlay.invalid`)".formatted(APP));
+        assertThat(at(ingress, "spec", "tls", "secretName")).isEqualTo("set-by-overlay");
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"dev", "prod"})
-    void nonSandboxOverlayRetargetsPodLabelAndSecret(String env) {
-        assertThat(replacements("overlays/%s/deployment-%s-patch.yaml".formatted(env, env))).containsExactlyInAnyOrderEntriesOf(Map.of(
-                INSTANCE_LABEL, env,
-                MOUNT_NAME, "services-%s-external-secret".formatted(env),
-                VOLUME_NAME, "services-%s-external-secret".formatted(env),
-                SECRET_NAME, "services-%s-external-secret".formatted(env)));
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
+    void overlaySetsItsOwnSecret(String env) {
+        assertThat(replacements("overlays/%s/deployment-%s-patch.yaml".formatted(env, env)))
+                .containsExactlyEntriesOf(Map.of(SECRET_NAME, "services-%s-external-secret".formatted(env)));
         assertThat(patchTargets(env)).containsEntry("deployment-%s-patch.yaml".formatted(env), "Deployment");
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"dev", "prod"})
-    void nonSandboxOverlayRetargetsHostAndTls(String env) {
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
+    void overlaySetsItsOwnHostAndTls(String env) {
         assertThat(replacements("overlays/%s/ingress-patch.yaml".formatted(env))).containsExactlyInAnyOrderEntriesOf(Map.of(
-                HOST_MATCH, "Host(`lego-data-ingress.%s.internal.legohunter.io`)".formatted(env),
+                HOST_MATCH, "Host(`%s.%s.internal.legohunter.io`)".formatted(APP, env),
                 TLS_SECRET, "%s-internal-legohunter-io-tls".formatted(env)));
         assertThat(patchTargets(env)).containsEntry("ingress-patch.yaml", "IngressRoute");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
+    void overlayCreatesNoNamespaceSharedResources(String env) {
+        // The default-headers Middleware is shared by every service in a namespace, so it is created once
+        // per namespace from lego-server-configuration, never by a service overlay (HOMELAB-26 E6).
+        assertThat(KubernetesOverlayTest.<List<String>>cast(at(load("overlays/%s/kustomization.yaml".formatted(env)), "resources")))
+                .containsExactly("../../base");
     }
 
     /** JSON 6902 patch file as path -> value, asserting every operation is a replace. */
@@ -107,6 +116,11 @@ class KubernetesOverlayTest {
             current = key instanceof Integer index ? ((List<Object>) current).get(index) : ((Map<String, Object>) current).get(key);
         }
         return current;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T cast(Object value) {
+        return (T) value;
     }
 
     private static <T> T load(String path) {

@@ -7,8 +7,10 @@ namespace: services-sandbox
 labels:
   - pairs:
       app.kubernetes.io/instance: sandbox
+    # Also on the pod template: the base carries no environment (HOMELAB-26 E6).
+    includeTemplates: true
 
-# Base resources
+# Base resources (environment-neutral; the patches below set the SANDBOX values)
 resources:
   - ../../base
 
@@ -26,4 +28,17 @@ replicas:
 patches:
   - path: deployment-env-patch.yaml
   - path: deployment-resources-patch.yaml
-
+  # services-sandbox-external-secret mount
+  - path: deployment-sandbox-patch.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: lego-data-ingress
+  # SANDBOX hostname and TLS certificate
+  - path: ingress-patch.yaml
+    target:
+      group: traefik.io
+      version: v1alpha1
+      kind: IngressRoute
+      name: lego-data-ingress

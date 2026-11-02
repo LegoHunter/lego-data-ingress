@@ -1,0 +1,6 @@
+- op: replace
+  path: /spec/routes/0/match
+  value: Host(`lego-data-ingress.sandbox.internal.legohunter.io`)
+- op: replace
+  path: /spec/tls/secretName
+  value: sandbox-internal-legohunter-io-tls

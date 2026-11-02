@@ -12,7 +12,8 @@ spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`lego-data-ingress.sandbox.internal.legohunter.io`)
+    # Placeholders: every overlay sets its own host and certificate (HOMELAB-26 E6).
+    - match: Host(`lego-data-ingress.set-by-overlay.invalid`)
       kind: Rule
       services:
         - name: lego-data-ingress
@@ -20,4 +21,4 @@ spec:
       middlewares:
         - name: default-headers
   tls:
-    secretName: sandbox-internal-legohunter-io-tls
+    secretName: set-by-overlay
