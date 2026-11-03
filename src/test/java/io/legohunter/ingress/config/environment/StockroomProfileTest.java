@@ -1,5 +1,6 @@
 package io.legohunter.ingress.config.environment;
 
+import io.legohunter.data.environment.EnvironmentDatabasePolicy;
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncEnvironmentValidator;
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncProperties;
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyProperties;
@@ -60,6 +61,29 @@ class StockroomProfileTest {
         assertThat(marketplaceSync(effective).effectiveEnvironmentCode()).isEqualTo("prod");
         assertThat(pricingApply(effective).effectiveEnvironmentCode()).isEqualTo("prod");
         assertStartupCheckPasses(effective);
+    }
+
+    /**
+     * Each real profile points its data source at its own environment's schema. The database URL
+     * lives in the mounted credentials file, so this relies on the key-naming convention
+     * {@code rasppi5-01-<schema with dashes>}.
+     */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+            "'sandbox,kubernetes', lego_sandbox",
+            "'dev,kubernetes',     lego_dev",
+            "'prod,kubernetes',    lego_prod",
+            "'sandbox,local',      lego_sandbox",
+    })
+    void eachProfileUsesTheDatabaseOfItsEnvironment(String profiles, String schema) {
+        Properties effective = configuration(profiles);
+        BricklinkMarketplaceSyncProperties marketplaceSync = marketplaceSync(effective);
+
+        assertThat(effective.getProperty("spring.datasource.database-key-name"))
+                .isEqualTo("rasppi5-01-" + schema.replace('_', '-'));
+        assertThat(EnvironmentDatabasePolicy.violations("lego.bricklink.marketplace-sync",
+                marketplaceSync.effectiveEnvironmentCode(), marketplaceSync.isProduction(), schema))
+                .isEmpty();
     }
 
     private static void assertStartupCheckPasses(Properties effective) {
