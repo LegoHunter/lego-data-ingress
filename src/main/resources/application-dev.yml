@@ -11,6 +11,9 @@ spring:
   datasource:
     database-key-name: rasppi5-01-lego-dev
     hikari:
+      # MySQL on rasppi5-01 runs on Eastern time. Run every session in UTC so CURRENT_TIMESTAMP
+      # defaults, NOW() and TIMESTAMP columns agree with the UTC values the application writes.
+      connection-init-sql: "SET time_zone = '+00:00'"
       connection-timeout: 10000
       idle-timeout: 30000
       connection-test-query: SELECT 1
