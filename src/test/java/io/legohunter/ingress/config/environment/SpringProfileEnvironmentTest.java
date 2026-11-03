@@ -38,6 +38,15 @@ class SpringProfileEnvironmentTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"sandbox", "dev", "prod"})
+    void podRunsItsDatabaseSessionsInUtc(String env) {
+        // The MySQL server's own zone is Eastern; without this, CURRENT_TIMESTAMP defaults and
+        // TIMESTAMP columns disagree with the UTC values the application writes (HOMELAB-36).
+        assertThat(podConfiguration(env).getProperty("spring.datasource.hikari.connection-init-sql"))
+                .isEqualTo("SET time_zone = '+00:00'");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
     void podConnectsToItsOwnEnvironmentDatabase(String env) {
         assertThat(podConfiguration(env).getProperty("spring.datasource.database-key-name")).isEqualTo("rasppi5-01-lego-" + env);
     }
