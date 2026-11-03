@@ -42,7 +42,8 @@ public class RebrickableCatalogEntryConsumer {
             externalCatalogItem = externalCatalogItemDao.upsert(externalCatalogItem);
             final Integer externalCatalogItemId = externalCatalogItem.getExternalCatalogItemId();
 
-            externalCategoryDao.findByExternalServiceIdAndExternalCategoryKey(2, Integer.toString(entry.getThemeId())).ifPresent(externalCategory -> {
+            // A Rebrickable set's theme id is a Rebrickable theme key, so look it up among Rebrickable categories.
+            externalCategoryDao.findByExternalServiceIdAndExternalCategoryKey(rebrickableServiceId, Integer.toString(entry.getThemeId())).ifPresent(externalCategory -> {
                 ExternalCatalogItemCategory externalCatalogItemCategory = ExternalCatalogItemCategory.builder()
                         .externalCatalogItemId(externalCatalogItemId)
                         .externalCategoryId(externalCategory.getExternalCategoryId())
