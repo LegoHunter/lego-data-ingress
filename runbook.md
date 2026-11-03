@@ -809,6 +809,16 @@ The marketplace sync job consumes due `marketplace_listing_sync_request` rows fo
 
 `PRICE_UPDATE` verifies the existing remote BrickLink inventory before mutating price or remarks. `LISTING_CREATE` verifies local create eligibility, builds a BrickLink `Inventory` create payload, calls BrickLink `createInventory`, fetches the created remote inventory back, verifies the remote safety contract, and only then marks the local `marketplace_listing` `ACTIVE`.
 
+`LISTING_CREATE` creates each lot at most once (HOMELAB-15). BrickLink has no idempotency key, so a retried create would otherwise list the same unique item twice:
+
+1. The new lot's id is saved on `marketplace_listing_sync_request.remote_inventory_id` (first) and `bricklink_marketplace_listing.bricklink_inventory_id` as soon as `createInventory` returns, before the read-back.
+2. A request that already has a saved `remote_inventory_id` resumes at the read-back instead of creating again. Only the request's own id counts: a listing whose mapping already had a lot before the request is still blocked with `REMOTE_INVENTORY_ALREADY_EXISTS`.
+3. Before creating, the worker lists the store's lots (`GET /inventories`) and looks for a system remarks block naming this environment, `MARKETPLACE_LISTING_ID` and `ITEM_INVENTORY_UUID`. One match is taken over (`listing_create_adopted`: an earlier create succeeded on BrickLink but its response was lost). More than one blocks the request with `DUPLICATE_REMOTE_INVENTORY`; resolve those lots by hand. If the search fails, nothing is created and the request retries.
+4. If the read-back of a lot the request just created or took over fails remote safety, the worker hides the lot: stockroom `A` in PROD (its stockroom for deliberately hidden lots), the environment's own stockroom elsewhere. The request's error message says whether hiding worked; if it says "hide it by hand", do that.
+5. At the start of each `APPLY` run, requests left `CLAIMED` for longer than `stale-claim-timeout` (default `1h`) are put back to `PENDING` (or `FAILED` with no attempts left). That happens when a pod is killed mid-run. Steps 2 and 3 make the retry safe.
+
+BrickLink calls time out (`bricklink.rest.timeouts.connect`, default `10s`; `.read`, default `60s`). A timed-out create may still have been applied by BrickLink; step 3 finds it on the retry.
+
 Local profile is always dry-run for marketplace sync. `BricklinkMarketplaceSyncProperties.effectiveMode()` returns `DRY_RUN` when `environment-code=local` even if the configured mode says `APPLY`.
 
 Modes:
@@ -897,6 +907,8 @@ Settings:
 | `lego.bricklink.marketplace-sync.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Startup delay before first sync scan. |
 | `lego.bricklink.marketplace-sync.scheduled.lock-at-most-for` | `10m` | ShedLock duration string | Maximum distributed lock time. |
 | `lego.bricklink.marketplace-sync.scheduled.lock-at-least-for` | `0s` | ShedLock duration string | Minimum distributed lock time. |
+| `lego.bricklink.marketplace-sync.stale-claim-timeout` | `1h` | Duration | How long a request may stay `CLAIMED` before the next `APPLY` run treats its worker as dead and releases it. Keep it longer than any one run. |
+| `bricklink.rest.timeouts.connect` / `.read` | `10s` / `60s` | Duration | BrickLink REST client timeouts (bricklink-rest). |
 
 Important logs:
 
@@ -907,6 +919,12 @@ Important logs:
 | `bricklink.marketplace_sync.listing_created` | BrickLink `createInventory` succeeded, remote safety verification passed, and the local listing was marked `ACTIVE`. |
 | `bricklink.marketplace_sync.listing_create_blocked` | A `LISTING_CREATE` request failed final local create safety checks. |
 | `bricklink.marketplace_sync.listing_create_remote_verification_blocked` | BrickLink inventory was created, but the read-back remote safety check failed. The local BrickLink inventory id is retained for investigation and the request is blocked. |
+| `bricklink.marketplace_sync.listing_create_blocked_lot_hidden` | The lot that failed the read-back check was moved into a stockroom (A in PROD, the environment's own elsewhere) so it is not for sale. |
+| `bricklink.marketplace_sync.listing_create_blocked_lot_hide_failed` | Hiding that lot failed. Hide it in BrickLink by hand. |
+| `bricklink.marketplace_sync.listing_create_resumed` | A `LISTING_CREATE` request with a saved `remote_inventory_id` resumed at the read-back instead of creating another lot. |
+| `bricklink.marketplace_sync.listing_create_adopted` | No id was saved, but the store already had exactly one lot owned by this listing (an earlier create's response was lost). The lot was taken over instead of creating another. |
+| `bricklink.marketplace_sync.listing_create_duplicates_found` | The store has several lots owned by this listing. Nothing was created; the request is blocked with `DUPLICATE_REMOTE_INVENTORY`. |
+| `bricklink.marketplace_sync.stale_claim_released` | A request stuck in `CLAIMED` past `stale-claim-timeout` was put back to `PENDING` (or `FAILED`). |
 | `bricklink.marketplace_sync.remote_updated` | BrickLink `updateInventory` was called for a price update. |
 | `bricklink.marketplace_sync.blocked` | A request failed safety checks and was marked blocked in apply mode. |
 | `bricklink.marketplace_sync.failed` | A transient or unexpected failure occurred. In apply mode, the request retries with backoff until max attempts is reached. |
