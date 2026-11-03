@@ -325,6 +325,48 @@ class BricklinkMarketplaceSyncServiceTest {
     }
 
     @Test
+    void blocksACreateThatBricklinkConsolidatedIntoALotWithAnotherQuantity() {
+        applyAsSandbox();
+        MarketplaceListingSyncRequest request = claimedListingCreateRequest();
+        arrangeListingCreate(request, bricklinkDraftListing());
+        // BrickLink merged the new lot into a matching one instead of creating a lot of 1.
+        Inventory consolidated = createdInventory();
+        consolidated.setQuantity(2);
+        when(bricklinkRestClient.getInventories(anyMap())).thenReturn(lots());
+        when(bricklinkRestClient.createInventory(any(Inventory.class))).thenReturn(resource(consolidated));
+        when(bricklinkRestClient.getInventories(45678L)).thenReturn(resource(consolidated));
+        stubUpdates();
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isOne();
+        assertThat(result.remoteUpdated()).isZero();
+        assertThat(request.getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        assertThat(request.getLastErrorMessage())
+                .startsWith("REMOTE_QUANTITY_MISMATCH: BrickLink lot holds quantity 2 but this listing put up 1")
+                .endsWith("; lot 45678 is already hidden in stockroom C");
+    }
+
+    @Test
+    void blocksTakingOverAnOwnedLotWithAnotherQuantity() {
+        applyAsSandbox();
+        MarketplaceListingSyncRequest request = claimedListingCreateRequest();
+        arrangeListingCreate(request, bricklinkDraftListing());
+        Inventory owned = createdInventory();
+        owned.setQuantity(2);
+        when(bricklinkRestClient.getInventories(anyMap())).thenReturn(lots(owned));
+        when(bricklinkRestClient.getInventories(45678L)).thenReturn(resource(owned));
+        stubUpdates();
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isOne();
+        assertThat(request.getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        assertThat(request.getLastErrorMessage()).startsWith("REMOTE_QUANTITY_MISMATCH: ");
+        verify(bricklinkRestClient, never()).createInventory(any(Inventory.class));
+    }
+
+    @Test
     void hidesANewLotThatFailsThePostCreateCheckInTheEnvironmentsStockroom() {
         applyAsSandbox();
         MarketplaceListingSyncRequest request = claimedListingCreateRequest();

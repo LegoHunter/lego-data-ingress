@@ -276,11 +276,15 @@ public class BricklinkMarketplaceSyncService {
 
         context.bricklinkListing().setBricklinkInventoryId(remoteInventoryId.intValue());
         Inventory verifiedRemoteInventory = data(bricklinkRestClient.getInventories(remoteInventoryId));
-        BricklinkRemoteInventorySafetyResult remoteSafety = safetyService.verify(
-                properties,
-                context.listing(),
-                context.bricklinkListing(),
-                context.itemInventory(),
+        BricklinkRemoteInventorySafetyResult remoteSafety = createdQuantityCheck(
+                safetyService.verify(
+                        properties,
+                        context.listing(),
+                        context.bricklinkListing(),
+                        context.itemInventory(),
+                        verifiedRemoteInventory
+                ),
+                createPayload,
                 verifiedRemoteInventory
         );
         if (!remoteSafety.allowed()) {
@@ -311,6 +315,32 @@ public class BricklinkMarketplaceSyncService {
                 safety.stockRoom(),
                 safety.stockRoomId(),
                 price(request.getRequestedUnitPrice())
+        );
+    }
+
+    /**
+     * A created (or adopted) lot must hold exactly the quantity this listing put up. BrickLink's create
+     * call may consolidate a new lot into a matching existing one (its changelog says so without
+     * detail), which would leave one lot with a larger quantity that passes every other check. Only
+     * the listing-create path checks this: lots that predate it may legitimately hold other
+     * quantities.
+     */
+    private BricklinkRemoteInventorySafetyResult createdQuantityCheck(
+            BricklinkRemoteInventorySafetyResult remoteSafety,
+            Inventory createPayload,
+            Inventory verifiedRemoteInventory
+    ) {
+        if (!remoteSafety.allowed() || verifiedRemoteInventory == null) {
+            return remoteSafety;
+        }
+        Integer expected = createPayload.getQuantity();
+        Integer actual = verifiedRemoteInventory.getQuantity();
+        if (Objects.equals(expected, actual)) {
+            return remoteSafety;
+        }
+        return BricklinkRemoteInventorySafetyResult.blocked(
+                "REMOTE_QUANTITY_MISMATCH",
+                "BrickLink lot holds quantity " + actual + " but this listing put up " + expected
         );
     }
 
