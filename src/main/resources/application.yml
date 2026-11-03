@@ -224,6 +224,10 @@ bricklink:
       enabled: false
   rest:
     uri: https://api.bricklink.com/api/store/v1
+# set timeouts for the Bricklink REST API
+#    timeouts:
+#      connect: 10s
+#      read: 60s
     http-logging:
       enabled: true
       include-headers: true
