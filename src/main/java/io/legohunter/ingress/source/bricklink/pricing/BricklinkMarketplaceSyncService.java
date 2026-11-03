@@ -11,6 +11,7 @@ import io.legohunter.data.dto.BricklinkMarketplaceListing;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.MarketplaceListingSyncRequest;
+import io.legohunter.data.enums.LegoEnvironment;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -20,6 +21,9 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 @Service
@@ -49,6 +53,9 @@ public class BricklinkMarketplaceSyncService {
     public BricklinkMarketplaceSyncResult runOnce() {
         long start = System.currentTimeMillis();
         BricklinkMarketplaceSyncMode mode = properties.effectiveMode();
+        if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+            releaseStaleClaims();
+        }
         Set<MarketplaceListingSyncRequest> requests = marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
                 STATUS_PENDING,
                 Set.of(TYPE_PRICE_UPDATE, TYPE_LISTING_CREATE),
@@ -156,18 +163,35 @@ public class BricklinkMarketplaceSyncService {
         counters.remoteUpdated++;
     }
 
+    /**
+     * Creates the BrickLink lot for a local draft, at most once.
+     *
+     * <p>BrickLink has no idempotency key, so a retried create would make a second lot of the same
+     * unique item. Three things prevent that:
+     * <ol>
+     *   <li>the new lot's id is saved on the request and the BrickLink listing as soon as
+     *       {@code createInventory} returns, before anything else can fail;</li>
+     *   <li>a request that already has a saved id resumes at the read-back instead of creating;</li>
+     *   <li>before creating, the store is searched for a lot whose system remarks block names this
+     *       environment, listing and inventory item. That finds a lot whose create response was lost
+     *       (timeout, connection reset, pod killed mid-call), so it is taken over instead of
+     *       duplicated. If the search fails, nothing is created.</li>
+     * </ol>
+     */
     private void processListingCreate(
             MarketplaceListingSyncRequest request,
             BricklinkMarketplaceSyncMode mode,
             Counters counters
     ) {
         SyncContext context = context(request, false);
+        Long savedRemoteInventoryId = savedRemoteInventoryId(request);
         BricklinkListingCreateSafetyResult safety = listingCreateSafetyService.verify(
                 properties,
                 context.listing(),
                 context.bricklinkListing(),
                 context.itemInventory(),
-                request
+                request,
+                savedRemoteInventoryId != null
         );
         if (!safety.allowed()) {
             counters.blocked++;
@@ -195,7 +219,7 @@ public class BricklinkMarketplaceSyncService {
         if (mode == BricklinkMarketplaceSyncMode.DRY_RUN) {
             counters.dryRunVerified++;
             log.info(
-                    "bricklink.marketplace_sync.listing_create_dry_run marketplaceListingSyncRequestId={} marketplaceListingId={} itemNumber={} itemType={} requestedPrice={} stockRoom={} stockRoomId={} environmentCode={}",
+                    "bricklink.marketplace_sync.listing_create_dry_run marketplaceListingSyncRequestId={} marketplaceListingId={} itemNumber={} itemType={} requestedPrice={} stockRoom={} stockRoomId={} environmentCode={} savedBricklinkInventoryId={}",
                     request.getMarketplaceListingSyncRequestId(),
                     request.getMarketplaceListingId(),
                     createPayload.getItem().getNo(),
@@ -203,30 +227,71 @@ public class BricklinkMarketplaceSyncService {
                     price(request.getRequestedUnitPrice()),
                     createPayload.getIs_stock_room(),
                     createPayload.getStock_room_id(),
-                    properties.effectiveEnvironmentCode()
+                    properties.effectiveEnvironmentCode(),
+                    savedRemoteInventoryId
             );
             return;
         }
 
-        Inventory createdInventory = data(bricklinkRestClient.createInventory(createPayload));
-        Long remoteInventoryId = createdInventory == null ? null : createdInventory.getInventory_id();
-        if (remoteInventoryId == null) {
-            throw new IllegalStateException("BrickLink createInventory response did not include inventory_id");
+        Long remoteInventoryId = savedRemoteInventoryId;
+        if (remoteInventoryId != null) {
+            log.info(
+                    "bricklink.marketplace_sync.listing_create_resumed marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    remoteInventoryId
+            );
+        } else {
+            List<Long> ownedLots = ownedLotIds(context);
+            if (ownedLots.size() > 1) {
+                counters.blocked++;
+                markBlocked(request, "DUPLICATE_REMOTE_INVENTORY",
+                        "BrickLink already has " + ownedLots.size() + " lots owned by this listing " + ownedLots
+                                + "; resolve them by hand before creating another");
+                log.warn(
+                        "bricklink.marketplace_sync.listing_create_duplicates_found marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryIds={}",
+                        request.getMarketplaceListingSyncRequestId(),
+                        request.getMarketplaceListingId(),
+                        ownedLots
+                );
+                return;
+            }
+            if (ownedLots.size() == 1) {
+                remoteInventoryId = ownedLots.getFirst();
+                log.warn(
+                        "bricklink.marketplace_sync.listing_create_adopted marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} message=an earlier attempt created this lot but its id was not saved",
+                        request.getMarketplaceListingSyncRequestId(),
+                        request.getMarketplaceListingId(),
+                        remoteInventoryId
+                );
+            } else {
+                Inventory createdInventory = data(bricklinkRestClient.createInventory(createPayload));
+                remoteInventoryId = createdInventory == null ? null : createdInventory.getInventory_id();
+                if (remoteInventoryId == null) {
+                    throw new IllegalStateException("BrickLink createInventory response did not include inventory_id");
+                }
+            }
+            saveRemoteInventoryId(context, request, remoteInventoryId);
         }
 
         context.bricklinkListing().setBricklinkInventoryId(remoteInventoryId.intValue());
         Inventory verifiedRemoteInventory = data(bricklinkRestClient.getInventories(remoteInventoryId));
-        BricklinkRemoteInventorySafetyResult remoteSafety = safetyService.verify(
-                properties,
-                context.listing(),
-                context.bricklinkListing(),
-                context.itemInventory(),
+        BricklinkRemoteInventorySafetyResult remoteSafety = createdQuantityCheck(
+                safetyService.verify(
+                        properties,
+                        context.listing(),
+                        context.bricklinkListing(),
+                        context.itemInventory(),
+                        verifiedRemoteInventory
+                ),
+                createPayload,
                 verifiedRemoteInventory
         );
         if (!remoteSafety.allowed()) {
             updateCreatedRemoteIdentity(context, request, verifiedRemoteInventory, remoteInventoryId);
             updateSafetyMetadata(context.bricklinkListing(), remoteSafety, verifiedRemoteInventory);
-            markBlocked(request, remoteSafety.statusCode(), remoteSafety.message());
+            String hidden = hideBlockedLot(context, request, remoteInventoryId, verifiedRemoteInventory);
+            markBlocked(request, remoteSafety.statusCode(), remoteSafety.message() + hidden);
             counters.blocked++;
             log.warn(
                     "bricklink.marketplace_sync.listing_create_remote_verification_blocked marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} statusCode={} message={}",
@@ -253,6 +318,32 @@ public class BricklinkMarketplaceSyncService {
         );
     }
 
+    /**
+     * A created (or adopted) lot must hold exactly the quantity this listing put up. BrickLink's create
+     * call may consolidate a new lot into a matching existing one (its changelog says so without
+     * detail), which would leave one lot with a larger quantity that passes every other check. Only
+     * the listing-create path checks this: lots that predate it may legitimately hold other
+     * quantities.
+     */
+    private BricklinkRemoteInventorySafetyResult createdQuantityCheck(
+            BricklinkRemoteInventorySafetyResult remoteSafety,
+            Inventory createPayload,
+            Inventory verifiedRemoteInventory
+    ) {
+        if (!remoteSafety.allowed() || verifiedRemoteInventory == null) {
+            return remoteSafety;
+        }
+        Integer expected = createPayload.getQuantity();
+        Integer actual = verifiedRemoteInventory.getQuantity();
+        if (Objects.equals(expected, actual)) {
+            return remoteSafety;
+        }
+        return BricklinkRemoteInventorySafetyResult.blocked(
+                "REMOTE_QUANTITY_MISMATCH",
+                "BrickLink lot holds quantity " + actual + " but this listing put up " + expected
+        );
+    }
+
     private void updateCreatedRemoteIdentity(
             SyncContext context,
             MarketplaceListingSyncRequest request,
@@ -270,6 +361,147 @@ public class BricklinkMarketplaceSyncService {
             context.bricklinkListing().setLastRemoteQuantity(verifiedRemoteInventory.getQuantity());
         }
         request.setRemoteInventoryId(remoteInventoryId.toString());
+    }
+
+    /**
+     * The lot an earlier attempt of this request already created or found, if it saved the id. Only
+     * the request's own {@code remote_inventory_id} counts: a listing that already had a lot before
+     * this request is still refused by the create safety check, so this never takes over a lot it
+     * did not create.
+     */
+    private Long savedRemoteInventoryId(MarketplaceListingSyncRequest request) {
+        String saved = request.getRemoteInventoryId();
+        if (saved == null || saved.isBlank()) {
+            return null;
+        }
+        return Long.valueOf(saved.trim());
+    }
+
+    /**
+     * Saves the new lot's id before anything else can fail. The request is written first: if the
+     * BrickLink listing update then fails, the retry still finds the id on the request and resumes.
+     */
+    private void saveRemoteInventoryId(SyncContext context, MarketplaceListingSyncRequest request, Long remoteInventoryId) {
+        request.setRemoteInventoryId(remoteInventoryId.toString());
+        context.bricklinkListing().setBricklinkInventoryId(remoteInventoryId.intValue());
+        marketplaceListingSyncRequestDao.update(request);
+        bricklinkMarketplaceListingDao.update(context.bricklinkListing());
+    }
+
+    /**
+     * The ids of every lot in the store whose system remarks block names this environment, listing
+     * and inventory item: lots an earlier attempt created without saving the id. A failed search
+     * throws, so nothing is created while an existing lot cannot be ruled out.
+     */
+    private List<Long> ownedLotIds(SyncContext context) {
+        List<Inventory> lots = data(bricklinkRestClient.getInventories(Map.of()));
+        if (lots == null) {
+            throw new IllegalStateException("BrickLink inventory search returned no data, so an existing lot cannot be ruled out");
+        }
+        String environmentCode = properties.effectiveEnvironmentCode();
+        String marketplaceListingId = String.valueOf(context.listing().getMarketplaceListingId());
+        String itemInventoryUuid = context.itemInventory().getUuid() == null ? "" : context.itemInventory().getUuid();
+        return lots.stream()
+                .filter(lot -> BricklinkInventorySystemRemarks.parse(lot.getRemarks())
+                        .map(block -> environmentCode.equalsIgnoreCase(trim(block.value(BricklinkInventorySystemRemarks.ENV_KEY)))
+                                && marketplaceListingId.equals(trim(block.value(BricklinkInventorySystemRemarks.MARKETPLACE_LISTING_ID_KEY)))
+                                && itemInventoryUuid.equals(trim(block.value(BricklinkInventorySystemRemarks.ITEM_INVENTORY_UUID_KEY))))
+                        .orElse(false))
+                .map(Inventory::getInventory_id)
+                .filter(Objects::nonNull)
+                .sorted()
+                .toList();
+    }
+
+    /**
+     * Hides a lot this request just created (or took over) that failed the post-create check, so a
+     * lot that failed our own checks is never left for sale. PROD hides it in stockroom A, its
+     * stockroom for deliberately hidden lots; a lower environment uses its own stockroom. Returns a
+     * note for the request's error message.
+     */
+    private String hideBlockedLot(SyncContext context, MarketplaceListingSyncRequest request, Long remoteInventoryId, Inventory remoteInventory) {
+        String stockroom = properties.isProduction()
+                ? LegoEnvironment.PROD.stockroom().id()
+                : properties.effectiveNonProdStockRoomId();
+        if (remoteInventory != null && Boolean.TRUE.equals(remoteInventory.getIs_stock_room())
+                && stockroom.equalsIgnoreCase(trim(remoteInventory.getStock_room_id()))) {
+            return "; lot " + remoteInventoryId + " is already hidden in stockroom " + stockroom;
+        }
+        try {
+            Inventory hide = new Inventory();
+            hide.setIs_stock_room(true);
+            hide.setStock_room_id(stockroom);
+            bricklinkRestClient.updateInventory(remoteInventoryId, hide);
+            context.bricklinkListing().setIsStockRoom(true);
+            context.bricklinkListing().setStockRoomId(stockroom);
+            bricklinkMarketplaceListingDao.update(context.bricklinkListing());
+            log.warn(
+                    "bricklink.marketplace_sync.listing_create_blocked_lot_hidden marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} stockRoomId={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    remoteInventoryId,
+                    stockroom
+            );
+            return "; lot " + remoteInventoryId + " hidden in stockroom " + stockroom;
+        } catch (RuntimeException e) {
+            log.error(
+                    "bricklink.marketplace_sync.listing_create_blocked_lot_hide_failed marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} stockRoomId={} message={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    remoteInventoryId,
+                    stockroom,
+                    e.getMessage(),
+                    e
+            );
+            return "; hiding lot " + remoteInventoryId + " in stockroom " + stockroom + " failed, hide it by hand: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Puts requests whose worker died mid-run (pod killed, process crashed) back to PENDING, or to
+     * FAILED when they have no attempts left. Without this they stay CLAIMED forever, and
+     * lego-data-service refuses to queue a new LISTING_CREATE for the listing. Safe because a
+     * resumed LISTING_CREATE never creates a second lot: it resumes from a saved id or finds the
+     * lot by its remarks. Runs once per run, before anything is claimed, and the job holds a
+     * ShedLock lock, so no other worker can be holding these claims.
+     */
+    private int releaseStaleClaims() {
+        ZonedDateTime cutoff = now().minus(properties.effectiveStaleClaimTimeout());
+        int released = 0;
+        for (MarketplaceListingSyncRequest request : marketplaceListingSyncRequestDao.findBySyncRequestStatusCode(STATUS_CLAIMED)) {
+            if (!Set.of(TYPE_PRICE_UPDATE, TYPE_LISTING_CREATE).contains(normalize(request.getSyncRequestTypeCode()))) {
+                continue;
+            }
+            if (request.getClaimedAt() == null || request.getClaimedAt().isAfter(cutoff)) {
+                continue;
+            }
+            ZonedDateTime claimedAt = request.getClaimedAt();
+            request.setClaimedAt(null);
+            request.setLastErrorMessage(shortMessage("Released a stale claim from " + claimedAt + ": the worker stopped before finishing"));
+            if (request.getAttemptCount() != null && request.getMaxAttempts() != null && request.getAttemptCount() >= request.getMaxAttempts()) {
+                request.setSyncRequestStatusCode(STATUS_FAILED);
+                request.setCompletedAt(now());
+            } else {
+                request.setSyncRequestStatusCode(STATUS_PENDING);
+                request.setNextAttemptAt(now());
+            }
+            marketplaceListingSyncRequestDao.update(request);
+            released++;
+            log.warn(
+                    "bricklink.marketplace_sync.stale_claim_released marketplaceListingSyncRequestId={} marketplaceListingId={} syncRequestType={} claimedAt={} newStatus={} remoteInventoryId={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    request.getSyncRequestTypeCode(),
+                    claimedAt,
+                    request.getSyncRequestStatusCode(),
+                    request.getRemoteInventoryId()
+            );
+        }
+        return released;
+    }
+
+    private String trim(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private SyncContext context(MarketplaceListingSyncRequest request, boolean requireBricklinkInventoryId) {

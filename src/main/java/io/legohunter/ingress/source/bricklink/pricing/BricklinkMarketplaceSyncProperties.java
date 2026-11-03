@@ -17,6 +17,12 @@ public class BricklinkMarketplaceSyncProperties {
     private Integer bricklinkExternalServiceId = 2;
     private int batchSize = 5;
     private Duration retryBackoff = Duration.ofHours(6);
+    /**
+     * How long a request may stay CLAIMED before the next run treats its worker as dead (pod
+     * killed mid-run) and puts it back to PENDING. Longer than any one run can take, so a request
+     * still being worked on is never released.
+     */
+    private Duration staleClaimTimeout = Duration.ofHours(1);
     private String environmentCode = "local";
     private boolean production = false;
     private boolean requireSystemRemarksBlock = true;
@@ -43,6 +49,11 @@ public class BricklinkMarketplaceSyncProperties {
 
     public int effectiveBatchSize() {
         return Math.max(1, batchSize);
+    }
+
+    public Duration effectiveStaleClaimTimeout() {
+        return staleClaimTimeout == null || staleClaimTimeout.isNegative() || staleClaimTimeout.isZero()
+                ? Duration.ofHours(1) : staleClaimTimeout;
     }
 
     public Duration effectiveRetryBackoff() {

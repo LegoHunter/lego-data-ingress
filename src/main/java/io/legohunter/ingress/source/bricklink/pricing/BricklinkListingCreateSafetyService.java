@@ -27,6 +27,22 @@ class BricklinkListingCreateSafetyService {
             ItemInventory itemInventory,
             MarketplaceListingSyncRequest request
     ) {
+        return verify(properties, listing, bricklinkListing, itemInventory, request, false);
+    }
+
+    /**
+     * @param resuming true when an earlier attempt already created (or found) the BrickLink lot and
+     *                 saved its id; the "no remote lot yet" rule is then skipped, because the sync
+     *                 resumes at the read-back instead of creating another lot
+     */
+    BricklinkListingCreateSafetyResult verify(
+            BricklinkMarketplaceSyncProperties properties,
+            MarketplaceListing listing,
+            BricklinkMarketplaceListing bricklinkListing,
+            ItemInventory itemInventory,
+            MarketplaceListingSyncRequest request,
+            boolean resuming
+    ) {
         if (listing == null || bricklinkListing == null || itemInventory == null || request == null) {
             return blocked("LOCAL_CONTEXT_MISSING", "Required local listing create context is missing");
         }
@@ -40,7 +56,7 @@ class BricklinkListingCreateSafetyService {
         if (!LISTING_STATUS_DRAFT.equals(normalize(listing.getListingStatusCode()))) {
             return blocked("LISTING_NOT_DRAFT", "LISTING_CREATE requires a local DRAFT marketplace listing");
         }
-        if (bricklinkListing.getBricklinkInventoryId() != null || notBlank(request.getRemoteInventoryId())) {
+        if (!resuming && (bricklinkListing.getBricklinkInventoryId() != null || notBlank(request.getRemoteInventoryId()))) {
             return blocked("REMOTE_INVENTORY_ALREADY_EXISTS", "LISTING_CREATE cannot run for a listing that already has a BrickLink inventory id");
         }
         if (!Boolean.TRUE.equals(itemInventory.getActive())) {
