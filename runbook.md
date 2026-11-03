@@ -1187,7 +1187,7 @@ Notes:
 | Photo delete concurrency | Hard-coded to `6` in the listener annotation; not currently YAML-configurable. |
 | BrickLink external service id | Catalog/category consumers currently hard-code `2`. |
 | Rebrickable external service id | Catalog/theme consumers currently hard-code `9`. |
-| Rebrickable catalog category lookup | The current catalog category lookup uses external service id `2`; review before relying on Rebrickable category links. |
+| Rebrickable catalog category lookup | Looks the set's theme up among Rebrickable categories (service id `9`). Before this fix it used BrickLink's id `2`, so environments ingested earlier hold wrong links (Rebrickable items → BrickLink categories) until repaired. |
 
 Expected Rebrickable CSV headers:
 
