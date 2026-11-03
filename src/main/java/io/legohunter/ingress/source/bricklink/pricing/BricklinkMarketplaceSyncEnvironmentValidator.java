@@ -1,7 +1,7 @@
 package io.legohunter.ingress.source.bricklink.pricing;
 
 import io.legohunter.data.bricklink.BricklinkStockroomPolicy;
-import io.legohunter.ingress.config.environment.LegoEnvironmentProperties;
+import io.legohunter.lego.data.environment.LegoEnvironmentProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.stereotype.Component;
@@ -18,12 +18,15 @@ import java.util.List;
  * environment code must be a known environment, must agree with the production flag, and a lower
  * environment must use its own stockroom (SANDBOX/local C, DEV B; A is PROD's own).
  *
- * <p>On top of that, this service has several copies of the same environment facts, and they must
- * agree:
+ * <p>On top of that, marketplace sync and pricing apply still carry their own copies of the
+ * environment facts. The profiles set them from {@code lego.environment} (which the lego-data
+ * starter checks against the connected database), and they must not be overridden to disagree:
  * <ul>
  *   <li>{@code lego.bricklink.marketplace-sync.production} must equal
  *       {@code lego.environment.production}, or marketplace sync and the order/fulfillment jobs
  *       would disagree about whether this runtime is PROD;</li>
+ *   <li>{@code lego.bricklink.marketplace-sync.environment-code} must equal
+ *       {@code lego.environment.code}, the code the database check verified;</li>
  *   <li>{@code lego.bricklink.pricing.apply.environment-code} must equal the marketplace-sync
  *       environment code, because both are written onto the sync requests;</li>
  *   <li>{@code non-prod-require-stock-room} must stay {@code true} outside PROD.</li>
@@ -61,6 +64,11 @@ public class BricklinkMarketplaceSyncEnvironmentValidator implements Initializin
         if (marketplaceSync.isProduction() != environment.isProduction()) {
             violations.add("%s.production (%s) must equal lego.environment.production (%s)"
                     .formatted(MARKETPLACE_SYNC_PREFIX, marketplaceSync.isProduction(), environment.isProduction()));
+        }
+        String environmentCode = environment.getCode() == null ? "" : environment.getCode().trim().toLowerCase();
+        if (!marketplaceSync.effectiveEnvironmentCode().equals(environmentCode)) {
+            violations.add("%s.environment-code '%s' must equal lego.environment.code '%s'"
+                    .formatted(MARKETPLACE_SYNC_PREFIX, marketplaceSync.effectiveEnvironmentCode(), environment.getCode()));
         }
         if (!pricingApply.effectiveEnvironmentCode().equals(marketplaceSync.effectiveEnvironmentCode())) {
             violations.add("lego.bricklink.pricing.apply.environment-code '%s' must equal %s.environment-code '%s'"

@@ -23,6 +23,8 @@ spring:
       pool-name: rasppi5-01-mysql-jdbc-pool
 
 lego:
+  environment:
+    code: dev
   object-storage:
     buckets:
       final-photo: lego-photos-dev
@@ -33,19 +35,12 @@ lego:
           enabled: true
           apply: true
           fixed-delay-ms: 300000
-    pricing:
-      apply:
-        # Must match marketplace-sync.environment-code; both are written onto sync requests and the
-        # app refuses to start if they differ (HOMELAB-20). It used to fall back to "local" here.
-        environment-code: dev
     marketplace-sync:
       enabled: true
       mode: APPLY
       bricklink-external-service-id: 2
       batch-size: 5
       retry-backoff: 6h
-      environment-code: dev
-      production: false
       require-system-remarks-block: true
       non-prod-require-stock-room: true
       # HOMELAB-20: DEV owns stockroom B. A is reserved for PROD, C for SANDBOX.

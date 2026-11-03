@@ -6,10 +6,14 @@ spring:
 
 
 lego:
-  # Runtime environment identity. Only application-prod.yml may set production=true.
-  # Non-production runtimes never write to real orders (ShipStation, BrickLink order
-  # status, Drive Thru emails) because all environments share one BrickLink/ShipStation account.
+  # Runtime environment identity, declared once per profile (bound by the lego-data starter).
+  # Only application-prod.yml may set production=true. Non-production runtimes never write to
+  # real orders (ShipStation, BrickLink order status, Drive Thru emails) because all environments
+  # share one BrickLink/ShipStation account. At startup the lego-data starter refuses to run unless
+  # the code matches the connected database (sandbox=lego_sandbox, dev=lego_dev, prod=lego_prod;
+  # local=anything but lego_prod). Pricing apply and marketplace sync read these values below.
   environment:
+    code: local
     production: false
   bricklink:
     pricing:
@@ -86,7 +90,7 @@ lego:
         batch-size: 25
         sync-request-max-attempts: 3
         mode: DRY_RUN
-        environment-code: local
+        environment-code: ${lego.environment.code}
         scheduled:
           enabled: false
           fixed-delay-ms: 300000
@@ -99,8 +103,8 @@ lego:
       bricklink-external-service-id: 2
       batch-size: 5
       retry-backoff: 6h
-      environment-code: local
-      production: false
+      environment-code: ${lego.environment.code}
+      production: ${lego.environment.production}
       require-system-remarks-block: true
       non-prod-require-stock-room: true
       # HOMELAB-20: no code default. local/SANDBOX=C, DEV=B; A is reserved for PROD (startup check).

@@ -4,12 +4,16 @@ import io.legohunter.data.environment.EnvironmentDatabasePolicy;
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncEnvironmentValidator;
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncProperties;
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyProperties;
+import io.legohunter.lego.data.environment.LegoEnvironmentProperties;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
-import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
+import org.springframework.boot.context.properties.bind.PropertySourcesPlaceholdersResolver;
+import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
+import org.springframework.core.env.MutablePropertySources;
+import org.springframework.core.env.PropertiesPropertySource;
 import org.springframework.core.io.FileSystemResource;
 
 import java.io.File;
@@ -27,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * {@link KubernetesOverlayProfileTest}), and a developer workstation runs the default
  * {@code sandbox,local}. Later files win, as in Spring Boot. Files are read from
  * {@code src/main/resources} because the test classpath has its own {@code application.yml}.
+ * Placeholders such as {@code ${lego.environment.code}} are resolved as Spring does.
  */
 class StockroomProfileTest {
 
@@ -43,6 +48,7 @@ class StockroomProfileTest {
         BricklinkMarketplaceSyncProperties marketplaceSync = marketplaceSync(effective);
 
         assertThat(environment(effective).isProduction()).isFalse();
+        assertThat(environment(effective).getCode()).isEqualTo(environmentCode);
         assertThat(marketplaceSync.isProduction()).isFalse();
         assertThat(marketplaceSync.effectiveEnvironmentCode()).isEqualTo(environmentCode);
         assertThat(pricingApply(effective).effectiveEnvironmentCode()).isEqualTo(environmentCode);
@@ -57,6 +63,7 @@ class StockroomProfileTest {
         Properties effective = configuration(profiles);
 
         assertThat(environment(effective).isProduction()).isTrue();
+        assertThat(environment(effective).getCode()).isEqualTo("prod");
         assertThat(marketplaceSync(effective).isProduction()).isTrue();
         assertThat(marketplaceSync(effective).effectiveEnvironmentCode()).isEqualTo("prod");
         assertThat(pricingApply(effective).effectiveEnvironmentCode()).isEqualTo("prod");
@@ -66,7 +73,8 @@ class StockroomProfileTest {
     /**
      * Each real profile points its data source at its own environment's schema. The database URL
      * lives in the mounted credentials file, so this relies on the key-naming convention
-     * {@code rasppi5-01-<schema with dashes>}.
+     * {@code rasppi5-01-<schema with dashes>}. The lego-data starter checks {@code lego.environment}
+     * against the real connection at startup.
      */
     @ParameterizedTest(name = "{0}")
     @CsvSource({
@@ -77,12 +85,12 @@ class StockroomProfileTest {
     })
     void eachProfileUsesTheDatabaseOfItsEnvironment(String profiles, String schema) {
         Properties effective = configuration(profiles);
-        BricklinkMarketplaceSyncProperties marketplaceSync = marketplaceSync(effective);
+        LegoEnvironmentProperties environment = environment(effective);
 
         assertThat(effective.getProperty("spring.datasource.database-key-name"))
                 .isEqualTo("rasppi5-01-" + schema.replace('_', '-'));
-        assertThat(EnvironmentDatabasePolicy.violations("lego.bricklink.marketplace-sync",
-                marketplaceSync.effectiveEnvironmentCode(), marketplaceSync.isProduction(), schema))
+        assertThat(EnvironmentDatabasePolicy.violations("lego.environment.code", "lego.environment.production",
+                environment.getCode(), environment.isProduction(), schema))
                 .isEmpty();
     }
 
@@ -92,21 +100,27 @@ class StockroomProfileTest {
     }
 
     private static BricklinkMarketplaceSyncProperties marketplaceSync(Properties effective) {
-        return new Binder(new MapConfigurationPropertySource(effective))
+        return binder(effective)
                 .bind("lego.bricklink.marketplace-sync", Bindable.ofInstance(new BricklinkMarketplaceSyncProperties()))
                 .get();
     }
 
     private static BricklinkPricingApplyProperties pricingApply(Properties effective) {
-        return new Binder(new MapConfigurationPropertySource(effective))
+        return binder(effective)
                 .bind("lego.bricklink.pricing.apply", Bindable.ofInstance(new BricklinkPricingApplyProperties()))
                 .get();
     }
 
     private static LegoEnvironmentProperties environment(Properties effective) {
-        return new Binder(new MapConfigurationPropertySource(effective))
+        return binder(effective)
                 .bind("lego.environment", Bindable.ofInstance(new LegoEnvironmentProperties()))
                 .get();
+    }
+
+    private static Binder binder(Properties effective) {
+        MutablePropertySources sources = new MutablePropertySources();
+        sources.addFirst(new PropertiesPropertySource("profiles", effective));
+        return new Binder(ConfigurationPropertySources.from(sources), new PropertySourcesPlaceholdersResolver(sources));
     }
 
     private static Properties configuration(String profiles) {

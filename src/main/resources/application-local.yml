@@ -18,6 +18,8 @@ logging:
     com.bricklink.api: DEBUG
 
 lego:
+  environment:
+    code: local
   minio:
     url: https://api.minio.dev.internal.legohunter.io
   bricklink:
@@ -73,7 +75,6 @@ lego:
         enabled: true
         batch-size: 25
         mode: DRY_RUN
-        environment-code: local
         scheduled:
           enabled: false
           initial-delay-ms: 30000
@@ -81,8 +82,6 @@ lego:
     marketplace-sync:
       enabled: true
       mode: DRY_RUN
-      environment-code: local
-      production: false
       # Same stockroom as SANDBOX (HOMELAB-20). local always runs marketplace sync as DRY_RUN.
       non-prod-stock-room-id: C
       scheduled:
