@@ -3154,9 +3154,11 @@ The recent sandbox redeploy branch was intentionally used to run the complete pa
 | Marketplace sync | `APPLY`; `production=false`; stockroom-only; initial delay 300 seconds; fixed delay 10 minutes |
 
 SANDBOX uses stockroom `C` (HOMELAB-20; the checked-in profile now sets it, and the app
-refuses to start with `A`). The app also refuses to start unless the connected schema matches
-the environment: `sandbox` on `lego_sandbox`, `dev` on `lego_dev`, `prod` on `lego_prod`, `local` on anything but
-`lego_prod` (HOMELAB-19, `EnvironmentDatabaseValidator`); it also stays down while MySQL is unreachable.
+refuses to start with `A`). Each profile declares its environment once, as `lego.environment.code`
+(and `production`); marketplace sync and pricing apply read it from there. The lego-data starter refuses to start
+the app unless that code matches the connected schema: `sandbox` on `lego_sandbox`, `dev` on `lego_dev`, `prod` on
+`lego_prod`, `local` on anything but `lego_prod` (HOMELAB-19/34, `EnvironmentDatabaseVerifier`, which logs
+"Environment '…' verified against database schema '…'" at startup); it also stays down while MySQL is unreachable.
 Verify the bound profile and pod environment before relying
 on the rest of this table. Local remains
 effectively `DRY_RUN`; sandbox/dev are real BrickLink account operations constrained to

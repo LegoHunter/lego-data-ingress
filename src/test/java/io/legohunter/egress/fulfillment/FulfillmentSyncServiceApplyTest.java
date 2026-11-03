@@ -21,7 +21,7 @@ import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
-import io.legohunter.ingress.config.environment.LegoEnvironmentProperties;
+import io.legohunter.lego.data.environment.LegoEnvironmentProperties;
 import io.legohunter.data.dto.Carrier;
 import io.legohunter.data.dto.Transactions;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;

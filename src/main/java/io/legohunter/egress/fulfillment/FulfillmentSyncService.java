@@ -20,7 +20,7 @@ import io.legohunter.data.dto.Carrier;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderItem;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
-import io.legohunter.ingress.config.environment.LegoEnvironmentProperties;
+import io.legohunter.lego.data.environment.LegoEnvironmentProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
