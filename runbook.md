@@ -762,8 +762,8 @@ Modes:
 | Mode | Behavior |
 | --- | --- |
 | `DRY_RUN` | Logs the decisions that would be applied. Does not update `marketplace_listing`, does not mark `pricing_decision.applied_at`, and does not enqueue sync requests. |
-| `APPLY_LOCAL_ONLY` | Updates `marketplace_listing.unit_price` and marks `pricing_decision.applied_at`. Does not enqueue remote marketplace sync. |
-| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Updates the local listing price and marks the pricing decision applied. For listings with an existing BrickLink inventory id, it upserts a `PRICE_UPDATE` sync request. For priced local `DRAFT` listings without a BrickLink inventory id, it upserts a `LISTING_CREATE` sync request so the marketplace sync worker can create the stockroom/public listing according to environment guardrails. Initial-price requests use `previous_unit_price=NULL`, a positive `requested_unit_price`, and sync reason `INITIAL_PRICE_APPLIED`. |
+| `APPLY_LOCAL_ONLY` | Updates `marketplace_listing.unit_price` and moves the decision from `PROPOSED` to `APPLIED` with `applied_at`, in one transaction. Does not enqueue remote marketplace sync. |
+| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | **Remote first.** For listings with an existing BrickLink inventory id, it moves the decision from `PROPOSED` to `ACCEPTED` and inserts a `PRICE_UPDATE` sync request, in one transaction, and leaves the local price alone: the marketplace sync worker changes `marketplace_listing.unit_price`, and moves the decision to `APPLIED`, only after BrickLink confirms the new price. A listing that already has a `PENDING` or `CLAIMED` sync request is skipped until it finishes. An existing request for the same decision is never overwritten. For priced local `DRAFT` listings without a BrickLink inventory id, it sets the draft price, accepts the decision and inserts a `LISTING_CREATE` sync request, in one transaction. For priced local `DRAFT` listings without a BrickLink inventory id, it upserts a `LISTING_CREATE` sync request so the marketplace sync worker can create the stockroom/public listing according to environment guardrails. Initial-price requests use `previous_unit_price=NULL`, a positive `requested_unit_price`, and sync reason `INITIAL_PRICE_APPLIED`. |
 
 Settings:
 
@@ -786,11 +786,11 @@ Important logs:
 | Event | Meaning |
 | --- | --- |
 | `bricklink.pricing.apply.dry_run` | A ready decision would have changed the local price, but apply mode is `DRY_RUN`. |
-| `bricklink.pricing.apply.local_updated` | Local `marketplace_listing.unit_price` was updated and the pricing decision was marked applied. |
-| `bricklink.pricing.apply.sync_enqueued` | A durable `PRICE_UPDATE` `marketplace_listing_sync_request` row was inserted or refreshed for an existing BrickLink inventory row. |
-| `bricklink.pricing.apply.listing_create_sync_enqueued` | A durable `LISTING_CREATE` `marketplace_listing_sync_request` row was inserted or refreshed for a priced local `DRAFT` listing with no BrickLink inventory id. |
-| `bricklink.pricing.apply.sync_skipped` | Local price was applied but remote sync enqueue was skipped, typically because the listing has no BrickLink inventory id and is not a local `DRAFT`. |
-| `bricklink.pricing.apply.skipped` | A selected row was intentionally skipped, such as an already-current price or a stale readiness row for a pricing decision that was already applied. |
+| `bricklink.pricing.apply.local_updated` | `APPLY_LOCAL_ONLY`: local `marketplace_listing.unit_price` was updated and the pricing decision was marked `APPLIED`. |
+| `bricklink.pricing.apply.draft_price_set` | The price of a local `DRAFT` (no BrickLink lot yet) was set before its `LISTING_CREATE` request was queued. |
+| `bricklink.pricing.apply.sync_enqueued` | The decision was accepted and a durable `PRICE_UPDATE` `marketplace_listing_sync_request` row was inserted for an existing BrickLink inventory row. The local price is unchanged until the sync worker confirms it. |
+| `bricklink.pricing.apply.listing_create_sync_enqueued` | A durable `LISTING_CREATE` `marketplace_listing_sync_request` row was inserted for a priced local `DRAFT` listing with no BrickLink inventory id. |
+| `bricklink.pricing.apply.skipped` | A selected row was intentionally skipped. `reason` is one of `PRICE_ALREADY_CURRENT`, `PRICING_DECISION_ALREADY_APPLIED` (already applied, or another worker accepted it first), `SYNC_REQUEST_IN_FLIGHT` (the listing has a `PENDING` or `CLAIMED` sync request), or `MISSING_REMOTE_INVENTORY_ID_FOR_NON_DRAFT` (a non-draft listing with no BrickLink lot; its price is not changed). |
 | `bricklink.pricing.apply.failed` | One selected readiness row failed defensive re-checks or sync-request preconditions. |
 | `bricklink.pricing.apply.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyResult`. |
 

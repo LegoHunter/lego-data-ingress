@@ -11,6 +11,7 @@ import io.legohunter.data.dto.MarketplaceListingSyncRequest;
 import io.legohunter.data.dto.PricingApplyReadinessReview;
 import io.legohunter.data.dto.PricingDecision;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.time.ZonedDateTime;
@@ -33,6 +34,7 @@ class BricklinkPricingApplyServiceTest {
     private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao = mock(BricklinkMarketplaceListingDao.class);
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao = mock(MarketplaceListingSyncRequestDao.class);
     private final BricklinkMarketplaceSyncProperties marketplaceSyncProperties = new BricklinkMarketplaceSyncProperties();
+    private final CountingTransactions transactions = new CountingTransactions();
     private final BricklinkPricingApplyService service = new BricklinkPricingApplyService(
             properties,
             pricingApplyReadinessDao,
@@ -40,7 +42,8 @@ class BricklinkPricingApplyServiceTest {
             marketplaceListingDao,
             bricklinkMarketplaceListingDao,
             marketplaceListingSyncRequestDao,
-            marketplaceSyncProperties
+            marketplaceSyncProperties,
+            transactions
     );
 
     @Test
@@ -53,54 +56,124 @@ class BricklinkPricingApplyServiceTest {
         assertThat(result.mode()).isEqualTo(BricklinkPricingApplyMode.DRY_RUN);
         assertThat(result.dryRunSelections()).isOne();
         assertThat(result.localPricesUpdated()).isZero();
-        verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
-        verify(pricingDecisionDao, never()).markApplied(any(), any());
-        verify(marketplaceListingSyncRequestDao, never()).upsert(any());
+        verifyNothingWritten();
     }
 
     @Test
-    void applyLocalAndEnqueueSyncUpdatesLocalGoldCopyAndCreatesSyncRequest() {
+    void priceUpdateAcceptsTheDecisionAndQueuesTheSyncWithoutTouchingTheLocalPrice() {
         properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
         properties.setEnvironmentCode("sandbox");
         arrangeReadyCandidate();
         when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkListing()));
-        when(marketplaceListingDao.updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class)))
-                .thenReturn(Optional.of(listing()));
-        when(pricingDecisionDao.markApplied(eq(500L), any(ZonedDateTime.class))).thenReturn(Optional.of(decision()));
-        when(marketplaceListingSyncRequestDao.upsert(any(MarketplaceListingSyncRequest.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+        arrangeDecisionAccepted();
 
         BricklinkPricingApplyResult result = service.runOnce();
 
-        assertThat(result.mode()).isEqualTo(BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC);
-        assertThat(result.localPricesUpdated()).isOne();
+        assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.localPricesUpdated()).isZero();
         assertThat(result.syncRequestsEnqueued()).isOne();
-        verify(marketplaceListingDao).updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class));
-        verify(pricingDecisionDao).markApplied(eq(500L), any(ZonedDateTime.class));
-        verify(marketplaceListingSyncRequestDao).upsert(any(MarketplaceListingSyncRequest.class));
-    }
-
-    @Test
-    void applyLocalAndEnqueueSyncUpdatesLocalDraftWithoutRemoteSyncWhenBricklinkMappingIsMissing() {
-        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
-        arrangeReadyCandidate(listing("ACTIVE"));
-        when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.empty());
-        when(marketplaceListingDao.updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class)))
-                .thenReturn(Optional.of(listing()));
-        when(pricingDecisionDao.markApplied(eq(500L), any(ZonedDateTime.class))).thenReturn(Optional.of(decision()));
-
-        BricklinkPricingApplyResult result = service.runOnce();
-
-        assertThat(result.failedRows()).isZero();
-        assertThat(result.localPricesUpdated()).isOne();
-        assertThat(result.syncRequestsEnqueued()).isZero();
-        verify(marketplaceListingDao).updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class));
-        verify(pricingDecisionDao).markApplied(eq(500L), any(ZonedDateTime.class));
+        assertThat(transactions.executions).isOne();
+        // Remote first: the local price waits for BrickLink to confirm it.
+        verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
+        verify(pricingDecisionDao, never()).markApplied(any(), any());
+        verify(pricingDecisionDao).transitionStatus(500L, "PROPOSED", "ACCEPTED", null);
+        MarketplaceListingSyncRequest request = insertedRequest();
+        assertThat(request.getSyncRequestTypeCode()).isEqualTo("PRICE_UPDATE");
+        assertThat(request.getSyncRequestStatusCode()).isEqualTo("PENDING");
+        assertThat(request.getPreviousUnitPrice()).isEqualByComparingTo("225.00");
+        assertThat(request.getRequestedUnitPrice()).isEqualByComparingTo("219.00");
+        assertThat(request.getRemoteInventoryId()).isEqualTo("12345");
+        assertThat(request.getAppliedLocalAt()).isNull();
         verify(marketplaceListingSyncRequestDao, never()).upsert(any());
     }
 
     @Test
-    void applyLocalAndEnqueueSyncCreatesListingCreateRequestForPricedLocalDraft() {
+    void priceUpdateWaitsWhileAnEarlierSyncRequestForTheListingIsStillOpen() {
+        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        arrangeReadyCandidate();
+        when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkListing()));
+        when(marketplaceListingSyncRequestDao.findByMarketplaceListingId(100)).thenReturn(Set.of(
+                MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(1L).syncRequestStatusCode("SUCCEEDED").build(),
+                MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(2L).syncRequestStatusCode("CLAIMED").build()
+        ));
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        assertThat(result.skippedRows()).isOne();
+        assertThat(result.failedRows()).isZero();
+        assertThat(result.syncRequestsEnqueued()).isZero();
+        verifyNothingWritten();
+    }
+
+    @Test
+    void priceUpdateProceedsWhenEarlierSyncRequestsHaveFinished() {
+        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        arrangeReadyCandidate();
+        when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkListing()));
+        when(marketplaceListingSyncRequestDao.findByMarketplaceListingId(100)).thenReturn(Set.of(
+                MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(1L).syncRequestStatusCode("SUCCEEDED").build(),
+                MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(2L).syncRequestStatusCode("BLOCKED").build(),
+                MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(3L).syncRequestStatusCode("FAILED").build()
+        ));
+        arrangeDecisionAccepted();
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        assertThat(result.syncRequestsEnqueued()).isOne();
+        assertThat(insertedRequest().getSyncRequestTypeCode()).isEqualTo("PRICE_UPDATE");
+    }
+
+    @Test
+    void priceUpdateSkipsADecisionAnotherWorkerAcceptedFirst() {
+        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        arrangeReadyCandidate();
+        when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkListing()));
+        when(pricingDecisionDao.transitionStatus(500L, "PROPOSED", "ACCEPTED", null)).thenReturn(Optional.empty());
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        assertThat(result.skippedRows()).isOne();
+        assertThat(result.failedRows()).isZero();
+        assertThat(result.syncRequestsEnqueued()).isZero();
+        verify(marketplaceListingSyncRequestDao, never()).insert(any());
+    }
+
+    @Test
+    void priceUpdateNeverOverwritesAnExistingSyncRequestForTheSameDecision() {
+        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        arrangeReadyCandidate();
+        when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkListing()));
+        arrangeDecisionAccepted();
+        when(marketplaceListingSyncRequestDao.findByMarketplaceListingIdAndPricingDecisionIdAndSyncRequestTypeCode(100, 500L, "PRICE_UPDATE"))
+                .thenReturn(Optional.of(MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(9L).syncRequestStatusCode("SUCCEEDED").build()));
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        // The transaction throws, so the ACCEPTED marker rolls back with it.
+        assertThat(result.failedRows()).isOne();
+        assertThat(result.outcome()).isEqualTo("FAILED");
+        verify(marketplaceListingSyncRequestDao, never()).insert(any());
+        verify(marketplaceListingSyncRequestDao, never()).upsert(any());
+        verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
+    }
+
+    @Test
+    void activeListingWithoutABricklinkLotIsSkippedAndKeepsItsPrice() {
+        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        arrangeReadyCandidate(listing("ACTIVE"));
+        when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.empty());
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        assertThat(result.failedRows()).isZero();
+        assertThat(result.skippedRows()).isOne();
+        assertThat(result.localPricesUpdated()).isZero();
+        assertThat(result.syncRequestsEnqueued()).isZero();
+        verifyNothingWritten();
+    }
+
+    @Test
+    void pricedDraftGetsTheNewDraftPriceAndAListingCreateRequestInOneTransaction() {
         properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
         marketplaceSyncProperties.setEnvironmentCode("sandbox");
         marketplaceSyncProperties.setProduction(false);
@@ -109,19 +182,22 @@ class BricklinkPricingApplyServiceTest {
         when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkDraftMapping()));
         when(marketplaceListingDao.updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class)))
                 .thenReturn(Optional.of(listing("DRAFT")));
-        when(pricingDecisionDao.markApplied(eq(500L), any(ZonedDateTime.class))).thenReturn(Optional.of(decision()));
-        when(marketplaceListingSyncRequestDao.upsert(any(MarketplaceListingSyncRequest.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+        arrangeDecisionAccepted();
 
         BricklinkPricingApplyResult result = service.runOnce();
 
         assertThat(result.localPricesUpdated()).isOne();
         assertThat(result.syncRequestsEnqueued()).isOne();
-        verify(marketplaceListingSyncRequestDao).upsert(any(MarketplaceListingSyncRequest.class));
+        assertThat(transactions.executions).isOne();
+        verify(pricingDecisionDao).transitionStatus(500L, "PROPOSED", "ACCEPTED", null);
+        MarketplaceListingSyncRequest request = insertedRequest();
+        assertThat(request.getSyncRequestTypeCode()).isEqualTo("LISTING_CREATE");
+        assertThat(request.getRemoteVisibilityContainerId()).isEqualTo("C");
+        assertThat(request.getAppliedLocalAt()).isNotNull();
     }
 
     @Test
-    void applyLocalAndEnqueueSyncPricesAnUnpricedDraftBeforeCreatingBricklinkListing() {
+    void unpricedDraftIsPricedBeforeCreatingTheBricklinkListing() {
         properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
         marketplaceSyncProperties.setEnvironmentCode("sandbox");
         marketplaceSyncProperties.setProduction(false);
@@ -135,22 +211,52 @@ class BricklinkPricingApplyServiceTest {
         when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkDraftMapping()));
         when(marketplaceListingDao.updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class)))
                 .thenReturn(Optional.of(listing("DRAFT")));
-        when(pricingDecisionDao.markApplied(eq(500L), any(ZonedDateTime.class))).thenReturn(Optional.of(decision()));
-        when(marketplaceListingSyncRequestDao.upsert(any(MarketplaceListingSyncRequest.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+        arrangeDecisionAccepted();
 
         BricklinkPricingApplyResult result = service.runOnce();
 
         assertThat(result.failedRows()).isZero();
         assertThat(result.localPricesUpdated()).isOne();
         assertThat(result.syncRequestsEnqueued()).isOne();
-        org.mockito.ArgumentCaptor<MarketplaceListingSyncRequest> requestCaptor =
-                org.mockito.ArgumentCaptor.forClass(MarketplaceListingSyncRequest.class);
-        verify(marketplaceListingSyncRequestDao).upsert(requestCaptor.capture());
-        assertThat(requestCaptor.getValue().getSyncRequestTypeCode()).isEqualTo("LISTING_CREATE");
-        assertThat(requestCaptor.getValue().getSyncReasonCode()).isEqualTo("INITIAL_PRICE_APPLIED");
-        assertThat(requestCaptor.getValue().getPreviousUnitPrice()).isNull();
-        assertThat(requestCaptor.getValue().getRequestedUnitPrice()).isEqualByComparingTo("219.00");
+        MarketplaceListingSyncRequest request = insertedRequest();
+        assertThat(request.getSyncRequestTypeCode()).isEqualTo("LISTING_CREATE");
+        assertThat(request.getSyncReasonCode()).isEqualTo("INITIAL_PRICE_APPLIED");
+        assertThat(request.getPreviousUnitPrice()).isNull();
+        assertThat(request.getRequestedUnitPrice()).isEqualByComparingTo("219.00");
+    }
+
+    @Test
+    void initialPriceReadinessIsRefusedForAListingThatAlreadyHasALot() {
+        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        PricingApplyReadinessReview initialReview = review();
+        initialReview.setReadinessStatusCode("READY_TO_APPLY_INITIAL_PRICE");
+        MarketplaceListing unpricedDraft = listing("DRAFT");
+        unpricedDraft.setUnitPrice(null);
+        arrangeReadyCandidate(initialReview, unpricedDraft);
+        when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkListing()));
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        assertThat(result.failedRows()).isOne();
+        verifyNothingWritten();
+    }
+
+    @Test
+    void applyLocalOnlyChangesTheLocalPriceAndMarksTheDecisionAppliedWithoutASyncRequest() {
+        properties.setMode("APPLY_LOCAL_ONLY");
+        arrangeReadyCandidate();
+        when(marketplaceListingDao.updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(listing()));
+        when(pricingDecisionDao.transitionStatus(eq(500L), eq("PROPOSED"), eq("APPLIED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(decision()));
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.localPricesUpdated()).isOne();
+        assertThat(result.syncRequestsEnqueued()).isZero();
+        assertThat(transactions.executions).isOne();
+        verify(marketplaceListingSyncRequestDao, never()).insert(any());
     }
 
     @Test
@@ -166,8 +272,43 @@ class BricklinkPricingApplyServiceTest {
         assertThat(result.failedRows()).isZero();
         assertThat(result.localPricesUpdated()).isZero();
         assertThat(result.syncRequestsEnqueued()).isZero();
+        verifyNothingWritten();
+    }
+
+    @Test
+    void runOnceFailsARowWhoseDecisionIsNoLongerProposed() {
+        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        when(pricingApplyReadinessDao.findLatestReadyToApplyReviews(25)).thenReturn(Set.of(review()));
+        when(marketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(listing()));
+        PricingDecision accepted = decision();
+        accepted.setDecisionStatusCode("ACCEPTED");
+        when(pricingDecisionDao.findByPricingDecisionId(500L)).thenReturn(Optional.of(accepted));
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        assertThat(result.failedRows()).isOne();
+        verifyNothingWritten();
+    }
+
+    private void arrangeDecisionAccepted() {
+        PricingDecision accepted = decision();
+        accepted.setDecisionStatusCode("ACCEPTED");
+        when(pricingDecisionDao.transitionStatus(500L, "PROPOSED", "ACCEPTED", null)).thenReturn(Optional.of(accepted));
+        when(marketplaceListingSyncRequestDao.insert(any(MarketplaceListingSyncRequest.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    private MarketplaceListingSyncRequest insertedRequest() {
+        ArgumentCaptor<MarketplaceListingSyncRequest> captor = ArgumentCaptor.forClass(MarketplaceListingSyncRequest.class);
+        verify(marketplaceListingSyncRequestDao).insert(captor.capture());
+        return captor.getValue();
+    }
+
+    private void verifyNothingWritten() {
         verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
         verify(pricingDecisionDao, never()).markApplied(any(), any());
+        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+        verify(marketplaceListingSyncRequestDao, never()).insert(any());
         verify(marketplaceListingSyncRequestDao, never()).upsert(any());
     }
 

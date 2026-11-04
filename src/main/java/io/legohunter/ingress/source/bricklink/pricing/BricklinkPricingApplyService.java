@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -36,6 +37,10 @@ public class BricklinkPricingApplyService {
     static final String REMOTE_SCOPE_STOCKROOM = "STOCKROOM";
     static final String REMOTE_SCOPE_PUBLIC = "PUBLIC";
     static final String LISTING_STATUS_DRAFT = "DRAFT";
+    static final String STATUS_PROPOSED = BricklinkPricingDecisionService.STATUS_PROPOSED;
+    static final String STATUS_ACCEPTED = "ACCEPTED";
+    static final String STATUS_APPLIED = "APPLIED";
+    private static final Set<String> OPEN_SYNC_STATUSES = Set.of("PENDING", "CLAIMED");
     private static final String JOB_NAME = "BricklinkPricingApplyJob";
 
     private final BricklinkPricingApplyProperties properties;
@@ -45,6 +50,7 @@ public class BricklinkPricingApplyService {
     private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao;
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao;
     private final BricklinkMarketplaceSyncProperties marketplaceSyncProperties;
+    private final TransactionOperations transactions;
 
     public BricklinkPricingApplyResult runOnce() {
         long start = System.currentTimeMillis();
@@ -85,29 +91,55 @@ public class BricklinkPricingApplyService {
                     continue;
                 }
 
-                BricklinkMarketplaceListing bricklinkListing = mode == BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC
-                        ? bricklinkMarketplaceListingDao.findByMarketplaceListingId(candidate.listing().getMarketplaceListingId()).orElse(null)
-                        : null;
+                if (mode == BricklinkPricingApplyMode.APPLY_LOCAL_ONLY) {
+                    transactions.executeWithoutResult(status -> applyLocalPriceOnly(candidate, review));
+                    counters.localPricesUpdated++;
+                    continue;
+                }
+
+                BricklinkMarketplaceListing bricklinkListing = bricklinkMarketplaceListingDao
+                        .findByMarketplaceListingId(candidate.listing().getMarketplaceListingId())
+                        .orElse(null);
                 if (isInitialPriceReadiness(review) && hasRemoteInventoryMapping(bricklinkListing)) {
                     throw new IllegalStateException("Initial pricing readiness cannot apply to a listing with remote BrickLink inventory");
                 }
-                applyLocalPrice(candidate, review);
-                counters.localPricesUpdated++;
+                if (hasOpenSyncRequest(candidate.listing().getMarketplaceListingId())) {
+                    // One price change in flight per listing: a newer decision waits until BrickLink
+                    // has confirmed or refused the previous one, so it is measured from the real price.
+                    counters.skippedRows++;
+                    log.info(
+                            "bricklink.pricing.apply.skipped marketplaceListingId={} pricingDecisionId={} reason=SYNC_REQUEST_IN_FLIGHT",
+                            review.getMarketplaceListingId(),
+                            review.getPricingDecisionId()
+                    );
+                    continue;
+                }
 
-                if (mode == BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC) {
-                    if (hasRemoteInventoryMapping(bricklinkListing)) {
+                if (hasRemoteInventoryMapping(bricklinkListing)) {
+                    // Remote first: the local price changes only when the sync worker has confirmed
+                    // the new price on BrickLink.
+                    transactions.executeWithoutResult(status -> {
+                        acceptDecision(candidate);
                         enqueuePriceUpdateSyncRequest(candidate, review, bricklinkListing);
-                        counters.syncRequestsEnqueued++;
-                    } else if (LISTING_STATUS_DRAFT.equals(normalize(candidate.listing().getListingStatusCode()))) {
+                    });
+                    counters.syncRequestsEnqueued++;
+                } else if (LISTING_STATUS_DRAFT.equals(normalize(candidate.listing().getListingStatusCode()))) {
+                    // A draft has no BrickLink lot yet, so its local price cannot drift from one. The
+                    // create request is built from it and must match it.
+                    transactions.executeWithoutResult(status -> {
+                        updateDraftPrice(candidate, review);
+                        acceptDecision(candidate);
                         enqueueListingCreateSyncRequest(candidate, review, bricklinkListing);
-                        counters.syncRequestsEnqueued++;
-                    } else {
-                        log.info(
-                                "bricklink.pricing.apply.sync_skipped marketplaceListingId={} pricingDecisionId={} reason=MISSING_REMOTE_INVENTORY_ID_FOR_NON_DRAFT",
-                                candidate.listing().getMarketplaceListingId(),
-                                candidate.decision().getPricingDecisionId()
-                        );
-                    }
+                    });
+                    counters.localPricesUpdated++;
+                    counters.syncRequestsEnqueued++;
+                } else {
+                    counters.skippedRows++;
+                    log.info(
+                            "bricklink.pricing.apply.skipped marketplaceListingId={} pricingDecisionId={} reason=MISSING_REMOTE_INVENTORY_ID_FOR_NON_DRAFT",
+                            candidate.listing().getMarketplaceListingId(),
+                            candidate.decision().getPricingDecisionId()
+                    );
                 }
             } catch (AlreadyAppliedPricingDecisionException e) {
                 counters.skippedRows++;
@@ -173,12 +205,15 @@ public class BricklinkPricingApplyService {
         return new ApplyCandidate(listing, decision);
     }
 
-    private void applyLocalPrice(ApplyCandidate candidate, PricingApplyReadinessReview review) {
+    /**
+     * {@code APPLY_LOCAL_ONLY}: no BrickLink write is wanted, so the decision is applied to the local
+     * price straight away.
+     */
+    private void applyLocalPriceOnly(ApplyCandidate candidate, PricingApplyReadinessReview review) {
         ZonedDateTime now = now();
-        marketplaceListingDao.updateUnitPrice(candidate.listing().getMarketplaceListingId(), money(review.getProposedPrice()), now)
-                .orElseThrow(() -> new IllegalStateException("Marketplace listing price update did not affect a row"));
-        pricingDecisionDao.markApplied(candidate.decision().getPricingDecisionId(), now)
-                .orElseThrow(() -> new IllegalStateException("Pricing decision apply marker did not affect a row"));
+        updateLocalPrice(candidate, review, now);
+        pricingDecisionDao.transitionStatus(candidate.decision().getPricingDecisionId(), STATUS_PROPOSED, STATUS_APPLIED, now)
+                .orElseThrow(AlreadyAppliedPricingDecisionException::new);
         log.info(
                 "bricklink.pricing.apply.local_updated marketplaceListingId={} pricingDecisionId={} previousPrice={} appliedPrice={} currencyCode={}",
                 candidate.listing().getMarketplaceListingId(),
@@ -187,6 +222,55 @@ public class BricklinkPricingApplyService {
                 money(review.getProposedPrice()),
                 review.getCurrencyCode()
         );
+    }
+
+    private void updateDraftPrice(ApplyCandidate candidate, PricingApplyReadinessReview review) {
+        updateLocalPrice(candidate, review, now());
+        log.info(
+                "bricklink.pricing.apply.draft_price_set marketplaceListingId={} pricingDecisionId={} draftPrice={} currencyCode={}",
+                candidate.listing().getMarketplaceListingId(),
+                candidate.decision().getPricingDecisionId(),
+                money(review.getProposedPrice()),
+                review.getCurrencyCode()
+        );
+    }
+
+    private void updateLocalPrice(ApplyCandidate candidate, PricingApplyReadinessReview review, ZonedDateTime now) {
+        marketplaceListingDao.updateUnitPrice(candidate.listing().getMarketplaceListingId(), money(review.getProposedPrice()), now)
+                .orElseThrow(() -> new IllegalStateException("Marketplace listing price update did not affect a row"));
+    }
+
+    /**
+     * PROPOSED to ACCEPTED: the decision is handed to the sync worker, which moves it to APPLIED once
+     * BrickLink has the price. Throws when another worker accepted it first, which rolls back the
+     * surrounding transaction.
+     */
+    private void acceptDecision(ApplyCandidate candidate) {
+        pricingDecisionDao.transitionStatus(candidate.decision().getPricingDecisionId(), STATUS_PROPOSED, STATUS_ACCEPTED, null)
+                .orElseThrow(AlreadyAppliedPricingDecisionException::new);
+    }
+
+    private boolean hasOpenSyncRequest(Integer marketplaceListingId) {
+        return marketplaceListingSyncRequestDao.findByMarketplaceListingId(marketplaceListingId).stream()
+                .map(MarketplaceListingSyncRequest::getSyncRequestStatusCode)
+                .map(this::normalize)
+                .anyMatch(OPEN_SYNC_STATUSES::contains);
+    }
+
+    /**
+     * Inserts a new sync request. Never overwrites one: a request for this listing, decision and type
+     * that already exists may be CLAIMED or finished, and resetting it to PENDING could push a price
+     * twice or undo a result.
+     */
+    private void insertSyncRequest(MarketplaceListingSyncRequest request) {
+        if (marketplaceListingSyncRequestDao.findByMarketplaceListingIdAndPricingDecisionIdAndSyncRequestTypeCode(
+                request.getMarketplaceListingId(),
+                request.getPricingDecisionId(),
+                request.getSyncRequestTypeCode()
+        ).isPresent()) {
+            throw new IllegalStateException("A " + request.getSyncRequestTypeCode() + " sync request already exists for this pricing decision");
+        }
+        marketplaceListingSyncRequestDao.insert(request);
     }
 
     private void enqueuePriceUpdateSyncRequest(
@@ -218,9 +302,9 @@ public class BricklinkPricingApplyService {
                 .attemptCount(0)
                 .maxAttempts(properties.effectiveSyncRequestMaxAttempts())
                 .nextAttemptAt(now())
-                .appliedLocalAt(now())
+                .appliedLocalAt(null)
                 .build();
-        marketplaceListingSyncRequestDao.upsert(request);
+        insertSyncRequest(request);
         log.info(
                 "bricklink.pricing.apply.sync_enqueued marketplaceListingId={} pricingDecisionId={} bricklinkInventoryId={} requestedPrice={} currencyCode={}",
                 candidate.listing().getMarketplaceListingId(),
@@ -259,7 +343,7 @@ public class BricklinkPricingApplyService {
                 .nextAttemptAt(now())
                 .appliedLocalAt(now())
                 .build();
-        marketplaceListingSyncRequestDao.upsert(request);
+        insertSyncRequest(request);
         log.info(
                 "bricklink.pricing.apply.listing_create_sync_enqueued marketplaceListingId={} pricingDecisionId={} requestedPrice={} currencyCode={} remoteVisibilityScopeCode={} environmentCode={}",
                 candidate.listing().getMarketplaceListingId(),
@@ -357,11 +441,12 @@ public class BricklinkPricingApplyService {
 
         private BricklinkPricingApplyResult result(BricklinkPricingApplyMode mode, long elapsedMillis) {
             String outcome;
-            if (failedRows > 0 && localPricesUpdated == 0 && dryRunSelections == 0) {
+            boolean didWork = localPricesUpdated > 0 || syncRequestsEnqueued > 0 || dryRunSelections > 0;
+            if (failedRows > 0 && !didWork) {
                 outcome = "FAILED";
             } else if (failedRows > 0) {
                 outcome = "PARTIAL_SUCCESS";
-            } else if (localPricesUpdated == 0 && dryRunSelections == 0) {
+            } else if (!didWork) {
                 outcome = "NO_APPLICABLE_DECISIONS";
             } else {
                 outcome = "SUCCESS";

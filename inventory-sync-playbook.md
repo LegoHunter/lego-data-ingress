@@ -810,7 +810,7 @@ GET /internal/bricklink/pricing/apply-selection/dry-run?limit=100
 
 Treat `/internal/*` as administrative endpoints and keep them behind trusted access controls.
 
-### D. Apply: write the local price and enqueue the correct remote work
+### D. Apply: accept the decision and enqueue the correct remote work
 
 The apply job consumes current, unapplied `READY_TO_APPLY` and `READY_TO_APPLY_INITIAL_PRICE` rows and rechecks the listing and decision defensively. It skips a decision that was already applied. Initial-price rows must still point to an unpriced local DRAFT with no external listing ID; if an operator priced or published the draft after readiness was evaluated, the row is treated as stale and is not allowed to overwrite the newer state.
 
@@ -819,17 +819,21 @@ Supported modes:
 | Mode | Local listing price | Sync request |
 | --- | --- | --- |
 | `DRY_RUN` | No | No |
-| `APPLY_LOCAL_ONLY` | Yes; records applied timestamp | No |
-| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Yes; records applied timestamp | Yes |
+| `APPLY_LOCAL_ONLY` | Yes; decision `APPLIED` with `applied_at` | No |
+| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Only for a `DRAFT` with no lot; otherwise the sync worker sets it after BrickLink confirms | Yes; decision `ACCEPTED` |
 
 The sync type depends on local listing state:
 
 | Local listing state | Remote BrickLink ID | Apply result |
 | --- | --- | --- |
-| `ACTIVE` or other existing listing | Present | Update local price and upsert `PRICE_UPDATE` |
-| `DRAFT` with a current positive price | Absent | Update local price and create `LISTING_CREATE` |
+| `ACTIVE` or other existing listing | Present | Accept the decision and insert `PRICE_UPDATE`; the local price stays until BrickLink confirms it |
+| `DRAFT` with a current positive price | Absent | Update the draft price and create `LISTING_CREATE` |
 | `DRAFT` with `unitPrice=NULL` and initial readiness | Absent | Apply calculated initial price and create `LISTING_CREATE` |
-| No remote ID, not `DRAFT` | Absent | Apply local price, but skip remote sync and log the reason |
+| No remote ID, not `DRAFT` | Absent | Skip the row and log the reason; the local price is not changed |
+
+A listing with a `PENDING` or `CLAIMED` sync request is skipped until that request finishes, and apply never overwrites an existing sync request for the same decision. Each row's writes run in one transaction.
+
+Decision status: `PROPOSED` → `ACCEPTED` (apply queued the sync) → `APPLIED` (BrickLink confirmed the price, `applied_at` set). A blocked or failed sync leaves the decision `ACCEPTED` and the local price unchanged; the next crawl produces a new decision measured from the price BrickLink actually holds.
 
 This is the bridge that lets an unpriced local draft enter the Pricing Plane. The draft can be created without `unitPrice`; once the initial decision is ready and apply runs, the price is written locally and the create request is queued. Manual sync-request creation remains blocked while the draft reports `INITIAL_PRICE_PENDING`.
 
@@ -845,7 +849,13 @@ The worker handles two request types:
 4. Call BrickLink `updateInventory` with the requested price and the safety-preserved remote
    remarks. This path does not copy local marketplace description, title, private notes, or
    newly edited local human remarks.
-5. Save verification metadata and mark the request `SUCCEEDED`.
+5. Read the lot back. It must hold the requested price, this environment's stockroom (outside
+   PROD) and the system remarks block that was written. A mismatch blocks the request with
+   `REMOTE_PRICE_MISMATCH`, `REMOTE_STOCKROOM_MISMATCH`, `REMOTE_REMARKS_MISMATCH` or
+   `REMOTE_INVENTORY_MISSING`, and leaves the local price as it was.
+6. Only on a match, in one transaction: set `marketplace_listing.unit_price` and
+   `last_synchronized_at`, move the decision from `ACCEPTED` to `APPLIED` with `applied_at`, save
+   verification metadata and mark the request `SUCCEEDED` with `applied_local_at`.
 
 #### `LISTING_CREATE`
 
@@ -856,7 +866,10 @@ The worker handles two request types:
 5. Call BrickLink `createInventory`.
 6. Fetch the new remote inventory.
 7. Verify the returned inventory matches the local ownership contract.
-8. Only after verification, store the remote ID and make the local listing `ACTIVE`.
+8. Only after verification, in one transaction, make the local listing `ACTIVE`, move a pricing
+   decision on the request from `ACCEPTED` to `APPLIED`, and mark the request `SUCCEEDED`. (The
+   remote ID itself is saved as soon as `createInventory` returns, so a retry never creates a
+   second lot.)
 
 ## Part III — Every rule that can prevent a BrickLink sync
 
