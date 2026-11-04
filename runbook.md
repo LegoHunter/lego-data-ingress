@@ -886,6 +886,19 @@ System block format:
 
 Human remarks outside the system block are preserved. The sync worker parses only the text between the markers and ignores unknown keys. Missing, malformed, duplicated, or mismatched system blocks block non-prod remote writes.
 
+Local safety metadata on `bricklink_marketplace_listing` after a sync attempt:
+
+| Column | Safety check passed | Safety check blocked |
+| --- | --- | --- |
+| `last_remote_verified_at`, `last_remote_safety_status_code`, `last_remote_safety_message` | Set (`VERIFIED`) | Set (the block reason) |
+| `environment_code` | Set to the running environment | **Left unchanged.** A blocked lot was not verified as this environment's, so it is not marked as such. |
+| `system_remarks_hash` | Set to the hash of the remarks written | Cleared |
+| `remarks`, `is_stock_room`, `stock_room_id` (blocked create, before any BrickLink call) | Set from the create payload | Left unchanged, so the local draft keeps its own values |
+
+So `environment_code` names the environment that created the draft or last verified the lot, never one that only tried and was blocked. A read-back mismatch after a price update records the mismatch status and the observed stockroom only.
+
+Lower-environment data: listing and marketplace state (listings, sync requests, pricing tables) is never copied down from a higher environment. Seed SANDBOX or DEV through the API instead, so each lot is created in that environment's stockroom with its own system block. See `00-workspace/docs/architecture/system-overview.md`, "Data between environments".
+
 `bricklink_marketplace_listing.stock_room_id` is nullable in the current schema. Sandbox and dev require the configured stockroom through application guardrails, while production public inventory must be able to omit a stockroom id so BrickLink can make the listing buyer-visible.
 
 Settings:
