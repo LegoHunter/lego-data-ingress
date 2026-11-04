@@ -18,6 +18,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -27,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -144,18 +147,18 @@ class BricklinkPricingDecisionServiceTest {
         service.runOnce();
 
         PricingDecision decision = capturedDecision();
-        // lower price + 25% of the gap = 125.00, times the box/instructions average (1.3 + 1.2) / 2
+        // lower price + 25% of the gap = 125.00, times the grade average (1.10 sealed box + 1.05 mint instructions) / 2
         assertThat(decision.getReasonCode()).isEqualTo(BricklinkPricingDecisionService.REASON_TWO_COMPARABLES_WEIGHTED);
-        assertThat(decision.getComputedPrice()).isEqualByComparingTo("156.25");
-        assertThat(decision.getFinalPrice()).isEqualByComparingTo("156.25");
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("134.38");
+        assertThat(decision.getFinalPrice()).isEqualByComparingTo("134.38");
         assertThat(decision.getComparableCount()).isEqualTo(2);
         assertThat(decision.getConfidence()).isEqualByComparingTo("0.60");
     }
 
     @Test
-    void runOncePricesUsedCompleteAtTheBalancedTargetPercentile() {
+    void runOncePricesAUsedSetWithBoxAndInstructionsHighInTheMarket() {
         MarketplaceListing listing = listing(false, "130.00");
-        arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
+        arrangeListingWithSnapshot(listing, withPackaging(inventory("U", "C"), "E", "E"), snapshot("U", "C"));
         when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
                 .thenReturn(List.of(
                         comparable("BL-INV-20", "US", "100.00"),
@@ -166,16 +169,17 @@ class BricklinkPricingDecisionServiceTest {
         service.runOnce();
 
         PricingDecision decision = capturedDecision();
-        // 35th percentile of 100/120/140: position 0.7 between 100 and 120
+        // BALANCED with box and instructions targets the 65th percentile: position 1.3 between 120 and 140
         assertThat(decision.getReasonCode()).isEqualTo(BricklinkPricingDecisionService.REASON_MARKET_POSITION);
-        assertThat(decision.getComputedPrice()).isEqualByComparingTo("114.00");
-        assertThat(decision.getFinalPrice()).isEqualByComparingTo("114.00");
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("126.00");
+        assertThat(decision.getFinalPrice()).isEqualByComparingTo("126.00");
         assertThat(decision.getComparableCount()).isEqualTo(3);
         assertThat(decision.getConfidence()).isEqualByComparingTo("0.75");
         assertThat(decision.getAlgorithmVersion()).isEqualTo("bricklink-market-position-v2");
         assertThat(decision.getStrategyCode()).isEqualTo("BALANCED");
         assertThat(decision.getSourceSummaryJson())
-                .contains("\"targetPercentile\":0.35")
+                .contains("\"packaging\":\"BI\"")
+                .contains("\"targetPercentile\":0.65")
                 .contains("\"aggression\":\"BALANCED\"")
                 .contains("\"changeLimited\":false");
     }
@@ -268,9 +272,10 @@ class BricklinkPricingDecisionServiceTest {
 
         service.runOnce();
 
+        // no box or instructions: the 25th percentile, position 0.5 between 100 and 120
         PricingDecision decision = capturedDecision();
         assertThat(decision.getReasonCode()).isEqualTo(BricklinkPricingDecisionService.REASON_MARKET_POSITION);
-        assertThat(decision.getComputedPrice()).isEqualByComparingTo("114.00");
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("110.00");
         assertThat(decision.getComparableCount()).isEqualTo(3);
     }
 
@@ -284,9 +289,9 @@ class BricklinkPricingDecisionServiceTest {
 
         service.runOnce();
 
-        // QUICK targets the 20th percentile for used: position 0.4 between 100 and 120
+        // QUICK targets the 15th percentile for used with neither: position 0.3 between 100 and 120
         PricingDecision decision = capturedDecision();
-        assertThat(decision.getComputedPrice()).isEqualByComparingTo("108.00");
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("106.00");
         assertThat(decision.getStrategyCode()).isEqualTo("QUICK");
     }
 
@@ -314,10 +319,10 @@ class BricklinkPricingDecisionServiceTest {
 
         service.runOnce();
 
-        // the formula says 114.00, but one run may move at most 25% from 200.00
+        // the formula says 110.00, but one run may move at most 25% from 200.00
         PricingDecision decision = capturedDecision();
         assertThat(decision.getReasonCode()).isEqualTo(BricklinkPricingDecisionService.REASON_MARKET_POSITION);
-        assertThat(decision.getComputedPrice()).isEqualByComparingTo("114.00");
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("110.00");
         assertThat(decision.getFinalPrice()).isEqualByComparingTo("150.00");
         assertThat(decision.getSourceSummaryJson()).contains("\"changeLimited\":true");
     }
@@ -332,9 +337,9 @@ class BricklinkPricingDecisionServiceTest {
 
         service.runOnce();
 
-        // the formula says 228.00; 25% of 400.00 would allow 300.00, but the $50 limit stops at 350.00
+        // the formula says 220.00; 25% of 400.00 would allow 300.00, but the $50 limit stops at 350.00
         PricingDecision decision = capturedDecision();
-        assertThat(decision.getComputedPrice()).isEqualByComparingTo("228.00");
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("220.00");
         assertThat(decision.getFinalPrice()).isEqualByComparingTo("350.00");
     }
 
@@ -348,7 +353,7 @@ class BricklinkPricingDecisionServiceTest {
 
         service.runOnce();
 
-        assertThat(capturedDecision().getFinalPrice()).isEqualByComparingTo("114.00");
+        assertThat(capturedDecision().getFinalPrice()).isEqualByComparingTo("110.00");
     }
 
     @Test
@@ -368,7 +373,131 @@ class BricklinkPricingDecisionServiceTest {
         service.runOnce();
 
         assertThat(capturedDecision().getComputedPrice()).isEqualByComparingTo("125.00");
-        verify(conditionDao, never()).findConditionById(any());
+    }
+
+    @Test
+    void runOncePricesAUsedSetWithOnlyInstructionsInTheMiddleOfTheMarket() {
+        MarketplaceListing listing = listing(false, "130.00");
+        arrangeListingWithSnapshot(listing, withPackaging(inventory("U", "C"), "MS", "VG"), snapshot("U", "C"));
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
+
+        service.runOnce();
+
+        // instructions only: the 35th percentile (114.00), times the grade average (1.00 missing box + 0.98 VG) / 2
+        PricingDecision decision = capturedDecision();
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("112.86");
+        assertThat(decision.getSourceSummaryJson()).contains("\"packaging\":\"ONE\"");
+    }
+
+    @Test
+    void runOnceTreatsMissingAndNotApplicableAsNotHavingIt() {
+        MarketplaceListing listing = listing(false, "130.00");
+        arrangeListingWithSnapshot(listing, withPackaging(inventory("U", "C"), "NA", "MS"), snapshot("U", "C"));
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
+
+        service.runOnce();
+
+        PricingDecision decision = capturedDecision();
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("110.00");
+        assertThat(decision.getSourceSummaryJson()).contains("\"packaging\":\"NONE\"");
+    }
+
+    @Test
+    void runOnceLetsAPackagingSpecificTargetWinOverTheMarketTarget() {
+        properties.setTargetPercentiles(Map.of("U-C", new BigDecimal("0.50"), "U-C-BI", new BigDecimal("0.90")));
+        MarketplaceListing listing = listing(false, "130.00");
+        arrangeListingWithSnapshot(listing, withPackaging(inventory("U", "C"), "E", "E"), snapshot("U", "C"));
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
+
+        service.runOnce();
+
+        // 90th percentile: position 1.8 between 120 and 140
+        assertThat(capturedDecision().getComputedPrice()).isEqualByComparingTo("136.00");
+    }
+
+    @Test
+    void runOnceStepsTheListingDownEachWeekAfterTheGracePeriod() {
+        properties.getStepDown().setEnabled(true);
+        MarketplaceListing listing = publishedWeeksAgo(listing(false, "110.00"), 12);
+        arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
+
+        service.runOnce();
+
+        // market price 110.00; 12 weeks unsold, 8 free weeks, so 4 steps of 1%: 110.00 x 0.99^4
+        PricingDecision decision = capturedDecision();
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("105.67");
+        assertThat(decision.getReasonCode()).isEqualTo(BricklinkPricingDecisionService.REASON_MARKET_POSITION);
+        assertThat(decision.getSourceSummaryJson())
+                .contains("\"weeksUnsold\":12")
+                .contains("\"marketPrice\":110.00");
+    }
+
+    @Test
+    void runOnceDoesNotStepDownDuringTheGracePeriod() {
+        properties.getStepDown().setEnabled(true);
+        MarketplaceListing listing = publishedWeeksAgo(listing(false, "110.00"), 7);
+        arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
+
+        service.runOnce();
+
+        assertThat(capturedDecision().getComputedPrice()).isEqualByComparingTo("110.00");
+    }
+
+    @Test
+    void runOnceStopsTheStepDownAtTheFloorPercentileOfTheCompetition() {
+        properties.getStepDown().setEnabled(true);
+        MarketplaceListing listing = publishedWeeksAgo(listing(false, "110.00"), 60);
+        arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
+
+        service.runOnce();
+
+        // the 20% cap would allow 88.00, but the 10th percentile of the competition is 104.00
+        assertThat(capturedDecision().getComputedPrice()).isEqualByComparingTo("104.00");
+    }
+
+    @Test
+    void runOnceStopsTheStepDownAtTheMaximumTotalDiscount() {
+        properties.getStepDown().setEnabled(true);
+        properties.getStepDown().setFloorPercentile(null);
+        MarketplaceListing listing = publishedWeeksAgo(listing(false, "110.00"), 60);
+        arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
+
+        service.runOnce();
+
+        // 52 steps of 1% would be 41% off; the cap is 20% below the 110.00 market price
+        PricingDecision decision = capturedDecision();
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("88.00");
+        assertThat(decision.getSourceSummaryJson()).contains("\"stepDownPercent\":0.2000");
+    }
+
+    @Test
+    void runOnceNeverStepsDownWhenTheStepDownIsOffOrTheListingIsADraft() {
+        MarketplaceListing listing = publishedWeeksAgo(listing(false, "110.00"), 60);
+        arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
+
+        service.runOnce();
+        properties.getStepDown().setEnabled(true);
+        listing.setListingStatusCode("DRAFT");
+        service.runOnce();
+
+        ArgumentCaptor<PricingDecision> decisions = ArgumentCaptor.forClass(PricingDecision.class);
+        verify(pricingDecisionDao, times(2)).insert(decisions.capture());
+        assertThat(decisions.getAllValues()).extracting(PricingDecision::getComputedPrice)
+                .usingComparatorForType(BigDecimal::compareTo, BigDecimal.class)
+                .containsExactly(new BigDecimal("110.00"), new BigDecimal("110.00"));
     }
 
     @Test
@@ -431,6 +560,19 @@ class BricklinkPricingDecisionServiceTest {
         assertThat(decision.getDecisionStatusCode()).isEqualTo(BricklinkPricingDecisionService.STATUS_FAILED);
         assertThat(decision.getReasonCode()).isEqualTo(BricklinkPricingDecisionService.REASON_NO_CURRENT_COMPARABLES);
         assertThat(decision.getPricingSnapshotId()).isEqualTo(500L);
+    }
+
+    private ItemInventory withPackaging(ItemInventory inventory, String boxCode, String instructionsCode) {
+        inventory.setBoxConditionId(101);
+        inventory.setInstructionsConditionId(102);
+        when(conditionDao.findConditionById(101)).thenReturn(Optional.of(condition(boxCode)));
+        when(conditionDao.findConditionById(102)).thenReturn(Optional.of(condition(instructionsCode)));
+        return inventory;
+    }
+
+    private MarketplaceListing publishedWeeksAgo(MarketplaceListing listing, int weeks) {
+        listing.setPublishedAt(ZonedDateTime.now(ZoneOffset.UTC).minusDays(weeks * 7L + 3));
+        return listing;
     }
 
     private List<PricingSnapshotListing> threeUsedComparables(String low, String middle, String high) {

@@ -700,9 +700,9 @@ It reads the latest matching snapshot and then selects exact comparables matchin
 | `0`, snapshot has rows but none match exactly | `FAILED / NO_EXACT_COMPARABLES` |
 | `1` | `min(price - min(price * 0.03, 10), max(price - 1, 1))` (`SINGLE_COMPARABLE_DISCOUNTED`) |
 | `2` | `low + (high - low) * two-comparables-fraction`, default `0.25` (`TWO_COMPARABLES_WEIGHTED`) |
-| 3 or more | The market's target percentile of the comparable prices, set by the `aggression` preset or `target-percentiles` (`MARKET_POSITION`) |
+| 3 or more | The market's target percentile of the comparable prices, set by the `aggression` preset or `target-percentiles` (`MARKET_POSITION`). For used items, the target depends on the item's own box and instructions (BALANCED: 65th with both, 35th with one, 25th with neither) |
 
-The price then moves at most `maximum-change-per-run` (default 25%) from the listing's current price. Box and instructions condition adjustments multiply the calculated price by the average of the corresponding adjustment factors; missing or unknown condition IDs default to `1.0`.
+Small box and instructions grade factors (−15% to +10%) then apply to used items. An optional weekly step-down (`step-down.*`, off by default) lowers the price of an active listing that stays unsold. The price then moves at most `maximum-change-per-run` (default 25%) from the listing's current price.
 
 Instruction factors:
 

@@ -23,6 +23,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -55,28 +56,23 @@ public class BricklinkPricingDecisionService {
     static final String REASON_BELOW_MIN_PRICE_CLAMPED = "BELOW_MIN_PRICE_CLAMPED";
     static final String REASON_ABOVE_MAX_PRICE_CLAMPED = "ABOVE_MAX_PRICE_CLAMPED";
 
-    private static final Map<String, BigDecimal> INSTRUCTIONS_ADJUSTMENTS = Map.of(
-            "M", bd("1.2"),
-            "E", bd("1.0"),
-            "VG", bd("0.95"),
-            "G", bd("0.9"),
-            "F", bd("0.8"),
-            "P", bd("0.7"),
-            "CC", bd("0.5"),
-            "BW", bd("0.45"),
-            "MS", bd("0.4"),
-            "NA", bd("1.0")
-    );
-    private static final Map<String, BigDecimal> BOX_ADJUSTMENTS = Map.of(
-            "SL", bd("1.3"),
-            "M", bd("1.2"),
-            "E", bd("1.0"),
-            "VG", bd("0.95"),
-            "G", bd("0.9"),
-            "F", bd("0.85"),
-            "P", bd("0.70"),
-            "MS", bd("0.5"),
-            "NA", bd("1.0")
+    /** Box or instructions condition codes that mean the item does not have it. */
+    private static final Set<String> ABSENT_CODES = Set.of("MS", "NA");
+    /**
+     * Small condition-grade adjustments for a used item's box and instructions, applied on top of the packaging's
+     * target percentile. Having the box or instructions is rewarded by the higher target; a grade moves the price by
+     * at most -15% / +10%, far less than that premium. Missing or unknown items count as 1.0.
+     */
+    private static final Map<String, BigDecimal> GRADE_ADJUSTMENTS = Map.of(
+            "SL", bd("1.10"),
+            "M", bd("1.05"),
+            "E", bd("1.00"),
+            "VG", bd("0.98"),
+            "G", bd("0.95"),
+            "F", bd("0.90"),
+            "P", bd("0.85"),
+            "CC", bd("0.90"),
+            "BW", bd("0.85")
     );
 
     private final BricklinkPricingDecisionProperties properties;
@@ -186,20 +182,27 @@ public class BricklinkPricingDecisionService {
             );
         }
 
-        Calculation calculation = calculate(conditionCode, completenessCode, inventory.get(), exactComparables);
-        BigDecimal limitedPrice = limitChange(calculation.price(), listing.getUnitPrice());
+        ItemPackaging item = itemPackaging(conditionCode, inventory.get());
+        List<BigDecimal> prices = exactComparables.stream().map(PricingSnapshotListing::getUnitPrice).toList();
+        Calculation calculation = calculate(conditionCode, completenessCode, item, prices);
+        StepDown stepDown = stepDown(listing, calculation.price(), prices);
+        BigDecimal limitedPrice = limitChange(stepDown.price(), listing.getUnitPrice());
         PriceClamp clamp = clamp(limitedPrice);
         String reasonCode = clamp.reasonCode().orElse(calculation.reasonCode());
         Map<String, Object> details = new LinkedHashMap<>();
+        details.put("packaging", item.packaging() == null ? "" : item.packaging().name());
         details.put("targetPercentile", nullToEmpty(calculation.targetPercentile()));
         details.put("outliersDropped", outliersDropped);
-        details.put("changeLimited", limitedPrice.compareTo(calculation.price()) != 0);
+        details.put("marketPrice", money(calculation.price()));
+        details.put("weeksUnsold", nullToEmpty(stepDown.weeksUnsold()));
+        details.put("stepDownPercent", stepDown.percent());
+        details.put("changeLimited", limitedPrice.compareTo(stepDown.price()) != 0);
         return decision(
                 listing,
                 snapshot.get(),
                 STATUS_PROPOSED,
                 reasonCode,
-                calculation.price(),
+                stepDown.price(),
                 clamp.price(),
                 exactComparables.size(),
                 confidence(exactComparables.size()),
@@ -257,21 +260,63 @@ public class BricklinkPricingDecisionService {
 
     /**
      * Market-position formula. Comparables are this week's lots with the same condition and sub-condition,
-     * sorted by price. Three or more: the target percentile of their prices. Two: the lower price plus a share of
-     * the gap. One: just under it.
+     * sorted by price. Three or more: the target percentile of their prices, which for used items depends on the
+     * item's own box and instructions. Two: the lower price plus a share of the gap. One: just under it.
      */
-    private Calculation calculate(String conditionCode, String completenessCode, ItemInventory inventory, List<PricingSnapshotListing> comparables) {
-        List<BigDecimal> prices = comparables.stream().map(PricingSnapshotListing::getUnitPrice).toList();
+    private Calculation calculate(String conditionCode, String completenessCode, ItemPackaging item, List<BigDecimal> prices) {
         if (prices.size() > 2) {
-            BigDecimal target = properties.targetPercentile(conditionCode, completenessCode);
-            return new Calculation(adjustPrice(inventory, percentile(prices, target)), REASON_MARKET_POSITION, target);
+            BigDecimal target = properties.targetPercentile(conditionCode, completenessCode, item.packaging());
+            return new Calculation(adjustPrice(item, percentile(prices, target)), REASON_MARKET_POSITION, target);
         }
         if (prices.size() == 2) {
             BigDecimal low = prices.get(0);
             BigDecimal base = low.add(prices.get(1).subtract(low).multiply(properties.effectiveTwoComparablesFraction()));
-            return new Calculation(adjustPrice(inventory, base), REASON_TWO_COMPARABLES_WEIGHTED, null);
+            return new Calculation(adjustPrice(item, base), REASON_TWO_COMPARABLES_WEIGHTED, null);
         }
-        return new Calculation(adjustPrice(inventory, undercut(prices.getFirst())), REASON_SINGLE_COMPARABLE_DISCOUNTED, null);
+        return new Calculation(adjustPrice(item, undercut(prices.getFirst())), REASON_SINGLE_COMPARABLE_DISCOUNTED, null);
+    }
+
+    /**
+     * Weekly step-down for an active listing that has not sold: after {@code start-after-weeks} from publishing, the
+     * price falls by {@code weekly-percent} per further week, compounding, but never more than
+     * {@code maximum-total-percent} below the market price and never below the {@code floor-percentile} of the
+     * current competing lots. It is computed from the listing's age, so repeated runs never compound it.
+     */
+    private StepDown stepDown(MarketplaceListing listing, BigDecimal marketPrice, List<BigDecimal> prices) {
+        Long weeksUnsold = weeksUnsold(listing);
+        BigDecimal weekly = properties.effectiveStepDownWeeklyPercent();
+        if (!properties.isStepDownEnabled() || weeksUnsold == null || weekly == null) {
+            return new StepDown(marketPrice, weeksUnsold, BigDecimal.ZERO);
+        }
+        long steps = weeksUnsold - properties.effectiveStepDownStartAfterWeeks();
+        if (steps <= 0) {
+            return new StepDown(marketPrice, weeksUnsold, BigDecimal.ZERO);
+        }
+        BigDecimal factor = BigDecimal.ONE.subtract(weekly).max(BigDecimal.ZERO).pow((int) Math.min(steps, 520));
+        BigDecimal price = marketPrice.multiply(factor);
+        BigDecimal maximumTotal = properties.effectiveStepDownMaximumTotalPercent();
+        if (maximumTotal != null) {
+            price = price.max(marketPrice.multiply(BigDecimal.ONE.subtract(maximumTotal)));
+        }
+        BigDecimal floorPercentile = properties.effectiveStepDownFloorPercentile();
+        if (floorPercentile != null && prices.size() > 2) {
+            price = price.max(percentile(prices, floorPercentile).min(marketPrice));
+        }
+        BigDecimal percent = marketPrice.signum() > 0
+                ? BigDecimal.ONE.subtract(price.divide(marketPrice, 4, RoundingMode.HALF_UP))
+                : BigDecimal.ZERO;
+        return new StepDown(price, weeksUnsold, percent);
+    }
+
+    /** Whole weeks since an active listing was first published; null for drafts and unpublished listings. */
+    private Long weeksUnsold(MarketplaceListing listing) {
+        String status = clean(listing.getListingStatusCode());
+        if (listing.getPublishedAt() == null || status == null
+                || !properties.effectiveActiveListingStatusCode().equalsIgnoreCase(status)) {
+            return null;
+        }
+        long days = ChronoUnit.DAYS.between(listing.getPublishedAt(), now());
+        return Math.max(0, days / 7);
     }
 
     /** Linear interpolation between the two sorted prices around position {@code fraction * (n - 1)}. */
@@ -324,21 +369,27 @@ public class BricklinkPricingDecisionService {
         return price.max(currentPrice.subtract(maxStep)).min(currentPrice.add(maxStep));
     }
 
-    private BigDecimal adjustPrice(ItemInventory inventory, BigDecimal price) {
-        if (!properties.isBoxInstructionsAdjustmentEnabled()) {
+    private BigDecimal adjustPrice(ItemPackaging item, BigDecimal price) {
+        if (!properties.isBoxInstructionsAdjustmentEnabled() || item.packaging() == null) {
             return price;
         }
-        return price.multiply(priceAdjustment(inventory));
+        BigDecimal box = item.boxCode().map(code -> GRADE_ADJUSTMENTS.getOrDefault(code, BigDecimal.ONE)).orElse(BigDecimal.ONE);
+        BigDecimal instructions = item.instructionsCode().map(code -> GRADE_ADJUSTMENTS.getOrDefault(code, BigDecimal.ONE)).orElse(BigDecimal.ONE);
+        return price.multiply(box.add(instructions).divide(bd("2.0"), 8, RoundingMode.HALF_UP));
     }
 
-    private BigDecimal priceAdjustment(ItemInventory inventory) {
-        BigDecimal instructions = conditionCode(inventory.getInstructionsConditionId())
-                .map(code -> INSTRUCTIONS_ADJUSTMENTS.getOrDefault(code, BigDecimal.ONE))
-                .orElse(BigDecimal.ONE);
-        BigDecimal box = conditionCode(inventory.getBoxConditionId())
-                .map(code -> BOX_ADJUSTMENTS.getOrDefault(code, BigDecimal.ONE))
-                .orElse(BigDecimal.ONE);
-        return instructions.add(box).divide(bd("2.0"), 8, RoundingMode.HALF_UP);
+    /**
+     * What a used item comes with, from its own inventory: box and instructions, one of the two, or neither.
+     * Codes MS (missing) and NA (not applicable) count as not having it. New items get no packaging: sealed lots all
+     * have their box, and New/Complete has too little data to calibrate.
+     */
+    private ItemPackaging itemPackaging(String conditionCode, ItemInventory inventory) {
+        if (!"U".equals(conditionCode)) {
+            return new ItemPackaging(Optional.empty(), Optional.empty(), null);
+        }
+        Optional<String> box = conditionCode(inventory.getBoxConditionId()).filter(code -> !ABSENT_CODES.contains(code));
+        Optional<String> instructions = conditionCode(inventory.getInstructionsConditionId()).filter(code -> !ABSENT_CODES.contains(code));
+        return new ItemPackaging(box, instructions, BricklinkPricingDecisionProperties.Packaging.of(box.isPresent(), instructions.isPresent()));
     }
 
     private Optional<String> conditionCode(Integer conditionId) {
@@ -450,6 +501,16 @@ public class BricklinkPricingDecisionService {
     }
 
     private record Calculation(BigDecimal price, String reasonCode, BigDecimal targetPercentile) {
+    }
+
+    private record StepDown(BigDecimal price, Long weeksUnsold, BigDecimal percent) {
+    }
+
+    private record ItemPackaging(
+            Optional<String> boxCode,
+            Optional<String> instructionsCode,
+            BricklinkPricingDecisionProperties.Packaging packaging
+    ) {
     }
 
     private record PriceClamp(BigDecimal price, Optional<String> reasonCode) {

@@ -560,7 +560,7 @@ Schedule and selection settings:
 | `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value is at least `1` | Maximum pricing decision candidates selected per run after eligibility filtering. |
 | `lego.bricklink.pricing.decision.require-current-snapshot` | `false` | `true`, `false` | When true, non-fixed candidates must already have a matching pricing snapshot for their normalized condition/completeness before they are selected. Fixed-price listings remain eligible. |
 | `lego.bricklink.pricing.decision.priceable-listing-status-codes` | `ACTIVE,DRAFT` | Set of listing status codes | Listing statuses eligible for pricing decisions. This lets unpriced local drafts receive a Pricing Plane decision before any marketplace sync. If blank/empty, the legacy `active-listing-status-code` fallback is used. |
-| Formula levers | see below | | `aggression`, `target-percentiles`, `outlier-max-ratio-to-median`, `two-comparables-fraction`, `maximum-change-per-run`, `maximum-absolute-change-per-run`, `box-instructions-adjustment-enabled`. See "Pricing formula and its levers". |
+| Formula levers | see below | | `aggression`, `target-percentiles`, `outlier-max-ratio-to-median`, `two-comparables-fraction`, `maximum-change-per-run`, `maximum-absolute-change-per-run`, `box-instructions-adjustment-enabled`, `step-down.*`. See "Pricing formula and its levers". |
 | `lego.bricklink.pricing.decision.minimum-price` | null | Decimal money amount or null | Optional lower bound. If computed price is below this value, final price is clamped and reason is `BELOW_MIN_PRICE_CLAMPED`. |
 | `lego.bricklink.pricing.decision.maximum-price` | null | Decimal money amount or null | Optional upper bound. If computed price is above this value, final price is clamped and reason is `ABOVE_MAX_PRICE_CLAMPED`. |
 
@@ -599,45 +599,52 @@ Algorithm `bricklink-market-position-v2`. Every decision row stores it in `prici
 - Buyers buy the cheaper lots. Across 187 sales, the middle sale sat at the 12th percentile of the prices on offer.
 - The earlier formula priced used sets around the 86th percentile. That was above every used sale observed.
 - It priced sealed sets just under the cheapest US seller, below almost every sealed sale.
+- Used lots whose descriptions say they include a box and instructions ask about 1.26× the market median (around the 73rd percentile), and still leave the market as fast as the rest. Lots with neither ask about 0.89× (around the 31st). BrickLink has no structured box or instructions field, so the formula does **not** read competitors' descriptions at pricing time. Instead it uses **your own** item's box and instructions, from `item_inventory`, to choose a higher or lower target percentile in the whole market. The descriptions were used only once, offline, to calibrate those targets.
 
 **How a price is calculated.** Comparables are the lots in the latest snapshot with the same condition **and** sub-condition as the listing, excluding the owner's own lot. They are sorted by USD price.
 
 | Step | What happens |
 | --- | --- |
 | 1. Drop outliers | With 3 or more comparables, lots priced above `outlier-max-ratio-to-median` × the median are ignored. The number dropped is recorded as `outliersDropped` in `source_summary_json`. |
-| 2a. 3 or more comparables | Price = the **target percentile** of the comparable prices, with linear interpolation between neighbouring lots. Reason `MARKET_POSITION`. |
+| 2a. 3 or more comparables | Price = the **target percentile** of the comparable prices, with linear interpolation between neighbouring lots. For used items, the target depends on the item's own packaging: box and instructions (`BI`), one of the two (`ONE`), or neither (`NONE`). Box or instructions graded `MS` (missing) or `NA` (not applicable) count as not having it. Reason `MARKET_POSITION`. |
 | 2b. 2 comparables | Price = lower + (higher − lower) × `two-comparables-fraction`. Reason `TWO_COMPARABLES_WEIGHTED`. |
 | 2c. 1 comparable | Price = `min(price - min(price * 0.03, 10), max(price - 1, 1))`, just under the only competitor. Reason `SINGLE_COMPARABLE_DISCOUNTED`. |
 | 2d. 0 comparables | `FAILED` with `NO_CURRENT_COMPARABLES` or `NO_EXACT_COMPARABLES`; set a price by hand. |
-| 3. Box and instructions | When `box-instructions-adjustment-enabled`, the price is multiplied by the average of the box and instructions condition factors (table below). Missing or unknown conditions count as `1.0`. |
-| 4. Change limit | When the listing already has a price, the new price stays within ± `maximum-change-per-run` (and `maximum-absolute-change-per-run`, when set) of it. A large correction therefore happens over several runs. `changeLimited` in `source_summary_json` says whether the limit applied. `computed_price` keeps the unlimited formula price. |
+| 3. Box and instructions grade | Used items only, when `box-instructions-adjustment-enabled`: the price is multiplied by the average of the box and instructions grade factors (table below). The factors are small (−15% to +10%), because having the box or instructions is already rewarded by the higher target. Missing or unknown items count as `1.0`. This gives the **market price**, recorded as `marketPrice`. |
+| 3b. Weekly step-down | When `step-down.enabled`, for an `ACTIVE` listing published more than `step-down.start-after-weeks` ago: market price × (1 − `weekly-percent`) ^ (weeks unsold − `start-after-weeks`). It is never more than `maximum-total-percent` below the market price, and never below the `floor-percentile` of the competing lots (with 3 or more comparables). Weeks unsold count from `marketplace_listing.published_at`, so repeated runs never compound the discount. Recorded as `weeksUnsold` and `stepDownPercent`. Drafts and unpublished listings are never stepped down. |
+| 4. Change limit | When the listing already has a price, the new price stays within ± `maximum-change-per-run` (and `maximum-absolute-change-per-run`, when set) of it. A large correction therefore happens over several runs. `changeLimited` in `source_summary_json` says whether the limit applied. `computed_price` keeps the formula price after any step-down, but before the change limit. |
 | 5. Clamps | `minimum-price` and `maximum-price` apply last, with reasons `BELOW_MIN_PRICE_CLAMPED` and `ABOVE_MAX_PRICE_CLAMPED`. |
 | 6. Rounding | `computed_price` and `final_price` are rounded to two decimals. |
 
-**Target percentile.** The share of competing lots priced below yours: 0.20 means 20% of competitors are cheaper. Lower sells faster and higher earns more per sale. A market is `condition-completeness`: `U-C` is Used/Complete, `N-S` Sealed, `N-C` New/Complete, `U-X` Used/Incomplete.
+**Target percentile.** The share of competing lots priced below yours: 0.20 means 20% of competitors are cheaper. Lower sells faster and higher earns more per sale. A market is `condition-completeness`: `U-C` is Used/Complete, `N-S` Sealed, `N-C` New/Complete, `U-X` Used/Incomplete. Used markets can add your item's packaging: `U-C-BI`, `U-C-ONE`, `U-C-NONE`.
 
 **Levers** (`lego.bricklink.pricing.decision.*`; set them per environment in `application-<profile>.yml`):
 
 | Lever | Default | What it changes |
 | --- | --- | --- |
 | `aggression` | `BALANCED` | The preset that sets each market's target percentile (next table). `QUICK`, `BALANCED` or `PATIENT`, case-insensitive. |
-| `target-percentiles` | none | Per-market overrides of the preset, from `0` (cheapest) to `1` (most expensive). Values outside that range are capped. Quote and bracket the keys, e.g. `"[U-C]": 0.40`. |
+| `target-percentiles` | none | Overrides of the preset, from `0` (cheapest) to `1` (most expensive). Values outside that range are capped. Quote and bracket the keys. The most specific key wins: `"[U-C-BI]": 0.70` applies only to Used/Complete sets with box and instructions, and `"[U-C]": 0.40` applies to every Used/Complete set not covered by a more specific key. |
 | `outlier-max-ratio-to-median` | `3.0` | Ignore lots priced above this multiple of the median. `0` or empty keeps every lot. |
 | `two-comparables-fraction` | `0.25` | Where to price between two competitors: `0` matches the cheaper one, `1` the dearer one. |
 | `maximum-change-per-run` | `0.25` | Largest move from the current price in one decision run (0.25 = 25%). `0` or empty moves straight to the formula price. Keep it at or below apply-readiness `maximum-percent-delta`, otherwise readiness blocks the move instead of letting it happen in steps. |
 | `maximum-absolute-change-per-run` | none (local and SANDBOX: `50.00`) | The same limit as an amount in listing currency; the smaller of the two applies. Keep it at or below apply-readiness `maximum-absolute-delta`. |
-| `box-instructions-adjustment-enabled` | `true` | Turns the box and instructions condition multipliers on or off. |
+| `box-instructions-adjustment-enabled` | `true` | Turns the box and instructions grade factors on or off. Packaging still chooses the target percentile. |
+| `step-down.enabled` | `false` | Lower an unsold active listing's price each week. |
+| `step-down.start-after-weeks` | `8` | Weeks at full market price after publishing. |
+| `step-down.weekly-percent` | `0.01` | Discount per further week unsold, compounding. Apply readiness ignores changes under its `minimum-delta.percent` (2% in local and SANDBOX), so 1% steps take effect about every other week. Use `0.02` or more if every step should apply. |
+| `step-down.maximum-total-percent` | `0.20` | Never more than this far below the market price. |
+| `step-down.floor-percentile` | `0.10` | Never below this percentile of current competing lots. Empty disables the floor. |
 | `minimum-price` / `maximum-price` | none | Absolute floor and ceiling in listing currency. |
 
 **Presets.** The estimated share sold within 52 weeks comes from the HOMELAB-13 crawl and sold-record analysis; treat it as a guide, not a promise.
 
-| `aggression` | Intent | Used (`U-*`) | Sealed (`N-S`) | Other new (`N-C`, `N-X`) | Estimated share sold in 52 weeks (used / sealed) |
-| --- | --- | --- | --- | --- | --- |
-| `QUICK` | Sell within about 6 months | 0.20 | 0.10 | 0.10 | about 87% / 97% |
-| `BALANCED` | Sell within 12 months at the best price per sale | 0.35 | 0.20 | 0.20 | about 76% / 89% |
-| `PATIENT` | Hold out for price; 18–24 months acceptable | 0.50 | 0.30 | 0.30 | about 64% / 73% |
+| `aggression` | Intent | Used, box and instructions (`BI`) | Used, one of the two (`ONE`) | Used, neither (`NONE`) | Sealed (`N-S`) | Other new (`N-C`, `N-X`) |
+| --- | --- | --- | --- | --- | --- | --- |
+| `QUICK` | Sell within about 6 months | 0.55 | 0.20 | 0.15 | 0.10 | 0.10 |
+| `BALANCED` | Sell within 12 months at the best price per sale | 0.65 | 0.35 | 0.25 | 0.20 | 0.20 |
+| `PATIENT` | Hold out for price; 18–24 months acceptable | 0.75 | 0.45 | 0.35 | 0.30 | 0.30 |
 
-New/Complete markets had too few sales to calibrate, so they use the sealed value until more data exists.
+Each used value is the whole-market percentile where the preset's position among *similar* sellers lands. For example, under BALANCED the 35th percentile among box-and-instructions lots is about the 65th–70th percentile of the whole market. Estimated share sold within 52 weeks for the whole market: QUICK about 87% used / 97% sealed, BALANCED about 76% / 89%, PATIENT about 64% / 73%. These are a guide, not a promise. The box-and-instructions estimate is less certain, because the sold records do not say which sales had a box. New/Complete markets had too few sales to calibrate, so they use the sealed value until more data exists.
 
 Example: sell faster overall, but price Used/Complete a little higher than the preset, and move prices in smaller steps.
 
@@ -648,20 +655,37 @@ lego:
       decision:
         aggression: QUICK
         target-percentiles:
-          "[U-C]": 0.25
+          "[U-C-BI]": 0.60
         maximum-change-per-run: 0.15
 ```
 
+Example: try a higher price first, then lower it 2% a week after 6 weeks, to at most 25% off.
+
+```yaml
+lego:
+  bricklink:
+    pricing:
+      decision:
+        aggression: PATIENT
+        step-down:
+          enabled: true
+          start-after-weeks: 6
+          weekly-percent: 0.02
+          maximum-total-percent: 0.25
+```
+
 **Where to see why a price was chosen.** `pricing_decision.source_summary_json` records:
-- `aggression`, `targetPercentile`, `exactComparableCount` (after outliers are dropped), `outliersDropped`;
-- `lowestComparablePrice` and `highestComparablePrice`;
+- `aggression`, `packaging` (`BI`, `ONE`, `NONE`, or empty for new items), and `targetPercentile`;
+- `exactComparableCount` (after outliers are dropped) and `outliersDropped`;
+- `lowestComparablePrice`, `highestComparablePrice` and `marketPrice`;
+- `weeksUnsold` and `stepDownPercent`;
 - `changeLimited`, `baseReasonCode` and `finalReasonCode`.
 
-Box and instructions factors:
+Box and instructions grade factors (used items; the price is multiplied by the average of the box factor and the instructions factor):
 
 ```text
-Instructions: M 1.20, E 1.00, VG 0.95, G 0.90, F 0.80, P 0.70, CC 0.50, BW 0.45, MS 0.40, NA 1.00
-Box:          SL 1.30, M 1.20, E 1.00, VG 0.95, G 0.90, F 0.85, P 0.70, MS 0.50, NA 1.00
+SL 1.10, M 1.05, E 1.00, VG 0.98, G 0.95, F 0.90, P 0.85, CC 0.90 (colour copy), BW 0.85 (black-and-white copy)
+MS (missing), NA (not applicable), none recorded: 1.00, and the item counts as not having it
 ```
 
 Confidence by exact comparable count: 5 or more `0.90`, 3–4 `0.75`, 2 `0.60`, 1 `0.40`, 0 `0.00`.
@@ -1453,12 +1477,17 @@ Backed by `BricklinkPricingDecisionProperties`.
 | `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value at least `1` | Maximum pricing decision candidates selected per run after eligibility filtering. |
 | `lego.bricklink.pricing.decision.require-current-snapshot` | `false` | `true`, `false` | When true, non-fixed candidates must already have a matching `pricing_snapshot`; this suppresses `NO_CURRENT_SNAPSHOT` review rows and keeps batches focused on calculable or fixed-price listings. |
 | `lego.bricklink.pricing.decision.aggression` | `BALANCED` | `QUICK`, `BALANCED`, `PATIENT` | Preset that sets each market's target percentile. Stored on `pricing_decision.strategy_code`. |
-| `lego.bricklink.pricing.decision.target-percentiles` | empty | Map of `condition-completeness` to `0`..`1`, keys bracketed (`"[U-C]": 0.40`) | Per-market overrides of the preset. |
+| `lego.bricklink.pricing.decision.target-percentiles` | empty | Map of `condition-completeness[-packaging]` to `0`..`1`, keys bracketed (`"[U-C-BI]": 0.70`) | Overrides of the preset; the most specific key wins. |
 | `lego.bricklink.pricing.decision.outlier-max-ratio-to-median` | `3.0` | Decimal; `0` or empty disables | Ignore comparables priced above this multiple of the median. |
 | `lego.bricklink.pricing.decision.two-comparables-fraction` | `0.25` | `0`..`1` | Price position between exactly two comparables. |
 | `lego.bricklink.pricing.decision.maximum-change-per-run` | `0.25` | Fraction; `0` or empty disables | Largest move from the current price per decision run. |
 | `lego.bricklink.pricing.decision.maximum-absolute-change-per-run` | null | Money amount; `0` or empty disables | Largest move from the current price per decision run, as an amount. |
-| `lego.bricklink.pricing.decision.box-instructions-adjustment-enabled` | `true` | `true`, `false` | Apply the box and instructions condition multipliers. |
+| `lego.bricklink.pricing.decision.box-instructions-adjustment-enabled` | `true` | `true`, `false` | Apply the box and instructions grade factors to used items. |
+| `lego.bricklink.pricing.decision.step-down.enabled` | `false` | `true`, `false` | Lower an unsold active listing's price each week. |
+| `lego.bricklink.pricing.decision.step-down.start-after-weeks` | `8` | Integer >= 0 | Weeks at full market price after `published_at`. |
+| `lego.bricklink.pricing.decision.step-down.weekly-percent` | `0.01` | Fraction | Compounding discount per further week unsold. |
+| `lego.bricklink.pricing.decision.step-down.maximum-total-percent` | `0.20` | `0`..`1` | Largest total step-down below the market price. |
+| `lego.bricklink.pricing.decision.step-down.floor-percentile` | `0.10` | `0`..`1`; empty disables | Never step below this percentile of current competing lots. |
 | `lego.bricklink.pricing.decision.minimum-price` | null | Decimal money amount or null | Optional lower bound for computed decisions. Produces `BELOW_MIN_PRICE_CLAMPED` when applied. |
 | `lego.bricklink.pricing.decision.maximum-price` | null | Decimal money amount or null | Optional upper bound for computed decisions. Produces `ABOVE_MAX_PRICE_CLAMPED` when applied. |
 | `lego.bricklink.pricing.decision.scheduled.enabled` | `false` | `true`, `false` | Creates the scheduled job bean only when `lego.bricklink.pricing.decision.enabled=true` is also set. |
