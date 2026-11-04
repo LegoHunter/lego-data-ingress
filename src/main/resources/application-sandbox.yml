@@ -152,6 +152,20 @@ lego:
         initial-delay-ms: 300000
         lock-at-most-for: 10m
         lock-at-least-for: 0s
+    inventory-reconciliation:
+      enabled: true
+      scheduled:
+        enabled: true
+        fixed-delay-ms: 3600000
+        initial-delay-ms: 120000
+    # The lot audit reads the whole store, PROD lots included. Until PROD runs lego-data-ingress it
+    # runs here, always on; move it to PROD then, where a SANDBOX feature deploy cannot switch it off.
+    lot-audit:
+      enabled: true
+      scheduled:
+        enabled: true
+        fixed-delay-ms: 1800000
+        initial-delay-ms: 60000
   fulfillment:
     sync:
       scheduled:

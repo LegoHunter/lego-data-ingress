@@ -981,6 +981,61 @@ Report sections:
 
 Use this endpoint before considering any manual maintenance. If the report finds stale or duplicate rows, inspect the matching SQL checks first and prefer code-level idempotency fixes over ad hoc deletes.
 
+### `BricklinkInventoryReconciliationJob`
+
+Read-only comparison of the whole BrickLink store with the local listings (HOMELAB-18). One
+`getInventories` call per run; it never writes to BrickLink or the database.
+
+For every ACTIVE local BrickLink listing with a lot id it reports:
+
+| Drift type | Meaning |
+| --- | --- |
+| `MISSING_REMOTE_LOT` | The store no longer has the lot: usually sold, or deleted by hand. |
+| `PRICE_DRIFT` | The lot's price differs from `marketplace_listing.unit_price`. Not reported while the listing has a `PENDING`/`CLAIMED` sync request (price change in flight). |
+| `QUANTITY_DRIFT` | The lot's quantity differs from `last_remote_quantity` (1 when unset). |
+| `VISIBILITY_DRIFT` | Outside PROD: the lot is not in this environment's stockroom (SANDBOX C, DEV B). In PROD: the stockroom flag or id differs from what the listing recorded. |
+| `REMARKS_DRIFT` | The system remarks block is missing, or names another environment or listing. |
+| `UNTRACKED_REMOTE_LOT` | A lot whose block names this environment, but no ACTIVE local listing points at it. |
+
+Each drift is logged at WARN as `bricklink.inventory_reconciliation.drift`; each run logs
+`bricklink.inventory_reconciliation.completed`. A failed store read logs
+`bricklink.inventory_reconciliation.failed` at ERROR and leaves the metrics from the last good run.
+
+Settings (`lego.bricklink.inventory-reconciliation.*`): `enabled` (default `false`),
+`bricklink-external-service-id` (`2`), `scheduled.enabled` (`false`), `scheduled.fixed-delay-ms`
+(`3600000`), `scheduled.initial-delay-ms` (`120000`), `scheduled.lock-at-most-for` (`10m`),
+`scheduled.lock-at-least-for` (`0s`). SANDBOX runs it hourly.
+
+### `BricklinkLotAuditJob`
+
+Read-only audit that no lot owned by a lower environment can be seen by buyers or sits in the
+wrong stockroom (HOMELAB-18). It shares no code with the marketplace-sync guards it double-checks:
+it reads the whole store itself, finds `LEGOHUNTER_ENV=<code>` anywhere in the remarks (so a
+damaged system block still counts), and keeps its own copy of the stockroom rule, which a unit test
+checks against `LegoEnvironment`.
+
+| Violation | Meaning |
+| --- | --- |
+| `LOWER_ENV_LOT_PUBLIC` | A lot tagged for a non-PROD environment is not in any stockroom: buyers can see it. |
+| `LOWER_ENV_LOT_IN_PROD_STOCKROOM` | It is in stockroom A, which only PROD may use. |
+| `LOWER_ENV_LOT_IN_WRONG_STOCKROOM` | It is in another environment's stockroom (SANDBOX must be C, DEV must be B), or names an unknown environment. |
+
+Every violation is logged at ERROR as `bricklink.lot_audit.violation`. It never changes a lot:
+move the lot back by hand, then find out how it got there.
+
+Settings (`lego.bricklink.lot-audit.*`): `enabled` (default `false`), `scheduled.enabled`
+(`false`), `scheduled.fixed-delay-ms` (`1800000`), `scheduled.initial-delay-ms` (`60000`),
+`scheduled.lock-at-most-for` (`10m`), `scheduled.lock-at-least-for` (`0s`). It has its own switch,
+separate from marketplace sync and the Pricing Plane. Until PROD runs lego-data-ingress it runs in
+SANDBOX every 30 minutes; move it to PROD then, where a SANDBOX feature deploy cannot switch it off.
+
+Run either check now (read-only; also updates the metrics), or get 404 when it is not enabled:
+
+```shell
+curl -s -X POST https://lego-data-ingress.sandbox.internal.legohunter.io/internal/bricklink/inventory/reconciliation
+curl -s -X POST https://lego-data-ingress.sandbox.internal.legohunter.io/internal/bricklink/inventory/lot-audit
+```
+
 ### `ImageHostingScheduledSyncJob`
 
 Class: `io.legohunter.egress.imagehosting.ImageHostingScheduledSyncJob`
@@ -1830,6 +1885,25 @@ Healthy sandbox behavior:
 | Sync dry-run verified | In sandbox default dry-run mode, `dry_run_verified` can increase if pending sync requests exist, while `remote_updated` remains zero. |
 | Sync blocked | Nonzero means the safety contract prevented a remote write. Review `last_error_message` and `bricklink_marketplace_listing.last_remote_safety_*`. |
 | Sync failed | Nonzero means a transient or unexpected failure happened. Pending retry rows should have future `next_attempt_at`; terminal rows use status `FAILED`. |
+
+### BrickLink Inventory Reconciliation And Lot Audit Metrics
+
+Gauges hold the result of the last run that read the store; a failed read only increments the run
+counter, so a BrickLink outage never looks like "all clear". The Grafana dashboard
+`lego-server-configuration/grafana/grafana/dashboards/lego-data-ingress.json` shows them in the
+"Marketplace Reconciliation and Lot Audit" row.
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `bricklink_inventory_reconciliation_job_total` | `outcome` = `in_sync`, `drift_found`, `failed` | Reconciliation runs. |
+| `bricklink_inventory_reconciliation_job_duration_seconds` | `outcome` | Reconciliation run time. |
+| `bricklink_inventory_reconciliation_drift_current` | `type` = drift type, lower case | Drifts at the last run. |
+| `bricklink_inventory_reconciliation_lots_current` | `scope` = `remote_lots`, `owned_remote_lots`, `local_listings`, `matched_listings`, `in_flight_listings` | What the last run compared. |
+| `bricklink_inventory_reconciliation_last_success_timestamp_seconds` | | Epoch seconds of the last run that read the store. |
+| `bricklink_lot_audit_job_total` | `outcome` = `clean`, `violations_found`, `failed` | Audit runs. |
+| `bricklink_lot_audit_violations_current` | `type` = violation type, lower case | Violations at the last run. **Any value above 0 needs action.** |
+| `bricklink_lot_audit_lots_current` | `scope` = `lots_checked`, `lower_env_lots` | What the last audit read. |
+| `bricklink_lot_audit_last_success_timestamp_seconds` | | Epoch seconds of the last audit that read the store. |
 
 ### Fulfillment Sync Metrics
 
