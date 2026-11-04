@@ -7,6 +7,7 @@ import io.legohunter.data.dao.BricklinkMarketplaceListingDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
+import io.legohunter.data.dao.PricingDecisionDao;
 import io.legohunter.data.dto.BricklinkMarketplaceListing;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.MarketplaceListing;
@@ -16,8 +17,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -49,6 +52,8 @@ public class BricklinkMarketplaceSyncService {
     private final BricklinkRemoteInventorySafetyService safetyService;
     private final BricklinkListingCreateSafetyService listingCreateSafetyService;
     private final BricklinkListingCreateInventoryMapper listingCreateInventoryMapper;
+    private final PricingDecisionDao pricingDecisionDao;
+    private final TransactionOperations transactions;
 
     public BricklinkMarketplaceSyncResult runOnce() {
         long start = System.currentTimeMillis();
@@ -157,10 +162,127 @@ public class BricklinkMarketplaceSyncService {
         }
 
         updateRemoteInventory(context, request, safety);
-        updateSafetyMetadata(context.bricklinkListing(), safety, remoteInventory);
-        markSucceeded(request, safety);
-        counters.remoteVerified++;
         counters.remoteUpdated++;
+
+        // Remote first: read the lot back, and move the local price only to a price BrickLink holds.
+        Inventory confirmedInventory = data(bricklinkRestClient.getInventories(context.bricklinkInventoryId().longValue()));
+        ReadBackMismatch mismatch = priceUpdateReadBackMismatch(request, safety, confirmedInventory);
+        if (mismatch != null) {
+            counters.blocked++;
+            transactions.executeWithoutResult(status -> {
+                recordReadBackMismatch(context.bricklinkListing(), mismatch, confirmedInventory);
+                markBlocked(request, mismatch.statusCode(), mismatch.message());
+            });
+            log.error(
+                    "bricklink.marketplace_sync.read_back_mismatch marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} statusCode={} message={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    context.bricklinkInventoryId(),
+                    mismatch.statusCode(),
+                    mismatch.message()
+            );
+            return;
+        }
+
+        transactions.executeWithoutResult(status -> {
+            confirmLocalPrice(context, request);
+            updateSafetyMetadata(context.bricklinkListing(), safety, confirmedInventory);
+            markDecisionApplied(request);
+            request.setAppliedLocalAt(now());
+            markSucceeded(request, safety);
+        });
+        counters.remoteVerified++;
+        log.info(
+                "bricklink.marketplace_sync.price_confirmed marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} previousPrice={} confirmedPrice={}",
+                request.getMarketplaceListingSyncRequestId(),
+                request.getMarketplaceListingId(),
+                context.bricklinkInventoryId(),
+                price(request.getPreviousUnitPrice()),
+                price(request.getRequestedUnitPrice())
+        );
+    }
+
+    /**
+     * What the read-back after a price update must show: the requested price, this environment's
+     * stockroom outside PROD, and the system remarks block that was written. Null when it matches.
+     */
+    private ReadBackMismatch priceUpdateReadBackMismatch(
+            MarketplaceListingSyncRequest request,
+            BricklinkRemoteInventorySafetyResult safety,
+            Inventory confirmed
+    ) {
+        if (confirmed == null) {
+            return new ReadBackMismatch("REMOTE_INVENTORY_MISSING", "BrickLink returned no lot when read back after the price update");
+        }
+        BigDecimal requested = money(request.getRequestedUnitPrice());
+        BigDecimal actual = confirmed.getUnit_price() == null ? null : money(BigDecimal.valueOf(confirmed.getUnit_price()));
+        if (requested == null || !requested.equals(actual)) {
+            return new ReadBackMismatch("REMOTE_PRICE_MISMATCH", "BrickLink lot holds price " + actual + " after the update, not the requested " + requested);
+        }
+        if (properties.nonProdEnvironment()) {
+            String stockroom = properties.effectiveNonProdStockRoomId();
+            if (!Boolean.TRUE.equals(confirmed.getIs_stock_room()) || !stockroom.equalsIgnoreCase(trim(confirmed.getStock_room_id()))) {
+                return new ReadBackMismatch("REMOTE_STOCKROOM_MISMATCH",
+                        "BrickLink lot is not in stockroom " + stockroom + " after the update (is_stock_room="
+                                + confirmed.getIs_stock_room() + ", stock_room_id=" + confirmed.getStock_room_id() + ")");
+            }
+        }
+        if (safety.desiredRemarks() != null && !safety.desiredRemarks().trim().equals(trim(confirmed.getRemarks()))) {
+            return new ReadBackMismatch("REMOTE_REMARKS_MISMATCH", "BrickLink lot remarks differ from the system remarks block written by the update");
+        }
+        return null;
+    }
+
+    /**
+     * Records the mismatch on the BrickLink listing without touching the local price or the recorded
+     * remarks hash: what BrickLink holds is unknown, so the reconciliation job and a person decide.
+     */
+    private void recordReadBackMismatch(BricklinkMarketplaceListing bricklinkListing, ReadBackMismatch mismatch, Inventory confirmed) {
+        bricklinkListing.setLastRemoteVerifiedAt(now());
+        bricklinkListing.setLastRemoteSafetyStatusCode(mismatch.statusCode());
+        bricklinkListing.setLastRemoteSafetyMessage(mismatch.message());
+        if (confirmed != null) {
+            bricklinkListing.setIsStockRoom(confirmed.getIs_stock_room());
+            bricklinkListing.setStockRoomId(confirmed.getStock_room_id());
+        }
+        bricklinkMarketplaceListingDao.update(bricklinkListing);
+    }
+
+    private void confirmLocalPrice(SyncContext context, MarketplaceListingSyncRequest request) {
+        MarketplaceListing listing = context.listing();
+        listing.setUnitPrice(money(request.getRequestedUnitPrice()));
+        listing.setLastSynchronizedAt(now());
+        marketplaceListingDao.update(listing);
+    }
+
+    /**
+     * ACCEPTED to APPLIED once BrickLink holds the decision's price. Requests made outside the pricing
+     * plane carry no decision. A decision that is not ACCEPTED (for example one applied by the older
+     * local-first code) is left as it is.
+     */
+    private void markDecisionApplied(MarketplaceListingSyncRequest request) {
+        if (request.getPricingDecisionId() == null) {
+            return;
+        }
+        if (pricingDecisionDao.transitionStatus(
+                request.getPricingDecisionId(),
+                BricklinkPricingApplyService.STATUS_ACCEPTED,
+                BricklinkPricingApplyService.STATUS_APPLIED,
+                now()
+        ).isEmpty()) {
+            log.warn(
+                    "bricklink.marketplace_sync.decision_not_accepted marketplaceListingSyncRequestId={} pricingDecisionId={} message=pricing decision was not ACCEPTED, so it was not marked APPLIED",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getPricingDecisionId()
+            );
+        }
+    }
+
+    private BigDecimal money(BigDecimal value) {
+        return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private record ReadBackMismatch(String statusCode, String message) {
     }
 
     /**
@@ -303,8 +425,13 @@ public class BricklinkMarketplaceSyncService {
             );
             return;
         }
-        updateCreateSuccessLocalState(context, request, safety, verifiedRemoteInventory, remoteInventoryId);
-        markSucceeded(request, remoteSafety);
+        Long createdInventoryId = remoteInventoryId;
+        transactions.executeWithoutResult(status -> {
+            updateCreateSuccessLocalState(context, request, safety, verifiedRemoteInventory, createdInventoryId);
+            markDecisionApplied(request);
+            request.setAppliedLocalAt(request.getAppliedLocalAt() == null ? now() : request.getAppliedLocalAt());
+            markSucceeded(request, remoteSafety);
+        });
         counters.remoteVerified++;
         counters.remoteUpdated++;
         log.info(

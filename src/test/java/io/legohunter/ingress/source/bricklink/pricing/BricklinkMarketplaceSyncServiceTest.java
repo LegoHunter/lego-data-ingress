@@ -8,11 +8,13 @@ import io.legohunter.data.dao.BricklinkMarketplaceListingDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
+import io.legohunter.data.dao.PricingDecisionDao;
 import io.legohunter.data.dto.BricklinkMarketplaceListing;
 import io.legohunter.data.dto.ExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.MarketplaceListingSyncRequest;
+import io.legohunter.data.dto.PricingDecision;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -53,6 +55,8 @@ class BricklinkMarketplaceSyncServiceTest {
     private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao = mock(BricklinkMarketplaceListingDao.class);
     private final ItemInventoryDao itemInventoryDao = mock(ItemInventoryDao.class);
     private final BricklinkRestClient bricklinkRestClient = mock(BricklinkRestClient.class);
+    private final PricingDecisionDao pricingDecisionDao = mock(PricingDecisionDao.class);
+    private final CountingTransactions transactions = new CountingTransactions();
     private final BricklinkMarketplaceSyncService service = new BricklinkMarketplaceSyncService(
             properties,
             marketplaceListingSyncRequestDao,
@@ -62,7 +66,9 @@ class BricklinkMarketplaceSyncServiceTest {
             bricklinkRestClient,
             new BricklinkRemoteInventorySafetyService(),
             new BricklinkListingCreateSafetyService(),
-            new BricklinkListingCreateInventoryMapper()
+            new BricklinkListingCreateInventoryMapper(),
+            pricingDecisionDao,
+            transactions
     );
 
     @Test
@@ -81,44 +87,226 @@ class BricklinkMarketplaceSyncServiceTest {
     }
 
     @Test
-    void applyUpdatesRemoteInventoryAndCompletesRequestWhenSafetyPasses() {
-        properties.setMode("APPLY");
-        properties.setEnvironmentCode("sandbox");
-        MarketplaceListingSyncRequest request = request();
-        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
-        when(marketplaceListingSyncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
-                .thenReturn(Optional.of(claimedRequest()));
-        when(marketplaceListingSyncRequestDao.update(any(MarketplaceListingSyncRequest.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-        when(bricklinkMarketplaceListingDao.update(any(BricklinkMarketplaceListing.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+    void priceUpdateChangesTheLocalPriceOnlyAfterBricklinkConfirmsIt() {
+        applyPriceUpdateAsSandbox();
+        Inventory before = remoteInventory("Human notes " + systemBlock());
+        before.setUnit_price(225.00);
+        arrangeRequestAndContext(before);
+        arrangeReadBack(before, after -> { });
+        PricingDecision applied = PricingDecision.builder().pricingDecisionId(500L).decisionStatusCode("APPLIED").build();
+        when(pricingDecisionDao.transitionStatus(eq(500L), eq("ACCEPTED"), eq("APPLIED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(applied));
 
         BricklinkMarketplaceSyncResult result = service.runOnce();
 
         assertThat(result.mode()).isEqualTo(BricklinkMarketplaceSyncMode.APPLY);
         assertThat(result.requestsClaimed()).isOne();
         assertThat(result.remoteUpdated()).isOne();
-        verify(bricklinkRestClient).updateInventory(eq(12345L), any(Inventory.class));
-        verify(marketplaceListingSyncRequestDao).update(any(MarketplaceListingSyncRequest.class));
-        verify(bricklinkMarketplaceListingDao).update(any(BricklinkMarketplaceListing.class));
-        assertThat(request.getSyncRequestStatusCode()).isEqualTo("PENDING");
+        assertThat(result.remoteVerified()).isOne();
+        assertThat(result.blocked()).isZero();
+        assertThat(transactions.executions).isOne();
+
+        // BrickLink first, then the read-back, then the local price and the decision.
+        InOrder order = inOrder(bricklinkRestClient, marketplaceListingDao, pricingDecisionDao, marketplaceListingSyncRequestDao);
+        order.verify(bricklinkRestClient).updateInventory(eq(12345L), any(Inventory.class));
+        // The read-back: one read before the update (the safety check), one after it.
+        order.verify(bricklinkRestClient).getInventories(12345L);
+        ArgumentCaptor<MarketplaceListing> listingCaptor = ArgumentCaptor.forClass(MarketplaceListing.class);
+        order.verify(marketplaceListingDao).update(listingCaptor.capture());
+        order.verify(pricingDecisionDao).transitionStatus(eq(500L), eq("ACCEPTED"), eq("APPLIED"), any(ZonedDateTime.class));
+        assertThat(listingCaptor.getValue().getUnitPrice()).isEqualByComparingTo("219.00");
+        assertThat(listingCaptor.getValue().getLastSynchronizedAt()).isNotNull();
+
+        MarketplaceListingSyncRequest finished = lastRequestUpdate();
+        assertThat(finished.getSyncRequestStatusCode()).isEqualTo("SUCCEEDED");
+        assertThat(finished.getAppliedLocalAt()).isNotNull();
+        assertThat(finished.getCompletedAt()).isNotNull();
+        assertThat(lastBricklinkListingUpdate().getLastRemoteSafetyStatusCode()).isEqualTo("VERIFIED");
     }
 
     @Test
-    void applyBlocksRequestWhenSystemBlockIsMissing() {
-        properties.setMode("APPLY");
-        properties.setEnvironmentCode("sandbox");
+    void priceUpdateKeepsTheLocalPriceWhenTheReadBackShowsAnotherPrice() {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        arrangeReadBack(remoteInventory("Human notes " + systemBlock()), after -> after.setUnit_price(225.00));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertBlockedWithoutLocalChange(result, "REMOTE_PRICE_MISMATCH");
+        assertThat(lastRequestUpdate().getLastErrorMessage()).contains("225.00").contains("219.00");
+    }
+
+    @Test
+    void priceUpdateKeepsTheLocalPriceWhenTheLotLeftTheEnvironmentsStockroom() {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        arrangeReadBack(remoteInventory("Human notes " + systemBlock()), after -> {
+            after.setIs_stock_room(false);
+            after.setStock_room_id(null);
+        });
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertBlockedWithoutLocalChange(result, "REMOTE_STOCKROOM_MISMATCH");
+        assertThat(lastBricklinkListingUpdate().getIsStockRoom()).isFalse();
+    }
+
+    @Test
+    void priceUpdateKeepsTheLocalPriceWhenTheReadBackRemarksDiffer() {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        arrangeReadBack(remoteInventory("Human notes " + systemBlock()), after -> after.setRemarks("Edited by hand"));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertBlockedWithoutLocalChange(result, "REMOTE_REMARKS_MISMATCH");
+    }
+
+    @Test
+    void priceUpdateKeepsTheLocalPriceWhenTheReadBackReturnsNoLot() {
+        applyPriceUpdateAsSandbox();
+        Inventory before = remoteInventory("Human notes " + systemBlock());
+        arrangeRequestAndContext(before);
+        when(bricklinkRestClient.getInventories(12345L)).thenReturn(resource(before), resource(null));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertBlockedWithoutLocalChange(result, "REMOTE_INVENTORY_MISSING");
+    }
+
+    @Test
+    void priceUpdateThatFailsOnBricklinkIsRetriedAndLeavesTheLocalPriceAlone() {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class)))
+                .thenThrow(new IllegalStateException("BrickLink returned 500"));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.failed()).isOne();
+        assertThat(result.remoteVerified()).isZero();
+        MarketplaceListingSyncRequest retried = lastRequestUpdate();
+        assertThat(retried.getSyncRequestStatusCode()).isEqualTo("PENDING");
+        assertThat(retried.getLastErrorMessage()).contains("BrickLink returned 500");
+        verify(marketplaceListingDao, never()).update(any());
+        verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
+        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+    }
+
+    @Test
+    void priceUpdateIsBlockedBeforeAnyWriteWhenTheSystemBlockIsMissing() {
+        applyPriceUpdateAsSandbox();
         arrangeRequestAndContext(remoteInventory("Human notes only"));
-        when(marketplaceListingSyncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
-                .thenReturn(Optional.of(claimedRequest()));
-        when(marketplaceListingSyncRequestDao.update(any(MarketplaceListingSyncRequest.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         BricklinkMarketplaceSyncResult result = service.runOnce();
 
         assertThat(result.blocked()).isOne();
         verify(bricklinkRestClient, never()).updateInventory(any(), any());
-        verify(marketplaceListingSyncRequestDao).update(any(MarketplaceListingSyncRequest.class));
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        verify(marketplaceListingDao, never()).update(any());
+        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+    }
+
+    @Test
+    void priceUpdateStillSucceedsWhenTheDecisionWasNotAccepted() {
+        // A request queued by the older local-first code: its decision is PROPOSED with applied_at set.
+        applyPriceUpdateAsSandbox();
+        Inventory before = remoteInventory("Human notes " + systemBlock());
+        arrangeRequestAndContext(before);
+        arrangeReadBack(before, after -> { });
+        when(pricingDecisionDao.transitionStatus(eq(500L), eq("ACCEPTED"), eq("APPLIED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.empty());
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.remoteVerified()).isOne();
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("SUCCEEDED");
+        verify(marketplaceListingDao).update(any(MarketplaceListing.class));
+    }
+
+    @Test
+    void priceUpdateWithoutAPricingDecisionDoesNotTouchDecisions() {
+        applyPriceUpdateAsSandbox();
+        MarketplaceListingSyncRequest manual = request();
+        manual.setPricingDecisionId(null);
+        Inventory before = remoteInventory("Human notes " + systemBlock());
+        arrangeRequestAndContext(before);
+        when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
+                eq("PENDING"), eq(Set.of("PRICE_UPDATE", "LISTING_CREATE")), any(ZonedDateTime.class), eq(5)))
+                .thenReturn(Set.of(manual));
+        MarketplaceListingSyncRequest claimedManual = claimedRequest();
+        claimedManual.setPricingDecisionId(null);
+        when(marketplaceListingSyncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(claimedManual));
+        arrangeReadBack(before, after -> { });
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.remoteVerified()).isOne();
+        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+        verify(marketplaceListingDao).update(any(MarketplaceListing.class));
+    }
+
+    private void applyPriceUpdateAsSandbox() {
+        properties.setMode("APPLY");
+        properties.setEnvironmentCode("sandbox");
+        when(marketplaceListingSyncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(claimedRequest()));
+        when(marketplaceListingSyncRequestDao.update(any(MarketplaceListingSyncRequest.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(bricklinkMarketplaceListingDao.update(any(BricklinkMarketplaceListing.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(marketplaceListingDao.update(any(MarketplaceListing.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    /**
+     * The first read returns {@code before}. After {@code updateInventory}, reads return the lot as
+     * BrickLink would hold it with the update applied, changed further by {@code tamper}.
+     */
+    private void arrangeReadBack(Inventory before, java.util.function.Consumer<Inventory> tamper) {
+        Inventory[] written = new Inventory[1];
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class))).thenAnswer(invocation -> {
+            written[0] = invocation.getArgument(1);
+            return null;
+        });
+        when(bricklinkRestClient.getInventories(12345L)).thenAnswer(invocation -> {
+            if (written[0] == null) {
+                return resource(before);
+            }
+            Inventory after = remoteInventory(written[0].getRemarks() == null ? before.getRemarks() : written[0].getRemarks());
+            after.setUnit_price(written[0].getUnit_price());
+            after.setIs_stock_room(written[0].getIs_stock_room() == null ? before.getIs_stock_room() : written[0].getIs_stock_room());
+            after.setStock_room_id(written[0].getStock_room_id() == null ? before.getStock_room_id() : written[0].getStock_room_id());
+            tamper.accept(after);
+            return resource(after);
+        });
+    }
+
+    private void assertBlockedWithoutLocalChange(BricklinkMarketplaceSyncResult result, String statusCode) {
+        assertThat(result.blocked()).isOne();
+        assertThat(result.remoteVerified()).isZero();
+        verify(bricklinkRestClient).updateInventory(eq(12345L), any(Inventory.class));
+        MarketplaceListingSyncRequest blocked = lastRequestUpdate();
+        assertThat(blocked.getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        assertThat(blocked.getLastErrorMessage()).startsWith(statusCode);
+        assertThat(blocked.getAppliedLocalAt()).isNull();
+        assertThat(lastBricklinkListingUpdate().getLastRemoteSafetyStatusCode()).isEqualTo(statusCode);
+        verify(marketplaceListingDao, never()).update(any());
+        verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
+        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+    }
+
+    private MarketplaceListingSyncRequest lastRequestUpdate() {
+        ArgumentCaptor<MarketplaceListingSyncRequest> captor = ArgumentCaptor.forClass(MarketplaceListingSyncRequest.class);
+        verify(marketplaceListingSyncRequestDao, org.mockito.Mockito.atLeastOnce()).update(captor.capture());
+        return captor.getValue();
+    }
+
+    private BricklinkMarketplaceListing lastBricklinkListingUpdate() {
+        ArgumentCaptor<BricklinkMarketplaceListing> captor = ArgumentCaptor.forClass(BricklinkMarketplaceListing.class);
+        verify(bricklinkMarketplaceListingDao, org.mockito.Mockito.atLeastOnce()).update(captor.capture());
+        return captor.getValue();
     }
 
     @Test
