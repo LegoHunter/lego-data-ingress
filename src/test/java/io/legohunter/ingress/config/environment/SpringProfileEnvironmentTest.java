@@ -61,6 +61,24 @@ class SpringProfileEnvironmentTest {
     }
 
     @Test
+    void sandboxRunsTheInventoryReconciliationAndTheLotAuditOnASchedule() {
+        Properties sandbox = podConfiguration("sandbox");
+
+        assertThat(String.valueOf(sandbox.get("lego.bricklink.inventory-reconciliation.enabled"))).isEqualTo("true");
+        assertThat(String.valueOf(sandbox.get("lego.bricklink.inventory-reconciliation.scheduled.enabled"))).isEqualTo("true");
+        assertThat(String.valueOf(sandbox.get("lego.bricklink.lot-audit.enabled"))).isEqualTo("true");
+        assertThat(String.valueOf(sandbox.get("lego.bricklink.lot-audit.scheduled.enabled"))).isEqualTo("true");
+    }
+
+    @Test
+    void theInventoryChecksAreOffUnlessAProfileTurnsThemOn() {
+        Properties shared = load("application.yml");
+
+        assertThat(String.valueOf(shared.get("lego.bricklink.inventory-reconciliation.enabled"))).isEqualTo("false");
+        assertThat(String.valueOf(shared.get("lego.bricklink.lot-audit.enabled"))).isEqualTo("false");
+    }
+
+    @Test
     void sharedProfilesDoNotChooseADatabase() {
         for (String shared : new String[]{"application.yml", "application-kubernetes.yml"}) {
             assertThat(load(shared)).as(shared).doesNotContainKey("spring.datasource.database-key-name");

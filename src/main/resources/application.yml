@@ -116,6 +116,26 @@ lego:
         initial-delay-ms: 30000
         lock-at-most-for: 10m
         lock-at-least-for: 0s
+    # Read-only comparison of the BrickLink store with the local listings (drift report + metrics).
+    inventory-reconciliation:
+      enabled: false
+      bricklink-external-service-id: 2
+      scheduled:
+        enabled: false
+        fixed-delay-ms: 3600000
+        initial-delay-ms: 120000
+        lock-at-most-for: 10m
+        lock-at-least-for: 0s
+    # Read-only audit: no lower-environment lot may be public or outside its own stockroom. Has its
+    # own switch so turning marketplace sync or the Pricing Plane off does not turn it off.
+    lot-audit:
+      enabled: false
+      scheduled:
+        enabled: false
+        fixed-delay-ms: 1800000
+        initial-delay-ms: 60000
+        lock-at-most-for: 10m
+        lock-at-least-for: 0s
     orders:
       sync:
         marketplace-code: BRICKLINK
