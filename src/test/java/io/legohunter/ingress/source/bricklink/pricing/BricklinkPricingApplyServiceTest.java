@@ -332,7 +332,7 @@ class BricklinkPricingApplyServiceTest {
                 .marketplaceListingId(100)
                 .pricingDecisionId(500L)
                 .readinessStatusCode("READY_TO_APPLY")
-                .decisionReasonCode("MATCHED_LOWEST_COMPETITOR")
+                .decisionReasonCode("MARKET_POSITION")
                 .currentPrice(new BigDecimal("225.00"))
                 .proposedPrice(new BigDecimal("219.00"))
                 .currencyCode("USD")

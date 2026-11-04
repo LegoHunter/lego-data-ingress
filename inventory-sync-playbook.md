@@ -690,21 +690,19 @@ completeness: SEALED / S -> S, COMPLETE / C -> C, INCOMPLETE / I / X -> X
 
 It reads the latest matching snapshot and then selects exact comparables matching the target condition and completeness. The owned external listing is excluded when its external listing ID matches the comparable’s external listing ID.
 
-#### Competitive price algorithm
+#### Market-position price algorithm
 
-After exact matching and own-listing exclusion:
+`bricklink-market-position-v2`. The runbook section "Pricing formula and its levers" has the full description and every setting. After exact matching, own-listing exclusion, and dropping lots priced above `outlier-max-ratio-to-median` × the median:
 
 | Exact comparable count / case | Recommendation |
 | --- | --- |
 | `0`, snapshot itself has zero comparables | `FAILED / NO_CURRENT_COMPARABLES` |
 | `0`, snapshot has rows but none match exactly | `FAILED / NO_EXACT_COMPARABLES` |
-| `1` | `min(price - min(price * 0.03, 10), max(price - 1, 1))` |
-| `2` | `low + (high - low) * 0.75` |
-| More than 2, used | If highest / second-highest is greater than `3`, fail with `OUTLIER_SPREAD_TOO_HIGH`; otherwise use mean plus sample standard deviation |
-| More than 2, new, US rows exist | Use the lowest US comparable, then apply the one-comparable discount |
-| More than 2, new, no US rows | Use mean plus sample standard deviation |
+| `1` | `min(price - min(price * 0.03, 10), max(price - 1, 1))` (`SINGLE_COMPARABLE_DISCOUNTED`) |
+| `2` | `low + (high - low) * two-comparables-fraction`, default `0.25` (`TWO_COMPARABLES_WEIGHTED`) |
+| 3 or more | The market's target percentile of the comparable prices, set by the `aggression` preset or `target-percentiles` (`MARKET_POSITION`). For used items, the target depends on the item's own box and instructions (BALANCED: 65th with both, 35th with one, 25th with neither) |
 
-Box and instructions condition adjustments multiply the calculated price by the average of the corresponding legacy adjustment factors. Missing or unknown condition IDs default to `1.0`.
+Small box and instructions grade factors (−15% to +10%) then apply to used items. An optional weekly step-down (`step-down.*`, off by default) lowers the price of an active listing that stays unsold. The price then moves at most `maximum-change-per-run` (default 25%) from the listing's current price.
 
 Instruction factors:
 
@@ -743,10 +741,9 @@ Decision statuses:
 Important reason codes:
 
 ```text
+MARKET_POSITION
 SINGLE_COMPARABLE_DISCOUNTED
 TWO_COMPARABLES_WEIGHTED
-MEAN_PLUS_STDDEV
-MATCHED_LOWEST_COMPETITOR
 FIXED_PRICE_OVERRIDE
 NO_CURRENT_SNAPSHOT
 NO_CURRENT_COMPARABLES
@@ -754,7 +751,6 @@ NO_EXACT_COMPARABLES
 MISSING_INVENTORY
 MISSING_CONDITION
 MISSING_COMPLETENESS
-OUTLIER_SPREAD_TOO_HIGH
 BELOW_MIN_PRICE_CLAMPED
 ABOVE_MAX_PRICE_CLAMPED
 ```
@@ -1015,7 +1011,7 @@ The sandbox redeploy profile enables all four stages and uses these important va
 | Stage | Key settings |
 | --- | --- |
 | Crawl | enabled; batch `100`; worker batch `1`; cadence `7d`; spread `72h`; retry `6h`; stale claim `2h`; blackout 21:30–08:30 America/New_York on weekdays |
-| Decision | enabled; batch `100`; current snapshot required; `bricklink-competitive-v1`; `LEGACY_COMPETITIVE` |
+| Decision | enabled; batch `100`; current snapshot required; `bricklink-market-position-v2`; aggression `BALANCED` |
 | Apply-readiness | enabled; minimum delta `$0.01`; percentage guard `2%`; minimum confidence `.75`; minimum exact comparables `3`; maximum absolute delta `$50`; maximum percentage delta `50%` |
 | Apply | enabled; batch `25`; max sync attempts `3`; `APPLY_LOCAL_AND_ENQUEUE_SYNC` |
 | Marketplace sync | enabled; `APPLY`; batch `5`; retry backoff `6h`; `production=false`; system remarks required; stockroom `C`; remarks max `1024` |

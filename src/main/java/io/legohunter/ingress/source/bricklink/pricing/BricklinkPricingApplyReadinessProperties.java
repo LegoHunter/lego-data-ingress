@@ -29,10 +29,9 @@ public class BricklinkPricingApplyReadinessProperties {
     private BigDecimal maximumPercentDelta;
     private Set<String> blockedReasonCodes = new LinkedHashSet<>();
     private Set<String> applyEligibleReasonCodes = new LinkedHashSet<>(Set.of(
+            BricklinkPricingDecisionService.REASON_MARKET_POSITION,
             BricklinkPricingDecisionService.REASON_SINGLE_COMPARABLE_DISCOUNTED,
             BricklinkPricingDecisionService.REASON_TWO_COMPARABLES_WEIGHTED,
-            BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV,
-            BricklinkPricingDecisionService.REASON_MATCHED_LOWEST_COMPETITOR,
             BricklinkPricingDecisionService.REASON_BELOW_MIN_PRICE_CLAMPED,
             BricklinkPricingDecisionService.REASON_ABOVE_MAX_PRICE_CLAMPED
     ));

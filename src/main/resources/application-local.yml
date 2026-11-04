@@ -45,6 +45,7 @@ lego:
           - ACTIVE
           - DRAFT
         batch-size: 100
+        maximum-absolute-change-per-run: 50.00  # matches apply-readiness maximum-absolute-delta
         scheduled:
           enabled: true
           initial-delay-ms: 5000
@@ -63,7 +64,6 @@ lego:
         maximum-absolute-delta: 50.00
         maximum-percent-delta: 0.50
         blocked-reason-codes:
-          - OUTLIER_SPREAD_TOO_HIGH
           - NO_CURRENT_COMPARABLES
           - NO_EXACT_COMPARABLES
           - NO_CURRENT_SNAPSHOT

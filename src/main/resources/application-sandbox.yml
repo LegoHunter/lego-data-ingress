@@ -77,9 +77,8 @@ lego:
           - DRAFT
         active-listing-status-code: ACTIVE
         batch-size: 100
+        maximum-absolute-change-per-run: 50.00  # matches apply-readiness maximum-absolute-delta
         require-current-snapshot: true
-        algorithm-version: bricklink-competitive-v1
-        strategy-code: LEGACY_COMPETITIVE
         minimum-price:
         maximum-price:
         scheduled:
@@ -106,15 +105,13 @@ lego:
         maximum-absolute-delta: 50.00
         maximum-percent-delta: 0.50
         blocked-reason-codes:
-          - OUTLIER_SPREAD_TOO_HIGH
           - NO_CURRENT_COMPARABLES
           - NO_EXACT_COMPARABLES
           - NO_CURRENT_SNAPSHOT
         apply-eligible-reason-codes:
+          - MARKET_POSITION
           - SINGLE_COMPARABLE_DISCOUNTED
           - TWO_COMPARABLES_WEIGHTED
-          - MEAN_PLUS_STDDEV
-          - MATCHED_LOWEST_COMPETITOR
           - BELOW_MIN_PRICE_CLAMPED
           - ABOVE_MAX_PRICE_CLAMPED
         scheduled:

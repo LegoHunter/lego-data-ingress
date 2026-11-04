@@ -43,8 +43,20 @@ lego:
         active-listing-status-code: ACTIVE
         batch-size: 25
         require-current-snapshot: false
-        algorithm-version: bricklink-competitive-v1
-        strategy-code: LEGACY_COMPETITIVE
+        # Market-position formula. See the runbook section "Pricing formula and its levers".
+        aggression: BALANCED                 # QUICK | BALANCED | PATIENT
+        target-percentiles: {}               # overrides, e.g. "[U-C-BI]": 0.70 or "[N-S]": 0.25
+        outlier-max-ratio-to-median: 3.0
+        two-comparables-fraction: 0.25
+        maximum-change-per-run: 0.25
+        maximum-absolute-change-per-run:      # e.g. 50.00; keep <= apply-readiness maximum-absolute-delta
+        box-instructions-adjustment-enabled: true
+        step-down:                           # lower an unsold active listing's price weekly
+          enabled: false
+          start-after-weeks: 8                # full market price for the first 8 weeks
+          weekly-percent: 0.01                # then 1% lower per further week unsold
+          maximum-total-percent: 0.20         # never more than 20% below the market price
+          floor-percentile: 0.10              # never below the 10th percentile of competing lots
         minimum-price:
         maximum-price:
         scheduled:
@@ -72,10 +84,9 @@ lego:
         maximum-percent-delta:
         blocked-reason-codes: []
         apply-eligible-reason-codes:
+          - MARKET_POSITION
           - SINGLE_COMPARABLE_DISCOUNTED
           - TWO_COMPARABLES_WEIGHTED
-          - MEAN_PLUS_STDDEV
-          - MATCHED_LOWEST_COMPETITOR
           - BELOW_MIN_PRICE_CLAMPED
           - ABOVE_MAX_PRICE_CLAMPED
         scheduled:
