@@ -209,16 +209,14 @@ class BricklinkPricingCrawlServiceTest {
     }
 
     @Test
-    void runOncePersistsZeroComparableSnapshotWhenBricklinkReturnsEmptyCatalogArray() {
+    void runOncePersistsZeroComparableSnapshotWhenBricklinkHasNoLotsForSale() {
         ExternalCatalogItem catalogItem = catalogItem("4997");
         MarketplaceListing listing = listing(catalogItem);
         givenScheduledAndClaimed(listing);
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("USED", "COMPLETE")));
+        // bricklink-ajax turns BrickLink's "no lots" 400 into an empty result
         when(bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(4997, "U", 500))
-                .thenThrow(new BricklinkAjaxClientException(
-                        400,
-                        "GET https://www.bricklink.com/ajax/clone/catalogifs.ajax?itemid=4997&iconly=0&rpp=500&pi=1&cond=U returned [[]]"
-                ));
+                .thenReturn(new CatalogItemsForSaleResult());
 
         BricklinkPricingCrawlResult result = service.runOnce();
 
@@ -237,26 +235,40 @@ class BricklinkPricingCrawlServiceTest {
     }
 
     @Test
-    void runOncePersistsZeroComparableSnapshotWhenBricklinkReturnsEmptyArray() {
+    void runOnceRetriesWhenTheCrawlCallFailsEvenIfTheErrorTextLooksEmpty() {
         ExternalCatalogItem catalogItem = catalogItem("4997");
         MarketplaceListing listing = listing(catalogItem);
         givenScheduledAndClaimed(listing);
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("USED", "COMPLETE")));
         when(bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(4997, "U", 500))
                 .thenThrow(new BricklinkAjaxClientException(
-                        400,
+                        429,
                         "GET https://www.bricklink.com/ajax/clone/catalogifs.ajax?itemid=4997&iconly=0&rpp=500&pi=1&cond=U returned []"
                 ));
 
         BricklinkPricingCrawlResult result = service.runOnce();
 
-        assertThat(result.outcome()).isEqualTo("SUCCESS");
-        assertThat(result.failedListings()).isZero();
-        assertThat(result.snapshotsWritten()).isOne();
-        assertThat(result.zeroComparableSnapshotsWritten()).isOne();
-        assertThat(result.snapshotListingsWritten()).isZero();
-        verify(pricingSnapshotDao).insert(any(PricingSnapshot.class));
-        verify(pricingSnapshotListingDao, never()).insert(any());
+        assertThat(result.failedListings()).isOne();
+        verify(pricingSnapshotDao, never()).insert(any(PricingSnapshot.class));
+    }
+
+    @Test
+    void runOnceSkipsLotsWhosePriceCannotBeRead() {
+        ExternalCatalogItem catalogItem = catalogItem("4997");
+        MarketplaceListing listing = listing(catalogItem);
+        givenScheduledAndClaimed(listing);
+        when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("USED", "COMPLETE")));
+        CatalogItemsForSaleResult forSale = new CatalogItemsForSaleResult();
+        forSale.setList(new java.util.ArrayList<>(List.of(itemForSale(101, "seller-a", "US $20.00"), itemForSale(102, "seller-b", "about 20 dollars"))));
+        when(bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(4997, "U", 500)).thenReturn(forSale);
+
+        BricklinkPricingCrawlResult result = service.runOnce();
+
+        assertThat(result.snapshotListingsWritten()).isOne();
+        ArgumentCaptor<PricingSnapshotListing> listingCaptor = ArgumentCaptor.forClass(PricingSnapshotListing.class);
+        verify(pricingSnapshotListingDao).insert(listingCaptor.capture());
+        assertThat(listingCaptor.getValue().getExternalListingId()).isEqualTo("101");
+        assertThat(listingCaptor.getValue().getCurrencyCode()).isEqualTo("USD");
     }
 
     @Test

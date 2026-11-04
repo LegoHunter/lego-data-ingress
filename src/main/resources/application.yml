@@ -46,6 +46,8 @@ lego:
         # Market-position formula. See the runbook section "Pricing formula and its levers".
         aggression: BALANCED                 # QUICK | BALANCED | PATIENT
         target-percentiles: {}               # overrides, e.g. "[U-C-BI]": 0.70 or "[N-S]": 0.25
+        own-seller-names:                    # your BrickLink store username(s); their lots are never competitors
+          - tvattima
         outlier-max-ratio-to-median: 3.0
         two-comparables-fraction: 0.25
         maximum-change-per-run: 0.25

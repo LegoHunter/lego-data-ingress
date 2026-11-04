@@ -158,8 +158,10 @@ public class BricklinkPricingDecisionService {
 
         List<PricingSnapshotListing> candidates = pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(snapshot.get().getPricingSnapshotId())
                 .stream()
-                .filter(comparable -> comparable.getUnitPrice() != null)
+                .filter(comparable -> comparable.getUnitPrice() != null && comparable.getUnitPrice().signum() > 0)
+                .filter(comparable -> currencyCode(listing).equalsIgnoreCase(clean(comparable.getCurrencyCode()) == null ? "" : comparable.getCurrencyCode().trim()))
                 .filter(comparable -> !isOwnListing(listing, comparable))
+                .filter(comparable -> !properties.isOwnSeller(comparable.getSellerName()))
                 .sorted(Comparator.comparing(PricingSnapshotListing::getUnitPrice))
                 .toList();
         List<PricingSnapshotListing> exactComparables = withoutOutliers(candidates);

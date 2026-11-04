@@ -501,6 +501,52 @@ class BricklinkPricingDecisionServiceTest {
     }
 
     @Test
+    void runOnceNeverPricesAgainstYourOwnStoresOtherLots() {
+        properties.setOwnSellerNames(Set.of("My-Store"));
+        MarketplaceListing listing = listing(false, "130.00");
+        arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
+        PricingSnapshotListing ownOtherLot = comparable("BL-INV-99", "US", "60.00");
+        ownOtherLot.setSellerName("my-store");
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(List.of(
+                        ownOtherLot,
+                        comparable("BL-INV-20", "US", "100.00"),
+                        comparable("BL-INV-30", "US", "120.00"),
+                        comparable("BL-INV-40", "US", "140.00")
+                ));
+
+        service.runOnce();
+
+        // your own 60.00 lot is ignored: the 25th percentile of 100/120/140
+        PricingDecision decision = capturedDecision();
+        assertThat(decision.getComparableCount()).isEqualTo(3);
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("110.00");
+    }
+
+    @Test
+    void runOnceIgnoresComparablesWithoutAPositivePriceInTheListingsCurrency() {
+        MarketplaceListing listing = listing(false, "130.00");
+        arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
+        PricingSnapshotListing zeroPrice = comparable("BL-INV-50", "US", "0.00");
+        PricingSnapshotListing euroPrice = comparable("BL-INV-60", "DE", "20.00");
+        euroPrice.setCurrencyCode("EUR");
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(List.of(
+                        zeroPrice,
+                        euroPrice,
+                        comparable("BL-INV-20", "US", "100.00"),
+                        comparable("BL-INV-30", "US", "120.00"),
+                        comparable("BL-INV-40", "US", "140.00")
+                ));
+
+        service.runOnce();
+
+        PricingDecision decision = capturedDecision();
+        assertThat(decision.getComparableCount()).isEqualTo(3);
+        assertThat(decision.getComputedPrice()).isEqualByComparingTo("110.00");
+    }
+
+    @Test
     void percentileInterpolatesBetweenTheSortedPrices() {
         List<BigDecimal> prices = List.of(new BigDecimal("10"), new BigDecimal("20"), new BigDecimal("30"), new BigDecimal("40"), new BigDecimal("50"));
 

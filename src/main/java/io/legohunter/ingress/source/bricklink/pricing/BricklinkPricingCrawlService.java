@@ -270,51 +270,12 @@ public class BricklinkPricingCrawlService {
                     properties.effectiveResultsPerPage()
             );
             persistPricingSnapshot(listing, catalogItem, inventory, workItem, requestedCondition, itemId, requestParameters, result, counters);
-        } catch (BricklinkAjaxClientException e) {
-            if (isEmptyCatalogItemsForSaleResponse(e)) {
-                try {
-                    persistPricingSnapshot(
-                            listing,
-                            catalogItem,
-                            inventory,
-                            workItem,
-                            requestedCondition,
-                            itemId,
-                            requestParameters,
-                            new CatalogItemsForSaleResult(),
-                            counters
-                    );
-                } catch (JsonProcessingException jsonException) {
-                    completeWorkItem(workItem, STATUS_FAILED_PRICING_PARSE_ERROR, jsonException.getMessage());
-                    counters.failedListings++;
-                }
-                return;
-            }
-            retryOrFail(workItem, STATUS_FAILED_PRICING_HTTP_ERROR, e.getMessage());
-            counters.failedListings++;
         } catch (JsonProcessingException e) {
             completeWorkItem(workItem, STATUS_FAILED_PRICING_PARSE_ERROR, e.getMessage());
             counters.failedListings++;
         } catch (RuntimeException e) {
-            if (isEmptyCatalogItemsForSaleResponse(e)) {
-                try {
-                    persistPricingSnapshot(
-                            listing,
-                            catalogItem,
-                            inventory,
-                            workItem,
-                            requestedCondition,
-                            itemId,
-                            requestParameters,
-                            new CatalogItemsForSaleResult(),
-                            counters
-                    );
-                } catch (JsonProcessingException jsonException) {
-                    completeWorkItem(workItem, STATUS_FAILED_PRICING_PARSE_ERROR, jsonException.getMessage());
-                    counters.failedListings++;
-                }
-                return;
-            }
+            // bricklink-ajax returns an empty result when BrickLink has no lots for sale, so any exception here is a
+            // real failure.
             retryOrFail(workItem, STATUS_FAILED_PRICING_HTTP_ERROR, e.getMessage());
             counters.failedListings++;
         }
@@ -353,18 +314,20 @@ public class BricklinkPricingCrawlService {
         }
 
         for (ItemForSale itemForSale : result.getList()) {
+            if (itemForSale.getDisplayCurrencyCode() == null || itemForSale.getSalePrice() == null || itemForSale.getSalePrice() <= 0) {
+                log.warn(
+                        "bricklink.pricing.crawl.unparseable_price pricingSnapshotId={} externalListingId={} displayPrice={}",
+                        snapshot.getPricingSnapshotId(),
+                        itemForSale.getIdInv(),
+                        itemForSale.getMDisplaySalePrice()
+                );
+                continue;
+            }
             pricingSnapshotListingDao.insert(snapshotListing(snapshot, itemForSale));
             counters.snapshotListingsWritten++;
         }
 
         completeWorkItem(workItem, STATUS_SUCCEEDED, null);
-    }
-
-    private boolean isEmptyCatalogItemsForSaleResponse(RuntimeException e) {
-        String message = e.getMessage();
-        return message != null
-                && message.contains(CATALOG_ITEMS_FOR_SALE_PATH)
-                && (message.contains("returned []") || message.contains("returned [[]]"));
     }
 
     private PricingSnapshotListing snapshotListing(PricingSnapshot snapshot, ItemForSale itemForSale) throws JsonProcessingException {
@@ -377,7 +340,7 @@ public class BricklinkPricingCrawlService {
                 .completenessCode(itemForSale.getCodeComplete())
                 .quantityAvailable(itemForSale.getN4Qty())
                 .unitPrice(BigDecimal.valueOf(itemForSale.getSalePrice()))
-                .currencyCode(currencyCode(itemForSale.getMDisplaySalePrice()))
+                .currencyCode(itemForSale.getDisplayCurrencyCode())
                 .description(itemForSale.getStrDesc())
                 .extendedDescription(null)
                 .sourceListingPayload(objectMapper.writeValueAsString(itemForSale))
@@ -502,17 +465,6 @@ public class BricklinkPricingCrawlService {
         } catch (NumberFormatException e) {
             return Optional.empty();
         }
-    }
-
-    private String currencyCode(String displayPrice) {
-        if (displayPrice == null || displayPrice.isBlank()) {
-            return null;
-        }
-        String normalized = displayPrice.trim().toUpperCase();
-        if (normalized.startsWith("US ")) {
-            return "USD";
-        }
-        return normalized.substring(0, Math.min(3, normalized.length())).replaceAll("[^A-Z]", "");
     }
 
     private String writeJson(Object value) {
