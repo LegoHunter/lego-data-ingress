@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -36,6 +37,11 @@ public class BricklinkPricingDecisionProperties {
      * {@code U-C-NONE} (neither). The most specific key wins.
      */
     private Map<String, BigDecimal> targetPercentiles = new LinkedHashMap<>();
+    /**
+     * BrickLink seller usernames of your own store(s). Their lots are never counted as competitors, so a listing is
+     * never priced against your own other lots. Matched case-insensitively against the comparable's seller name.
+     */
+    private Set<String> ownSellerNames = new LinkedHashSet<>();
     /** Comparables priced above this multiple of the median are ignored. Null or 0 keeps every comparable. */
     private BigDecimal outlierMaxRatioToMedian = new BigDecimal("3.0");
     /** With exactly two comparables, price at the lower one plus this share of the gap (0 to 1). */
@@ -107,6 +113,14 @@ public class BricklinkPricingDecisionProperties {
             }
         }
         return null;
+    }
+
+    public boolean isOwnSeller(String sellerName) {
+        if (sellerName == null || sellerName.isBlank() || ownSellerNames == null) {
+            return false;
+        }
+        String name = sellerName.trim();
+        return ownSellerNames.stream().anyMatch(own -> own != null && own.trim().equalsIgnoreCase(name));
     }
 
     public BigDecimal effectiveOutlierMaxRatioToMedian() {

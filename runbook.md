@@ -601,7 +601,7 @@ Algorithm `bricklink-market-position-v2`. Every decision row stores it in `prici
 - It priced sealed sets just under the cheapest US seller, below almost every sealed sale.
 - Used lots whose descriptions say they include a box and instructions ask about 1.26× the market median (around the 73rd percentile), and still leave the market as fast as the rest. Lots with neither ask about 0.89× (around the 31st). BrickLink has no structured box or instructions field, so the formula does **not** read competitors' descriptions at pricing time. Instead it uses **your own** item's box and instructions, from `item_inventory`, to choose a higher or lower target percentile in the whole market. The descriptions were used only once, offline, to calibrate those targets.
 
-**How a price is calculated.** Comparables are the lots in the latest snapshot with the same condition **and** sub-condition as the listing, excluding the owner's own lot. They are sorted by USD price.
+**How a price is calculated.** Comparables are the lots in the latest snapshot with the same condition **and** sub-condition as the listing, sorted by price. Excluded: the lot being priced, any lot whose seller is in `own-seller-names` (your own store), and any lot without a positive price in the listing's currency.
 
 | Step | What happens |
 | --- | --- |
@@ -624,6 +624,7 @@ Algorithm `bricklink-market-position-v2`. Every decision row stores it in `prici
 | --- | --- | --- |
 | `aggression` | `BALANCED` | The preset that sets each market's target percentile (next table). `QUICK`, `BALANCED` or `PATIENT`, case-insensitive. |
 | `target-percentiles` | none | Overrides of the preset, from `0` (cheapest) to `1` (most expensive). Values outside that range are capped. Quote and bracket the keys. The most specific key wins: `"[U-C-BI]": 0.70` applies only to Used/Complete sets with box and instructions, and `"[U-C]": 0.40` applies to every Used/Complete set not covered by a more specific key. |
+| `own-seller-names` | none | Your BrickLink store username(s), matched case-insensitively. Their lots are never counted as competitors, so a listing is never priced against your own other lots. Set it in every environment that prices listings. |
 | `outlier-max-ratio-to-median` | `3.0` | Ignore lots priced above this multiple of the median. `0` or empty keeps every lot. |
 | `two-comparables-fraction` | `0.25` | Where to price between two competitors: `0` matches the cheaper one, `1` the dearer one. |
 | `maximum-change-per-run` | `0.25` | Largest move from the current price in one decision run (0.25 = 25%). `0` or empty moves straight to the formula price. Keep it at or below apply-readiness `maximum-percent-delta`, otherwise readiness blocks the move instead of letting it happen in steps. |
@@ -1478,6 +1479,7 @@ Backed by `BricklinkPricingDecisionProperties`.
 | `lego.bricklink.pricing.decision.require-current-snapshot` | `false` | `true`, `false` | When true, non-fixed candidates must already have a matching `pricing_snapshot`; this suppresses `NO_CURRENT_SNAPSHOT` review rows and keeps batches focused on calculable or fixed-price listings. |
 | `lego.bricklink.pricing.decision.aggression` | `BALANCED` | `QUICK`, `BALANCED`, `PATIENT` | Preset that sets each market's target percentile. Stored on `pricing_decision.strategy_code`. |
 | `lego.bricklink.pricing.decision.target-percentiles` | empty | Map of `condition-completeness[-packaging]` to `0`..`1`, keys bracketed (`"[U-C-BI]": 0.70`) | Overrides of the preset; the most specific key wins. |
+| `lego.bricklink.pricing.decision.own-seller-names` | empty | Set of BrickLink usernames | Comparables sold by these sellers (your own store) are ignored. |
 | `lego.bricklink.pricing.decision.outlier-max-ratio-to-median` | `3.0` | Decimal; `0` or empty disables | Ignore comparables priced above this multiple of the median. |
 | `lego.bricklink.pricing.decision.two-comparables-fraction` | `0.25` | `0`..`1` | Price position between exactly two comparables. |
 | `lego.bricklink.pricing.decision.maximum-change-per-run` | `0.25` | Fraction; `0` or empty disables | Largest move from the current price per decision run. |
@@ -3184,7 +3186,8 @@ order by ai.sort_order;
 | Pricing crawl writes many `SKIPPED_MISSING_CONDITION` work items | `item_inventory.new_or_used` is null or not `N`/`NEW`/`U`/`USED` | Fix inventory condition data before crawling that listing. |
 | Pricing crawl writes `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | BrickLink `searchproduct.ajax` could not match `external_catalog_item.external_item_key` for the selected item type | Verify `external_catalog_item.external_item_key`, `external_catalog_item.item_type_code`, and the configured fallback `catalog-item-type` for rows missing an item type. |
 | Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. This can be valid sparse-market behavior. |
-| Pricing crawl sees `catalogifs.ajax ... returned []` | BrickLink returned an empty AJAX array for the pricing request | The crawler treats this as a successful zero-comparable snapshot instead of an HTTP failure. Review `zeroComparableSnapshotsWritten` and latest `pricing_snapshot.comparable_count=0` rows. |
+| Pricing crawl sees `catalogifs.ajax ... returned []` as an HTTP failure | BrickLink answers "no lots for sale" with an HTTP 4xx whose body is empty or `[]` | `bricklink-ajax` (2.0.0-SNAPSHOT from HOMELAB-25 on) returns an empty result for that answer, so the crawler writes a successful zero-comparable snapshot. A `FAILED_PRICING_HTTP_ERROR` with that text means an older `bricklink-ajax` is on the classpath, or the status was 429 or 5xx (never treated as "no lots"). Review `zeroComparableSnapshotsWritten` and the latest `pricing_snapshot.comparable_count=0` rows. |
+| Log `bricklink.pricing.crawl.unparseable_price` | A competitor lot's display price wasn't in a known BrickLink format (`US $1.00`, `AU $1.00`, `EUR 1.00`) or was not positive | The lot is skipped; the rest of the snapshot is written. Check the logged `displayPrice`. |
 | Pricing crawl returns New/Complete rows for a New/Sealed inventory item | BrickLink pricing AJAX filters by condition only, not completeness | This is expected. Phase 3 pricing should query exact comparables by matching snapshot/listing condition and completeness. |
 | Pricing decision job does not start | `lego.bricklink.pricing.decision.enabled=false` or `lego.bricklink.pricing.decision.scheduled.enabled=false` | Set both properties true for scheduled runs. |
 | Pricing decision job reports `NO_WORK` even though active BrickLink listings exist | No active listings currently meet decision-candidate eligibility | Check for missing `external_catalog_item_id`, missing inventory condition/completeness, or non-fixed legacy listings excluded by the candidate query. |

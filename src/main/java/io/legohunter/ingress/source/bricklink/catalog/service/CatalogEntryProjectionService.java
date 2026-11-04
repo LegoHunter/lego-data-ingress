@@ -1,5 +1,6 @@
 package io.legohunter.ingress.source.bricklink.catalog.service;
 
+import io.legohunter.ingress.common.ExternalServiceIds;
 import io.legohunter.data.dao.ExternalCatalogItemDao;
 import io.legohunter.data.dto.ExternalCatalogItem;
 import io.legohunter.ingress.source.bricklink.catalog.model.CatalogEntry;
@@ -10,13 +11,12 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class CatalogEntryProjectionService {
 
-    private static final int BRICKLINK_SERVICE_ID = 2;
 
     private final ExternalCatalogItemDao externalCatalogItemDao;
 
     public void upsert(CatalogEntry entry) {
         ExternalCatalogItem externalCatalogItem = ExternalCatalogItem.builder()
-                .externalServiceId(BRICKLINK_SERVICE_ID)
+                .externalServiceId(ExternalServiceIds.BRICKLINK)
                 .externalItemKey(entry.getItemId())
                 .externalUniqueKey(null)
                 .itemName(entry.getItemName())

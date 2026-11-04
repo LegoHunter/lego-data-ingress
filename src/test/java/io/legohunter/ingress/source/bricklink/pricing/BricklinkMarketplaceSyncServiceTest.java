@@ -121,6 +121,10 @@ class BricklinkMarketplaceSyncServiceTest {
         assertThat(finished.getSyncRequestStatusCode()).isEqualTo("SUCCEEDED");
         assertThat(finished.getAppliedLocalAt()).isNotNull();
         assertThat(finished.getCompletedAt()).isNotNull();
+        // Visibility is what the read-back shows: a stockroom C lot, not publicly available.
+        assertThat(finished.getRemoteVisibilityScopeCode()).isEqualTo("STOCKROOM");
+        assertThat(finished.getRemoteVisibilityContainerId()).isEqualTo("C");
+        assertThat(finished.getRemoteIsPubliclyAvailable()).isFalse();
         assertThat(lastBricklinkListingUpdate().getLastRemoteSafetyStatusCode()).isEqualTo("VERIFIED");
         // A verified lot is marked as this environment's.
         assertThat(lastBricklinkListingUpdate().getEnvironmentCode()).isEqualTo("sandbox");
@@ -711,6 +715,35 @@ class BricklinkMarketplaceSyncServiceTest {
         assertThat(request.getLastErrorMessage())
                 .startsWith("REMOTE_SYSTEM_BLOCK_MISSING: ")
                 .endsWith("; lot 45678 hidden in stockroom A");
+    }
+
+    @Test
+    void prodRecordsAStockroomLotAsNotPubliclyAvailable() {
+        properties.setMode("APPLY");
+        properties.setEnvironmentCode("prod");
+        properties.setProduction(true);
+        MarketplaceListingSyncRequest request = claimedListingCreateRequest();
+        request.setRemoteVisibilityScopeCode("STOCKROOM");
+        request.setRemoteVisibilityContainerId("A");
+        BricklinkMarketplaceListing mapping = bricklinkDraftListing();
+        mapping.setStockRoomId("A");
+        arrangeListingCreate(request, mapping);
+        Inventory stockroomLot = createdInventory();
+        stockroomLot.setStock_room_id("A");
+        stockroomLot.setRemarks(stockroomLot.getRemarks().replace("LEGOHUNTER_ENV=sandbox", "LEGOHUNTER_ENV=prod"));
+        when(bricklinkRestClient.getInventories(anyMap())).thenReturn(lots());
+        when(bricklinkRestClient.createInventory(any(Inventory.class))).thenReturn(resource(stockroomLot));
+        when(bricklinkRestClient.getInventories(45678L)).thenReturn(resource(stockroomLot));
+        stubUpdates();
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        // PROD used to record every succeeded lot as public; a stockroom A lot is not.
+        assertThat(result.blocked()).isZero();
+        assertThat(request.getSyncRequestStatusCode()).isEqualTo("SUCCEEDED");
+        assertThat(request.getRemoteVisibilityScopeCode()).isEqualTo("STOCKROOM");
+        assertThat(request.getRemoteVisibilityContainerId()).isEqualTo("A");
+        assertThat(request.getRemoteIsPubliclyAvailable()).isFalse();
     }
 
     @Test

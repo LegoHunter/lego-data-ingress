@@ -1,5 +1,6 @@
 package io.legohunter.ingress.source.rebrickable.categories.kafka;
 
+import io.legohunter.ingress.common.ExternalServiceIds;
 import io.legohunter.data.dao.ExternalCategoryDao;
 import io.legohunter.data.dto.ExternalCategory;
 import io.legohunter.ingress.source.rebrickable.categories.model.RebrickableThemeEntry;
@@ -16,7 +17,6 @@ public class RebrickableThemeEntryConsumer {
 
     private final ExternalCategoryDao externalCategoryDao;
 
-    private Integer rebrickableServiceId = 9;
 
     @KafkaListener(
             topics = "${kafka.topic-configuration.rebrickable-theme-entry.topic}",
@@ -25,7 +25,7 @@ public class RebrickableThemeEntryConsumer {
     public void listen(@Payload RebrickableThemeEntry entry) {
         try {
             ExternalCategory category = ExternalCategory.builder()
-                    .externalServiceId(rebrickableServiceId)
+                    .externalServiceId(ExternalServiceIds.REBRICKABLE)
                     .externalCategoryKey(String.valueOf(entry.getId()))
                     .categoryName(entry.getName())
                     .parentExternalCategoryId(parentExternalCategoryId(entry.getParentId()))
@@ -41,7 +41,7 @@ public class RebrickableThemeEntryConsumer {
         if (parentId == null) {
             return null;
         }
-        return externalCategoryDao.findByExternalServiceIdAndExternalCategoryKey(rebrickableServiceId, String.valueOf(parentId))
+        return externalCategoryDao.findByExternalServiceIdAndExternalCategoryKey(ExternalServiceIds.REBRICKABLE, String.valueOf(parentId))
                 .map(ExternalCategory::getExternalCategoryId)
                 .orElse(null);
     }

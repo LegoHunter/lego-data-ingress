@@ -189,7 +189,7 @@ public class BricklinkMarketplaceSyncService {
             updateSafetyMetadata(context.bricklinkListing(), safety, confirmedInventory);
             markDecisionApplied(request);
             request.setAppliedLocalAt(now());
-            markSucceeded(request, safety);
+            markSucceeded(request, confirmedInventory);
         });
         counters.remoteVerified++;
         log.info(
@@ -430,7 +430,7 @@ public class BricklinkMarketplaceSyncService {
             updateCreateSuccessLocalState(context, request, safety, verifiedRemoteInventory, createdInventoryId);
             markDecisionApplied(request);
             request.setAppliedLocalAt(request.getAppliedLocalAt() == null ? now() : request.getAppliedLocalAt());
-            markSucceeded(request, remoteSafety);
+            markSucceeded(request, verifiedRemoteInventory);
         });
         counters.remoteVerified++;
         counters.remoteUpdated++;
@@ -742,14 +742,28 @@ public class BricklinkMarketplaceSyncService {
         bricklinkMarketplaceListingDao.update(bricklinkListing);
     }
 
-    private void markSucceeded(MarketplaceListingSyncRequest request, BricklinkRemoteInventorySafetyResult safety) {
+    /**
+     * Records the remote lot's visibility as BrickLink reported it on read-back: a stockroom lot (in any environment,
+     * including a PROD stockroom) is not publicly available.
+     */
+    private void markSucceeded(MarketplaceListingSyncRequest request, Inventory remoteInventory) {
         request.setSyncRequestStatusCode(STATUS_SUCCEEDED);
         request.setLastErrorMessage(null);
         request.setClaimedAt(null);
         request.setCompletedAt(now());
-        request.setRemoteVisibilityScopeCode(properties.nonProdEnvironment() ? BricklinkPricingApplyService.REMOTE_SCOPE_STOCKROOM : request.getRemoteVisibilityScopeCode());
-        request.setRemoteVisibilityContainerId(properties.nonProdEnvironment() ? properties.effectiveNonProdStockRoomId() : request.getRemoteVisibilityContainerId());
-        request.setRemoteIsPubliclyAvailable(!properties.nonProdEnvironment());
+        if (remoteInventory == null) {
+            // No read-back to go by: a non-PROD lot is always a stockroom lot; otherwise keep what was requested.
+            if (properties.nonProdEnvironment()) {
+                request.setRemoteVisibilityScopeCode(BricklinkPricingApplyService.REMOTE_SCOPE_STOCKROOM);
+                request.setRemoteVisibilityContainerId(properties.effectiveNonProdStockRoomId());
+                request.setRemoteIsPubliclyAvailable(false);
+            }
+        } else {
+            boolean stockRoom = Boolean.TRUE.equals(remoteInventory.getIs_stock_room());
+            request.setRemoteVisibilityScopeCode(stockRoom ? BricklinkPricingApplyService.REMOTE_SCOPE_STOCKROOM : BricklinkPricingApplyService.REMOTE_SCOPE_PUBLIC);
+            request.setRemoteVisibilityContainerId(stockRoom ? remoteInventory.getStock_room_id() : null);
+            request.setRemoteIsPubliclyAvailable(!stockRoom);
+        }
         marketplaceListingSyncRequestDao.update(request);
     }
 
