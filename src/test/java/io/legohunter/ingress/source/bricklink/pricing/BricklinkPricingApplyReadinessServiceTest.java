@@ -56,7 +56,7 @@ class BricklinkPricingApplyReadinessServiceTest {
     void runOnceCountsReadyDecisionWhenPriceDeltaMeetsThreshold() {
         when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
                 2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
-        )).thenReturn(Set.of(review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV)));
+        )).thenReturn(Set.of(review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION)));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
 
@@ -77,7 +77,7 @@ class BricklinkPricingApplyReadinessServiceTest {
 
     @Test
     void runOnceAllowsPricingPlaneToSetTheInitialPriceForAnUnpricedDraft() {
-        PricingDecisionReview initialPrice = review(null, "7.19", BricklinkPricingDecisionService.REASON_MATCHED_LOWEST_COMPETITOR);
+        PricingDecisionReview initialPrice = review(null, "7.19", BricklinkPricingDecisionService.REASON_SINGLE_COMPARABLE_DISCOUNTED);
         initialPrice.setListingStatusCode("DRAFT");
         initialPrice.setExternalListingId(null);
         initialPrice.setComparableCount(15);
@@ -102,14 +102,14 @@ class BricklinkPricingApplyReadinessServiceTest {
 
     @Test
     void runOnceSeparatesAllSkipBuckets() {
-        PricingDecisionReview fixedPrice = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview fixedPrice = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION);
         fixedPrice.setFixedPrice(true);
-        PricingDecisionReview missingCurrentPrice = review(null, "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
-        PricingDecisionReview missingFinalPrice = review("100.00", null, BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
-        PricingDecisionReview currencyMismatch = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview missingCurrentPrice = review(null, "95.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION);
+        PricingDecisionReview missingFinalPrice = review("100.00", null, BricklinkPricingDecisionService.REASON_MARKET_POSITION);
+        PricingDecisionReview currencyMismatch = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION);
         currencyMismatch.setDecisionCurrencyCode("CAD");
-        PricingDecisionReview ineligibleReason = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_OUTLIER_SPREAD_TOO_HIGH);
-        PricingDecisionReview belowMinimumDelta = review("100.00", "100.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview ineligibleReason = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_NO_EXACT_COMPARABLES);
+        PricingDecisionReview belowMinimumDelta = review("100.00", "100.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION);
 
         when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
                 2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
@@ -134,7 +134,7 @@ class BricklinkPricingApplyReadinessServiceTest {
         properties.getMinimumDelta().setPercent(new BigDecimal("0.02"));
         when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
                 2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
-        )).thenReturn(Set.of(review("4.99", "4.90", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV)));
+        )).thenReturn(Set.of(review("4.99", "4.90", BricklinkPricingDecisionService.REASON_MARKET_POSITION)));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
 
@@ -153,7 +153,7 @@ class BricklinkPricingApplyReadinessServiceTest {
         properties.getMinimumDelta().setPercent(new BigDecimal("0.02"));
         when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
                 2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
-        )).thenReturn(Set.of(review("586.00", "574.28", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV)));
+        )).thenReturn(Set.of(review("586.00", "574.28", BricklinkPricingDecisionService.REASON_MARKET_POSITION)));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
 
@@ -164,7 +164,7 @@ class BricklinkPricingApplyReadinessServiceTest {
 
     @Test
     void runOnceBlocksStaleDecisionWhenNewerSnapshotExists() {
-        PricingDecisionReview stale = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview stale = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION);
         stale.setNewerSnapshotAvailable(true);
         when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
                 2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
@@ -189,7 +189,7 @@ class BricklinkPricingApplyReadinessServiceTest {
         properties.setMinimumPriceDelta(new BigDecimal("10.00"));
         when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
                 7, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 1
-        )).thenReturn(Set.of(review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV)));
+        )).thenReturn(Set.of(review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION)));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
 
@@ -208,15 +208,15 @@ class BricklinkPricingApplyReadinessServiceTest {
         properties.setMaximumPercentDelta(new BigDecimal("0.50"));
         properties.setBlockedReasonCodes(Set.of(BricklinkPricingDecisionService.REASON_SINGLE_COMPARABLE_DISCOUNTED));
 
-        PricingDecisionReview unsupportedStatus = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview unsupportedStatus = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION);
         unsupportedStatus.setDecisionStatusCode("FAILED");
         PricingDecisionReview blockedReason = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_SINGLE_COMPARABLE_DISCOUNTED);
-        PricingDecisionReview lowConfidence = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview lowConfidence = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION);
         lowConfidence.setConfidence(new BigDecimal("0.50"));
-        PricingDecisionReview lowComparableCount = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview lowComparableCount = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION);
         lowComparableCount.setComparableCount(2);
-        PricingDecisionReview aboveAbsoluteDelta = review("200.00", "90.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
-        PricingDecisionReview abovePercentDelta = review("100.00", "40.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview aboveAbsoluteDelta = review("200.00", "90.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION);
+        PricingDecisionReview abovePercentDelta = review("100.00", "40.00", BricklinkPricingDecisionService.REASON_MARKET_POSITION);
         properties.setMaximumAbsoluteDelta(new BigDecimal("100.00"));
 
         when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
@@ -249,7 +249,7 @@ class BricklinkPricingApplyReadinessServiceTest {
                 .finalPrice(finalPrice == null ? null : new BigDecimal(finalPrice))
                 .currencyCode("USD")
                 .decisionCurrencyCode("USD")
-                .algorithmVersion("bricklink-competitive-v1")
+                .algorithmVersion("bricklink-market-position-v2")
                 .comparableCount(5)
                 .confidence(new BigDecimal("0.90"))
                 .build();

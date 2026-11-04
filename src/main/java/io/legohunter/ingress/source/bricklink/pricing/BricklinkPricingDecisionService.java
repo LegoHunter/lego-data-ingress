@@ -24,6 +24,7 @@ import java.math.RoundingMode;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -39,18 +40,18 @@ public class BricklinkPricingDecisionService {
     static final String STATUS_SKIPPED = "SKIPPED";
     static final String STATUS_FAILED = "FAILED";
 
+    static final String ALGORITHM_VERSION = "bricklink-market-position-v2";
+
     static final String REASON_FIXED_PRICE_OVERRIDE = "FIXED_PRICE_OVERRIDE";
-    static final String REASON_MATCHED_LOWEST_COMPETITOR = "MATCHED_LOWEST_COMPETITOR";
+    static final String REASON_MARKET_POSITION = "MARKET_POSITION";
     static final String REASON_SINGLE_COMPARABLE_DISCOUNTED = "SINGLE_COMPARABLE_DISCOUNTED";
     static final String REASON_TWO_COMPARABLES_WEIGHTED = "TWO_COMPARABLES_WEIGHTED";
-    static final String REASON_MEAN_PLUS_STDDEV = "MEAN_PLUS_STDDEV";
     static final String REASON_NO_CURRENT_SNAPSHOT = "NO_CURRENT_SNAPSHOT";
     static final String REASON_NO_CURRENT_COMPARABLES = "NO_CURRENT_COMPARABLES";
     static final String REASON_NO_EXACT_COMPARABLES = "NO_EXACT_COMPARABLES";
     static final String REASON_MISSING_INVENTORY = "MISSING_INVENTORY";
     static final String REASON_MISSING_CONDITION = "MISSING_CONDITION";
     static final String REASON_MISSING_COMPLETENESS = "MISSING_COMPLETENESS";
-    static final String REASON_OUTLIER_SPREAD_TOO_HIGH = "OUTLIER_SPREAD_TOO_HIGH";
     static final String REASON_BELOW_MIN_PRICE_CLAMPED = "BELOW_MIN_PRICE_CLAMPED";
     static final String REASON_ABOVE_MAX_PRICE_CLAMPED = "ABOVE_MAX_PRICE_CLAMPED";
 
@@ -159,12 +160,14 @@ public class BricklinkPricingDecisionService {
             return failed(listing, null, REASON_NO_CURRENT_SNAPSHOT, "No pricing snapshot exists for listing condition and completeness.");
         }
 
-        List<PricingSnapshotListing> exactComparables = pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(snapshot.get().getPricingSnapshotId())
+        List<PricingSnapshotListing> candidates = pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(snapshot.get().getPricingSnapshotId())
                 .stream()
                 .filter(comparable -> comparable.getUnitPrice() != null)
                 .filter(comparable -> !isOwnListing(listing, comparable))
                 .sorted(Comparator.comparing(PricingSnapshotListing::getUnitPrice))
                 .toList();
+        List<PricingSnapshotListing> exactComparables = withoutOutliers(candidates);
+        int outliersDropped = candidates.size() - exactComparables.size();
 
         if (exactComparables.isEmpty()) {
             if (Integer.valueOf(0).equals(snapshot.get().getComparableCount())) {
@@ -183,36 +186,26 @@ public class BricklinkPricingDecisionService {
             );
         }
 
-        try {
-            Calculation calculation = calculate(conditionCode, inventory.get(), exactComparables);
-            PriceClamp clamp = clamp(calculation.price());
-            String reasonCode = clamp.reasonCode().orElse(calculation.reasonCode());
-            return decision(
-                    listing,
-                    snapshot.get(),
-                    STATUS_PROPOSED,
-                    reasonCode,
-                    calculation.price(),
-                    clamp.price(),
-                    exactComparables.size(),
-                    confidence(exactComparables.size()),
-                    sourceSummary(snapshot.get(), exactComparables, calculation.reasonCode(), reasonCode),
-                    null
-            );
-        } catch (PriceNotCalculableException e) {
-            return decision(
-                    listing,
-                    snapshot.get(),
-                    STATUS_FAILED,
-                    e.reasonCode(),
-                    null,
-                    null,
-                    exactComparables.size(),
-                    bd("0.00"),
-                    sourceSummary(snapshot.get(), exactComparables, e.reasonCode(), e.reasonCode()),
-                    e.getMessage()
-            );
-        }
+        Calculation calculation = calculate(conditionCode, completenessCode, inventory.get(), exactComparables);
+        BigDecimal limitedPrice = limitChange(calculation.price(), listing.getUnitPrice());
+        PriceClamp clamp = clamp(limitedPrice);
+        String reasonCode = clamp.reasonCode().orElse(calculation.reasonCode());
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("targetPercentile", nullToEmpty(calculation.targetPercentile()));
+        details.put("outliersDropped", outliersDropped);
+        details.put("changeLimited", limitedPrice.compareTo(calculation.price()) != 0);
+        return decision(
+                listing,
+                snapshot.get(),
+                STATUS_PROPOSED,
+                reasonCode,
+                calculation.price(),
+                clamp.price(),
+                exactComparables.size(),
+                confidence(exactComparables.size()),
+                sourceSummary(snapshot.get(), exactComparables, calculation.reasonCode(), reasonCode, details),
+                null
+        );
     }
 
     private PricingDecision failed(MarketplaceListing listing, PricingSnapshot snapshot, String reasonCode, String notes) {
@@ -225,7 +218,7 @@ public class BricklinkPricingDecisionService {
                 null,
                 0,
                 bd("0.00"),
-                snapshot == null ? null : sourceSummary(snapshot, List.of(), reasonCode, reasonCode),
+                snapshot == null ? null : sourceSummary(snapshot, List.of(), reasonCode, reasonCode, Map.of()),
                 notes
         );
     }
@@ -245,10 +238,10 @@ public class BricklinkPricingDecisionService {
         return PricingDecision.builder()
                 .marketplaceListingId(listing.getMarketplaceListingId())
                 .pricingSnapshotId(snapshot == null ? null : snapshot.getPricingSnapshotId())
-                .algorithmVersion(properties.effectiveAlgorithmVersion())
+                .algorithmVersion(ALGORITHM_VERSION)
                 .decisionStatusCode(statusCode)
                 .reasonCode(reasonCode)
-                .strategyCode(properties.effectiveStrategyCode())
+                .strategyCode(properties.effectiveAggression().name())
                 .computedPrice(money(computedPrice))
                 .finalPrice(money(finalPrice))
                 .previousPrice(money(listing.getUnitPrice()))
@@ -262,72 +255,79 @@ public class BricklinkPricingDecisionService {
                 .build();
     }
 
-    private Calculation calculate(String conditionCode, ItemInventory inventory, List<PricingSnapshotListing> comparables) {
-        BigDecimal basePrice;
-        String reasonCode;
-        if ("N".equals(conditionCode) && comparables.size() > 2) {
-            return calculateNewWithMoreThanTwoPrices(inventory, comparables);
-        } else if (comparables.size() > 2) {
-            basePrice = calculateUsingMoreThanTwoPrices(comparables);
-            reasonCode = REASON_MEAN_PLUS_STDDEV;
-        } else if (comparables.size() > 1) {
-            basePrice = calculateUsingTwoPrices(comparables);
-            reasonCode = REASON_TWO_COMPARABLES_WEIGHTED;
-        } else {
-            basePrice = calculateUsingOnePrice(comparables.getFirst().getUnitPrice());
-            reasonCode = REASON_SINGLE_COMPARABLE_DISCOUNTED;
+    /**
+     * Market-position formula. Comparables are this week's lots with the same condition and sub-condition,
+     * sorted by price. Three or more: the target percentile of their prices. Two: the lower price plus a share of
+     * the gap. One: just under it.
+     */
+    private Calculation calculate(String conditionCode, String completenessCode, ItemInventory inventory, List<PricingSnapshotListing> comparables) {
+        List<BigDecimal> prices = comparables.stream().map(PricingSnapshotListing::getUnitPrice).toList();
+        if (prices.size() > 2) {
+            BigDecimal target = properties.targetPercentile(conditionCode, completenessCode);
+            return new Calculation(adjustPrice(inventory, percentile(prices, target)), REASON_MARKET_POSITION, target);
         }
-        return new Calculation(adjustPrice(inventory, basePrice), reasonCode);
-    }
-
-    private Calculation calculateNewWithMoreThanTwoPrices(ItemInventory inventory, List<PricingSnapshotListing> comparables) {
-        List<PricingSnapshotListing> usComparables = comparables.stream()
-                .filter(comparable -> "US".equalsIgnoreCase(clean(comparable.getSellerCountryCode())))
-                .toList();
-        if (!usComparables.isEmpty()) {
-            BigDecimal basePrice = calculateUsingOnePrice(usComparables.getFirst().getUnitPrice());
-            return new Calculation(adjustPrice(inventory, basePrice), REASON_MATCHED_LOWEST_COMPETITOR);
+        if (prices.size() == 2) {
+            BigDecimal low = prices.get(0);
+            BigDecimal base = low.add(prices.get(1).subtract(low).multiply(properties.effectiveTwoComparablesFraction()));
+            return new Calculation(adjustPrice(inventory, base), REASON_TWO_COMPARABLES_WEIGHTED, null);
         }
-        return new Calculation(adjustPrice(inventory, calculateUsingMoreThanTwoPrices(comparables)), REASON_MEAN_PLUS_STDDEV);
+        return new Calculation(adjustPrice(inventory, undercut(prices.getFirst())), REASON_SINGLE_COMPARABLE_DISCOUNTED, null);
     }
 
-    private BigDecimal calculateUsingTwoPrices(List<PricingSnapshotListing> comparables) {
-        BigDecimal lowPrice = comparables.get(0).getUnitPrice();
-        BigDecimal highPrice = comparables.get(1).getUnitPrice();
-        return lowPrice.add(highPrice.subtract(lowPrice).multiply(bd("0.75")));
+    /** Linear interpolation between the two sorted prices around position {@code fraction * (n - 1)}. */
+    static BigDecimal percentile(List<BigDecimal> sortedPrices, BigDecimal fraction) {
+        BigDecimal position = fraction.multiply(BigDecimal.valueOf(sortedPrices.size() - 1L));
+        int lower = position.intValue();
+        int upper = Math.min(lower + 1, sortedPrices.size() - 1);
+        BigDecimal weight = position.subtract(BigDecimal.valueOf(lower));
+        BigDecimal low = sortedPrices.get(lower);
+        return low.add(sortedPrices.get(upper).subtract(low).multiply(weight));
     }
 
-    private BigDecimal calculateUsingOnePrice(BigDecimal price) {
+    private BigDecimal undercut(BigDecimal price) {
         BigDecimal priceMinusThreePercentUpToTenDollars = price.subtract(price.multiply(bd("0.03")).min(bd("10")));
         BigDecimal priceMinusOneDollar = price.subtract(BigDecimal.ONE).max(BigDecimal.ONE);
         return priceMinusThreePercentUpToTenDollars.min(priceMinusOneDollar);
     }
 
-    private BigDecimal calculateUsingMoreThanTwoPrices(List<PricingSnapshotListing> comparables) {
-        double[] prices = comparables.stream().map(PricingSnapshotListing::getUnitPrice).mapToDouble(BigDecimal::doubleValue).toArray();
-        double highest = prices[prices.length - 1];
-        double secondHighest = prices[prices.length - 2];
-        if (secondHighest > 0 && highest / secondHighest > 3.0d) {
-            throw new PriceNotCalculableException(
-                    REASON_OUTLIER_SPREAD_TOO_HIGH,
-                    "Delta between highest two comparable prices is too high [%s], [%s].".formatted(highest, secondHighest)
-            );
+    /** Drops lots priced above the configured multiple of the median (absurd asks would otherwise skew the market). */
+    private List<PricingSnapshotListing> withoutOutliers(List<PricingSnapshotListing> sortedComparables) {
+        BigDecimal maxRatio = properties.effectiveOutlierMaxRatioToMedian();
+        if (maxRatio == null || sortedComparables.size() < 3) {
+            return sortedComparables;
         }
-        double mean = 0.0d;
-        for (double price : prices) {
-            mean += price;
-        }
-        mean = mean / prices.length;
+        List<BigDecimal> prices = sortedComparables.stream().map(PricingSnapshotListing::getUnitPrice).toList();
+        BigDecimal limit = percentile(prices, bd("0.5")).multiply(maxRatio);
+        return sortedComparables.stream().filter(comparable -> comparable.getUnitPrice().compareTo(limit) <= 0).toList();
+    }
 
-        double variance = 0.0d;
-        for (double price : prices) {
-            variance += Math.pow(price - mean, 2);
+    /**
+     * Keeps the move from the current price within the configured fraction and amount, so large corrections happen
+     * over several runs instead of being blocked by apply readiness.
+     */
+    private BigDecimal limitChange(BigDecimal price, BigDecimal currentPrice) {
+        if (currentPrice == null || currentPrice.signum() <= 0) {
+            return price;
         }
-        double standardDeviation = Math.sqrt(variance / (prices.length - 1));
-        return BigDecimal.valueOf(mean + standardDeviation);
+        BigDecimal maxStep = null;
+        BigDecimal fraction = properties.effectiveMaximumChangePerRun();
+        if (fraction != null) {
+            maxStep = currentPrice.multiply(fraction);
+        }
+        BigDecimal amount = properties.effectiveMaximumAbsoluteChangePerRun();
+        if (amount != null) {
+            maxStep = maxStep == null ? amount : maxStep.min(amount);
+        }
+        if (maxStep == null) {
+            return price;
+        }
+        return price.max(currentPrice.subtract(maxStep)).min(currentPrice.add(maxStep));
     }
 
     private BigDecimal adjustPrice(ItemInventory inventory, BigDecimal price) {
+        if (!properties.isBoxInstructionsAdjustmentEnabled()) {
+            return price;
+        }
         return price.multiply(priceAdjustment(inventory));
     }
 
@@ -380,21 +380,29 @@ public class BricklinkPricingDecisionService {
         return bd("0.00");
     }
 
-    private String sourceSummary(PricingSnapshot snapshot, List<PricingSnapshotListing> comparables, String baseReasonCode, String finalReasonCode) {
+    private String sourceSummary(
+            PricingSnapshot snapshot,
+            List<PricingSnapshotListing> comparables,
+            String baseReasonCode,
+            String finalReasonCode,
+            Map<String, Object> details
+    ) {
         BigDecimal lowestPrice = comparables.isEmpty() ? null : money(comparables.getFirst().getUnitPrice());
         BigDecimal highestPrice = comparables.isEmpty() ? null : money(comparables.getLast().getUnitPrice());
-        return summary(Map.of(
-                "pricingSnapshotId", snapshot.getPricingSnapshotId(),
-                "sourceItemKey", nullToEmpty(snapshot.getSourceItemKey()),
-                "sourceUniqueKey", nullToEmpty(snapshot.getSourceUniqueKey()),
-                "targetConditionCode", nullToEmpty(snapshot.getItemConditionCode()),
-                "targetCompletenessCode", nullToEmpty(snapshot.getCompletenessCode()),
-                "exactComparableCount", comparables.size(),
-                "lowestComparablePrice", nullToEmpty(lowestPrice),
-                "highestComparablePrice", nullToEmpty(highestPrice),
-                "baseReasonCode", baseReasonCode,
-                "finalReasonCode", finalReasonCode
-        ));
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("pricingSnapshotId", snapshot.getPricingSnapshotId());
+        summary.put("sourceItemKey", nullToEmpty(snapshot.getSourceItemKey()));
+        summary.put("sourceUniqueKey", nullToEmpty(snapshot.getSourceUniqueKey()));
+        summary.put("targetConditionCode", nullToEmpty(snapshot.getItemConditionCode()));
+        summary.put("targetCompletenessCode", nullToEmpty(snapshot.getCompletenessCode()));
+        summary.put("exactComparableCount", comparables.size());
+        summary.put("lowestComparablePrice", nullToEmpty(lowestPrice));
+        summary.put("highestComparablePrice", nullToEmpty(highestPrice));
+        summary.put("aggression", properties.effectiveAggression().name());
+        summary.put("baseReasonCode", baseReasonCode);
+        summary.put("finalReasonCode", finalReasonCode);
+        summary.putAll(details);
+        return summary(summary);
     }
 
     private String summary(Map<String, ?> summary) {
@@ -441,7 +449,7 @@ public class BricklinkPricingDecisionService {
         return new BigDecimal(value);
     }
 
-    private record Calculation(BigDecimal price, String reasonCode) {
+    private record Calculation(BigDecimal price, String reasonCode, BigDecimal targetPercentile) {
     }
 
     private record PriceClamp(BigDecimal price, Optional<String> reasonCode) {
@@ -467,19 +475,6 @@ public class BricklinkPricingDecisionService {
             } else if (STATUS_FAILED.equals(decision.getDecisionStatusCode())) {
                 failedDecisions++;
             }
-        }
-    }
-
-    private static class PriceNotCalculableException extends RuntimeException {
-        private final String reasonCode;
-
-        private PriceNotCalculableException(String reasonCode, String message) {
-            super(message);
-            this.reasonCode = reasonCode;
-        }
-
-        private String reasonCode() {
-            return reasonCode;
         }
     }
 }

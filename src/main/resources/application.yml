@@ -43,8 +43,14 @@ lego:
         active-listing-status-code: ACTIVE
         batch-size: 25
         require-current-snapshot: false
-        algorithm-version: bricklink-competitive-v1
-        strategy-code: LEGACY_COMPETITIVE
+        # Market-position formula. See the runbook section "Pricing formula and its levers".
+        aggression: BALANCED                 # QUICK | BALANCED | PATIENT
+        target-percentiles: {}               # per-market overrides, e.g. "[U-C]": 0.40
+        outlier-max-ratio-to-median: 3.0
+        two-comparables-fraction: 0.25
+        maximum-change-per-run: 0.25
+        maximum-absolute-change-per-run:      # e.g. 50.00; keep <= apply-readiness maximum-absolute-delta
+        box-instructions-adjustment-enabled: true
         minimum-price:
         maximum-price:
         scheduled:
@@ -72,10 +78,9 @@ lego:
         maximum-percent-delta:
         blocked-reason-codes: []
         apply-eligible-reason-codes:
+          - MARKET_POSITION
           - SINGLE_COMPARABLE_DISCOUNTED
           - TWO_COMPARABLES_WEIGHTED
-          - MEAN_PLUS_STDDEV
-          - MATCHED_LOWEST_COMPETITOR
           - BELOW_MIN_PRICE_CLAMPED
           - ABOVE_MAX_PRICE_CLAMPED
         scheduled:
