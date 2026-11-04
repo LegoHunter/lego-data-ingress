@@ -696,14 +696,19 @@ public class BricklinkMarketplaceSyncService {
             BricklinkListingCreateSafetyResult safety,
             Inventory remoteInventory
     ) {
-        bricklinkListing.setEnvironmentCode(properties.effectiveEnvironmentCode());
-        bricklinkListing.setSystemRemarksHash(safety.desiredRemarksHash());
         bricklinkListing.setLastRemoteVerifiedAt(now());
         bricklinkListing.setLastRemoteSafetyStatusCode(safety.statusCode());
         bricklinkListing.setLastRemoteSafetyMessage(safety.message());
-        bricklinkListing.setRemarks(safety.desiredRemarks());
-        bricklinkListing.setIsStockRoom(safety.stockRoom());
-        bricklinkListing.setStockRoomId(safety.stockRoomId());
+        if (safety.allowed()) {
+            // Only a create that passed its checks belongs to this environment. A blocked create
+            // records why and keeps the draft as it was: a blocked result carries no remarks or
+            // stockroom, and writing those would erase the draft's own.
+            bricklinkListing.setEnvironmentCode(properties.effectiveEnvironmentCode());
+            bricklinkListing.setSystemRemarksHash(safety.desiredRemarksHash());
+            bricklinkListing.setRemarks(safety.desiredRemarks());
+            bricklinkListing.setIsStockRoom(safety.stockRoom());
+            bricklinkListing.setStockRoomId(safety.stockRoomId());
+        }
         if (remoteInventory != null) {
             bricklinkListing.setBricklinkInventoryId(remoteInventory.getInventory_id() == null ? null : remoteInventory.getInventory_id().intValue());
             bricklinkListing.setBricklinkDateCreated(zonedDateTime(remoteInventory.getDate_created()));
@@ -720,7 +725,11 @@ public class BricklinkMarketplaceSyncService {
             BricklinkRemoteInventorySafetyResult safety,
             Inventory remoteInventory
     ) {
-        bricklinkListing.setEnvironmentCode(properties.effectiveEnvironmentCode());
+        if (safety.allowed()) {
+            // A lot that fails the safety check was not verified as this environment's, so it must
+            // not be marked as such. The hash is cleared on a block (a blocked result has none).
+            bricklinkListing.setEnvironmentCode(properties.effectiveEnvironmentCode());
+        }
         bricklinkListing.setSystemRemarksHash(safety.desiredRemarksHash());
         bricklinkListing.setLastRemoteVerifiedAt(now());
         bricklinkListing.setLastRemoteSafetyStatusCode(safety.statusCode());

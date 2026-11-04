@@ -122,6 +122,9 @@ class BricklinkMarketplaceSyncServiceTest {
         assertThat(finished.getAppliedLocalAt()).isNotNull();
         assertThat(finished.getCompletedAt()).isNotNull();
         assertThat(lastBricklinkListingUpdate().getLastRemoteSafetyStatusCode()).isEqualTo("VERIFIED");
+        // A verified lot is marked as this environment's.
+        assertThat(lastBricklinkListingUpdate().getEnvironmentCode()).isEqualTo("sandbox");
+        assertThat(lastBricklinkListingUpdate().getSystemRemarksHash()).isNotBlank();
     }
 
     @Test
@@ -205,6 +208,35 @@ class BricklinkMarketplaceSyncServiceTest {
         assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("BLOCKED");
         verify(marketplaceListingDao, never()).update(any());
         verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+    }
+
+    @Test
+    void aBlockedPriceUpdateRecordsTheReasonButDoesNotMarkTheLotAsThisEnvironments() {
+        // A row this environment never verified, such as one copied in from another environment.
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes only"));
+        BricklinkMarketplaceListing mapping = bricklinkListing();
+        mapping.setEnvironmentCode("prod");
+        when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(mapping));
+
+        service.runOnce();
+
+        BricklinkMarketplaceListing recorded = lastBricklinkListingUpdate();
+        assertThat(recorded.getLastRemoteSafetyStatusCode()).isEqualTo("REMOTE_SYSTEM_BLOCK_MISSING");
+        assertThat(recorded.getLastRemoteSafetyMessage()).isNotBlank();
+        assertThat(recorded.getLastRemoteVerifiedAt()).isNotNull();
+        assertThat(recorded.getEnvironmentCode()).isEqualTo("prod");
+        assertThat(recorded.getSystemRemarksHash()).isNull();
+    }
+
+    @Test
+    void aBlockedPriceUpdateLeavesAnEmptyEnvironmentEmpty() {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes only"));
+
+        service.runOnce();
+
+        assertThat(lastBricklinkListingUpdate().getEnvironmentCode()).isNull();
     }
 
     @Test
@@ -292,6 +324,7 @@ class BricklinkMarketplaceSyncServiceTest {
         assertThat(blocked.getLastErrorMessage()).startsWith(statusCode);
         assertThat(blocked.getAppliedLocalAt()).isNull();
         assertThat(lastBricklinkListingUpdate().getLastRemoteSafetyStatusCode()).isEqualTo(statusCode);
+        assertThat(lastBricklinkListingUpdate().getEnvironmentCode()).isNull();
         verify(marketplaceListingDao, never()).update(any());
         verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
         verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
@@ -577,6 +610,72 @@ class BricklinkMarketplaceSyncServiceTest {
         assertThat(request.getLastErrorMessage())
                 .startsWith("REMOTE_NOT_STOCKROOM: ")
                 .endsWith("; lot 45678 hidden in stockroom C");
+    }
+
+    @Test
+    void aNewLotThatFailsThePostCreateCheckIsNotMarkedAsThisEnvironments() {
+        applyAsSandbox();
+        MarketplaceListingSyncRequest request = claimedListingCreateRequest();
+        BricklinkMarketplaceListing draft = bricklinkDraftListing();
+        draft.setEnvironmentCode(null);
+        arrangeListingCreate(request, draft);
+        Inventory publicLot = createdInventory();
+        publicLot.setIs_stock_room(false);
+        publicLot.setStock_room_id(null);
+        when(bricklinkRestClient.getInventories(anyMap())).thenReturn(lots());
+        when(bricklinkRestClient.createInventory(any(Inventory.class))).thenReturn(resource(publicLot));
+        when(bricklinkRestClient.getInventories(45678L)).thenReturn(resource(publicLot));
+        stubUpdates();
+
+        service.runOnce();
+
+        BricklinkMarketplaceListing recorded = lastBricklinkListingUpdate();
+        assertThat(recorded.getLastRemoteSafetyStatusCode()).isEqualTo("REMOTE_NOT_STOCKROOM");
+        assertThat(recorded.getEnvironmentCode()).isNull();
+        assertThat(recorded.getSystemRemarksHash()).isNull();
+    }
+
+    @Test
+    void aBlockedCreateRecordsTheReasonAndKeepsTheDraftAsItWas() {
+        applyAsSandbox();
+        MarketplaceListingSyncRequest request = claimedListingCreateRequest();
+        BricklinkMarketplaceListing mapping = bricklinkDraftListing();
+        mapping.setBricklinkInventoryId(11111);
+        mapping.setEnvironmentCode("prod");
+        arrangeListingCreate(request, mapping);
+        stubUpdates();
+
+        service.runOnce();
+
+        BricklinkMarketplaceListing recorded = lastBricklinkListingUpdate();
+        assertThat(recorded.getLastRemoteSafetyStatusCode()).isEqualTo("REMOTE_INVENTORY_ALREADY_EXISTS");
+        assertThat(recorded.getLastRemoteSafetyMessage()).isNotBlank();
+        assertThat(recorded.getLastRemoteVerifiedAt()).isNotNull();
+        // Not claimed for this environment, and the draft's own remarks and stockroom survive.
+        assertThat(recorded.getEnvironmentCode()).isEqualTo("prod");
+        assertThat(recorded.getRemarks()).isEqualTo("Human notes");
+        assertThat(recorded.getIsStockRoom()).isTrue();
+        assertThat(recorded.getStockRoomId()).isEqualTo("C");
+    }
+
+    @Test
+    void aCreateThatPassesMarksTheLotAsThisEnvironments() {
+        applyAsSandbox();
+        MarketplaceListingSyncRequest request = claimedListingCreateRequest();
+        BricklinkMarketplaceListing draft = bricklinkDraftListing();
+        draft.setEnvironmentCode(null);
+        arrangeListingCreate(request, draft);
+        when(bricklinkRestClient.getInventories(anyMap())).thenReturn(lots());
+        when(bricklinkRestClient.createInventory(any(Inventory.class))).thenReturn(resource(createdInventory()));
+        when(bricklinkRestClient.getInventories(45678L)).thenReturn(resource(createdInventory()));
+        stubUpdates();
+
+        service.runOnce();
+
+        BricklinkMarketplaceListing recorded = lastBricklinkListingUpdate();
+        assertThat(recorded.getLastRemoteSafetyStatusCode()).isEqualTo("VERIFIED");
+        assertThat(recorded.getEnvironmentCode()).isEqualTo("sandbox");
+        assertThat(recorded.getSystemRemarksHash()).isNotBlank();
     }
 
     @Test
