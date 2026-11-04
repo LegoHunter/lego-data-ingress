@@ -7,7 +7,7 @@ import org.springframework.boot.context.properties.source.ConfigurationPropertyS
 import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.env.PropertySource;
-import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.FileSystemResource;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -76,8 +76,9 @@ class BricklinkPricingDecisionPropertiesTest {
     void theShippedApplicationAndSandboxYamlBindToTheBalancedFormula() throws Exception {
         YamlPropertySourceLoader loader = new YamlPropertySourceLoader();
         List<PropertySource<?>> sources = new ArrayList<>();
-        sources.addAll(loader.load("sandbox", new ClassPathResource("application-sandbox.yml")));
-        sources.addAll(loader.load("base", new ClassPathResource("application.yml")));
+        // Read the shipped files from src/main/resources: the test classpath has its own application.yml.
+        sources.addAll(loader.load("sandbox", new FileSystemResource("src/main/resources/application-sandbox.yml")));
+        sources.addAll(loader.load("base", new FileSystemResource("src/main/resources/application.yml")));
         BricklinkPricingDecisionProperties properties = new Binder(ConfigurationPropertySources.from(sources))
                 .bind("lego.bricklink.pricing.decision", Bindable.of(BricklinkPricingDecisionProperties.class))
                 .get();
@@ -88,6 +89,9 @@ class BricklinkPricingDecisionPropertiesTest {
         assertThat(properties.effectiveMaximumChangePerRun()).isEqualByComparingTo("0.25");
         assertThat(properties.effectiveMaximumAbsoluteChangePerRun()).isEqualByComparingTo("50.00");
         assertThat(properties.isBoxInstructionsAdjustmentEnabled()).isTrue();
+        assertThat(properties.isOwnSeller("tvattima")).isTrue();
+        assertThat(properties.isOwnSeller("TVattima")).isTrue();
+        assertThat(properties.isOwnSeller("someone-else")).isFalse();
     }
 
     private BricklinkPricingDecisionProperties bind(Map<String, String> values) {
