@@ -1,6 +1,6 @@
 package io.legohunter.ingress.source.bricklink.categories.kafka;
 
-import io.legohunter.ingress.common.ExternalServiceIds;
+import io.legohunter.data.dto.ExternalService;
 import io.legohunter.data.dao.ExternalCategoryDao;
 import io.legohunter.data.dto.ExternalCategory;
 import io.legohunter.ingress.source.bricklink.categories.model.CategoryEntry;
@@ -25,7 +25,7 @@ public class BricklinkCategoryEntryConsumer {
     public void listen(@Payload CategoryEntry entry) {
         try {
             ExternalCategory category = ExternalCategory.builder()
-                    .externalServiceId(ExternalServiceIds.BRICKLINK)
+                    .externalServiceId(ExternalService.Service.BRICKLINK.getExternalServiceId())
                     .externalCategoryKey(String.valueOf(entry.getCategory()))
                     .categoryName(entry.getCategoryName())
                     .parentExternalCategoryId(null)

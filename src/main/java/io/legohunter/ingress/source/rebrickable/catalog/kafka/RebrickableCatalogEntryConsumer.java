@@ -1,6 +1,6 @@
 package io.legohunter.ingress.source.rebrickable.catalog.kafka;
 
-import io.legohunter.ingress.common.ExternalServiceIds;
+import io.legohunter.data.dto.ExternalService;
 import io.legohunter.data.dao.ExternalCatalogItemCategoryDao;
 import io.legohunter.data.dao.ExternalCatalogItemDao;
 import io.legohunter.data.dao.ExternalCategoryDao;
@@ -30,7 +30,7 @@ public class RebrickableCatalogEntryConsumer {
     public void listen(@Payload RebrickableCatalogEntry entry) {
         try {
             ExternalCatalogItem externalCatalogItem = ExternalCatalogItem.builder()
-                    .externalServiceId(ExternalServiceIds.REBRICKABLE)
+                    .externalServiceId(ExternalService.Service.REBRICKABLE.getExternalServiceId())
                     .externalItemKey(entry.getSetNum())
                     .externalUniqueKey(null)
                     .itemName(entry.getName())
@@ -43,7 +43,7 @@ public class RebrickableCatalogEntryConsumer {
             final Integer externalCatalogItemId = externalCatalogItem.getExternalCatalogItemId();
 
             // A Rebrickable set's theme id is a Rebrickable theme key, so look it up among Rebrickable categories.
-            externalCategoryDao.findByExternalServiceIdAndExternalCategoryKey(ExternalServiceIds.REBRICKABLE, Integer.toString(entry.getThemeId())).ifPresent(externalCategory -> {
+            externalCategoryDao.findByExternalServiceIdAndExternalCategoryKey(ExternalService.Service.REBRICKABLE.getExternalServiceId(), Integer.toString(entry.getThemeId())).ifPresent(externalCategory -> {
                 ExternalCatalogItemCategory externalCatalogItemCategory = ExternalCatalogItemCategory.builder()
                         .externalCatalogItemId(externalCatalogItemId)
                         .externalCategoryId(externalCategory.getExternalCategoryId())

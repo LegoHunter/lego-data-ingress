@@ -1,6 +1,6 @@
 package io.legohunter.ingress.source.bricklink.catalog.kafka;
 
-import io.legohunter.ingress.common.ExternalServiceIds;
+import io.legohunter.data.dto.ExternalService;
 import io.legohunter.data.dao.ExternalCatalogItemCategoryDao;
 import io.legohunter.data.dao.ExternalCatalogItemDao;
 import io.legohunter.data.dao.ExternalCategoryDao;
@@ -30,7 +30,7 @@ public class BricklinkCatalogEntryConsumer {
     public void listen(@Payload CatalogEntry entry) {
         try {
             ExternalCatalogItem externalCatalogItem = ExternalCatalogItem.builder()
-                    .externalServiceId(ExternalServiceIds.BRICKLINK)
+                    .externalServiceId(ExternalService.Service.BRICKLINK.getExternalServiceId())
                     .externalItemKey(entry.getItemId())
                     .externalUniqueKey(null)
                     .itemName(entry.getItemName())
@@ -42,7 +42,7 @@ public class BricklinkCatalogEntryConsumer {
             externalCatalogItem = externalCatalogItemDao.upsert(externalCatalogItem);
             final Integer externalCatalogItemId = externalCatalogItem.getExternalCatalogItemId();
 
-            externalCategoryDao.findByExternalServiceIdAndExternalCategoryKey(ExternalServiceIds.BRICKLINK, Integer.toString(entry.getCategory())).ifPresent(externalCategory -> {
+            externalCategoryDao.findByExternalServiceIdAndExternalCategoryKey(ExternalService.Service.BRICKLINK.getExternalServiceId(), Integer.toString(entry.getCategory())).ifPresent(externalCategory -> {
                 ExternalCatalogItemCategory externalCatalogItemCategory = ExternalCatalogItemCategory.builder()
                         .externalCatalogItemId(externalCatalogItemId)
                         .externalCategoryId(externalCategory.getExternalCategoryId())
