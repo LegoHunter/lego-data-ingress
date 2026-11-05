@@ -340,6 +340,7 @@ Candidate selection:
 | Marketplace listing service | `marketplace_listing.listing_external_service_id` must equal `lego.bricklink.pricing.crawl.bricklink-external-service-id`. |
 | Marketplace listing status | `marketplace_listing.listing_status_code` must be in `lego.bricklink.pricing.crawl.priceable-listing-status-codes`, defaulting to `ACTIVE` and `DRAFT`. |
 | Catalog link | `marketplace_listing.external_catalog_item_id` must be populated. |
+| Priceable condition | `item_inventory.new_or_used` must be `N`, `NEW`, `U` or `USED` (any case, trimmed) and `item_inventory.completeness` must be non-blank. This is the same predicate the decision candidate query uses, so a listing is crawled only when a decision could use the snapshot. Listings that fail it are not scheduled at all; find them with the [data-quality report](#bricklink-pricing-data-quality-report). |
 | Already queued work | Listings with `PENDING` or `CLAIMED` work are not scheduled again. |
 | Cooling period | Listings with any work item whose `next_attempt_at` is still in the future are not scheduled again. |
 | Batch limit | The scheduling query orders by `marketplace_listing_id` and applies `lego.bricklink.pricing.crawl.batch-size`. |
@@ -399,7 +400,7 @@ Work item statuses:
 | `SUCCEEDED` | Pricing snapshot and returned comparable rows were persisted. |
 | `SKIPPED_MISSING_LISTING` | The queued `marketplace_listing` row no longer exists. |
 | `SKIPPED_MISSING_CATALOG` | The queued listing no longer has a linked catalog item. |
-| `SKIPPED_MISSING_CONDITION` | `item_inventory.new_or_used` was absent or not recognized as New/Used. No AJAX calls are made. |
+| `SKIPPED_MISSING_CONDITION` | `item_inventory.new_or_used` was absent or not recognized as New/Used when the work item was processed. Scheduling already excludes such listings, so this now appears only when the inventory changed between scheduling and processing. No AJAX calls are made. |
 | `SKIPPED_MISSING_ITEM_NUMBER` | `external_catalog_item.external_item_key` was absent. No pricing AJAX call is made. |
 | `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | `searchproduct.ajax` found no exact catalog item match. |
 | `FAILED_ITEM_ID_LOOKUP_AMBIGUOUS` | `searchproduct.ajax` found multiple possible catalog items. |
@@ -572,7 +573,7 @@ Candidate selection:
 | Marketplace listing status | `marketplace_listing.listing_status_code` must be in `lego.bricklink.pricing.decision.priceable-listing-status-codes`, defaulting to `ACTIVE` and `DRAFT`. |
 | Catalog mapping | `marketplace_listing.external_catalog_item_id` must be populated. |
 | Fixed-price eligibility | `marketplace_listing.fixed_price=true` listings are candidates even when condition/completeness are missing because fixed price is authoritative. |
-| Non-fixed eligibility | Non-fixed listings must have non-blank `item_inventory.new_or_used` and non-blank `item_inventory.completeness`. |
+| Non-fixed eligibility | Non-fixed listings must have `item_inventory.new_or_used` of `N`, `NEW`, `U` or `USED` (any case, trimmed) and non-blank `item_inventory.completeness`. Crawl scheduling uses the same predicate. |
 | Optional snapshot gate | When `require-current-snapshot=true`, non-fixed listings must also have an existing `pricing_snapshot` matching normalized condition/completeness. Use this after crawl data is flowing to avoid filling review batches with `NO_CURRENT_SNAPSHOT` decisions. |
 | Batch limit | The selection query filters to eligible candidates, orders by `marketplace_listing_id`, and applies `lego.bricklink.pricing.decision.batch-size`. |
 
@@ -809,6 +810,37 @@ GET /internal/bricklink/pricing/maintenance-report?limit=100
 ```
 
 This is a dry-run diagnostic report. It does not delete, requeue, archive, or otherwise mutate Pricing Plane data.
+
+### BrickLink Pricing Data-Quality Report
+
+Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingMaintenanceReportController`
+
+Endpoint:
+
+```text
+GET /internal/bricklink/pricing/data-quality-report?limit=100
+```
+
+Read-only. It lists BrickLink listings in `lego.bricklink.pricing.crawl.priceable-listing-status-codes` (default `ACTIVE`, `DRAFT`) whose inventory or catalog data is missing something the Pricing Plane needs, so the data can be fixed before the listing is crawled or priced. `limit` is capped at 500; `summary` always counts every listing.
+
+| Field | Meaning |
+| --- | --- |
+| `summary.listingsChecked` | Listings in the priceable statuses. |
+| `summary.listingsWithGaps` | Listings with at least one gap. Each gap below is also counted on its own. |
+| `gaps[]` | Up to `limit` listings with a gap, lowest `marketplaceListingId` first. Each row carries the raw inventory and catalog values, the status of the listing's most recent crawl work item (`latestCrawlStatusCode`), and one flag per gap. |
+
+| Gap flag | Condition | Effect |
+| --- | --- | --- |
+| `missingCondition` | `item_inventory.new_or_used` is blank or not `N`/`NEW`/`U`/`USED`. | Never crawled; non-fixed listings never priced. |
+| `missingCompleteness` | `item_inventory.completeness` is blank. | Never crawled; non-fixed listings never priced. |
+| `missingCatalogItem` | `marketplace_listing.external_catalog_item_id` is NULL. | Never crawled or priced. |
+| `missingItemNumber` | The catalog item's `external_item_key` is blank. | Crawl work ends `SKIPPED_MISSING_ITEM_NUMBER`. |
+| `missingItemType` | The catalog item's `item_type_code` is blank. | The crawl falls back to `catalog-item-type` (default `S`); wrong for non-set items. |
+| `missingInternalItemId` | The catalog item's `external_unique_key` (BrickLink `idItem`) is blank. | The crawl looks it up first. Together with a `FAILED_ITEM_ID_LOOKUP_*` `latestCrawlStatusCode` it is a hydration failure that needs a catalog fix. |
+| `missingBoxGrade` | A used item has no `item_inventory.box_condition_id`. | Priced as if it has no box (lower target percentile). |
+| `missingInstructionsGrade` | A used item has no `item_inventory.instructions_condition_id`. | Priced as if it has no instructions. |
+
+Box and instructions grades are checked for used items only; new items are priced without them. A grade of `MS` (missing) or `NA` (not applicable) is a recorded answer, not a gap.
 
 ### BrickLink Pricing Apply Preview Reports
 
@@ -3183,7 +3215,7 @@ order by ai.sort_order;
 | Pricing crawl schedules work but makes no AJAX calls | Newly created work has `next_attempt_at` in the future or no pending work is currently due | Check `pricing_crawl_work_item.next_attempt_at`, `schedule-spread-window`, blackout settings, and `worker-batch-size`. |
 | Pricing crawl repeatedly re-crawls the same listings | `crawl-cadence` is too short or terminal work rows have past `next_attempt_at` values | Increase `crawl-cadence` and check recent `pricing_crawl_work_item` rows for the listing. |
 | Pricing crawl leaves rows in `CLAIMED` | JVM stopped or failed after claim and before completion | Rows older than `claim-stale-after` are requeued on a later run if attempts remain. |
-| Pricing crawl writes many `SKIPPED_MISSING_CONDITION` work items | `item_inventory.new_or_used` is null or not `N`/`NEW`/`U`/`USED` | Fix inventory condition data before crawling that listing. |
+| A listing never gets a pricing crawl | Its inventory has no recognised condition or no completeness, or it has no catalog item | Run `GET /internal/bricklink/pricing/data-quality-report` and fix the flagged fields. |
 | Pricing crawl writes `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | BrickLink `searchproduct.ajax` could not match `external_catalog_item.external_item_key` for the selected item type | Verify `external_catalog_item.external_item_key`, `external_catalog_item.item_type_code`, and the configured fallback `catalog-item-type` for rows missing an item type. |
 | Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. This can be valid sparse-market behavior. |
 | Pricing crawl sees `catalogifs.ajax ... returned []` as an HTTP failure | BrickLink answers "no lots for sale" with an HTTP 4xx whose body is empty or `[]` | `bricklink-ajax` (2.0.0-SNAPSHOT from HOMELAB-25 on) returns an empty result for that answer, so the crawler writes a successful zero-comparable snapshot. A `FAILED_PRICING_HTTP_ERROR` with that text means an older `bricklink-ajax` is on the classpath, or the status was 429 or 5xx (never treated as "no lots"). Review `zeroComparableSnapshotsWritten` and the latest `pricing_snapshot.comparable_count=0` rows. |

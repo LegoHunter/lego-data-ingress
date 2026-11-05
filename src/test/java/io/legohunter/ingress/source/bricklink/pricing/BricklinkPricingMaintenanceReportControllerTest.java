@@ -34,6 +34,28 @@ class BricklinkPricingMaintenanceReportControllerTest {
     }
 
     @Test
+    void dataQualityReportReturnsServiceReport() {
+        BricklinkPricingMaintenanceReportService service = mock(BricklinkPricingMaintenanceReportService.class);
+        BricklinkPricingDataQualityReport expected = new BricklinkPricingDataQualityReport(
+                ZonedDateTime.parse("2026-11-04T12:00:00Z"),
+                Set.of("ACTIVE"),
+                25,
+                null,
+                Set.of()
+        );
+        when(service.buildDataQualityReport(25)).thenReturn(expected);
+
+        BricklinkPricingMaintenanceReportController controller = new BricklinkPricingMaintenanceReportController(
+                service,
+                mock(BricklinkPricingApplyPreviewService.class)
+        );
+        ResponseEntity<BricklinkPricingDataQualityReport> response = controller.dataQualityReport(25);
+
+        assertThat(response.getBody()).isSameAs(expected);
+        verify(service).buildDataQualityReport(25);
+    }
+
+    @Test
     void applyPreviewReturnsServiceReport() {
         BricklinkPricingMaintenanceReportService maintenanceService = mock(BricklinkPricingMaintenanceReportService.class);
         BricklinkPricingApplyPreviewService applyPreviewService = mock(BricklinkPricingApplyPreviewService.class);

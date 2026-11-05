@@ -5,6 +5,8 @@ import io.legohunter.data.dao.PricingCrawlWorkItemDao;
 import io.legohunter.data.dto.PricingCrawlWorkItemDuplicate;
 import io.legohunter.data.dto.PricingCrawlWorkItemFailure;
 import io.legohunter.data.dto.PricingCrawlWorkItemMaintenanceSummary;
+import io.legohunter.data.dto.PricingDataQualityGap;
+import io.legohunter.data.dto.PricingDataQualitySummary;
 import io.legohunter.data.dto.PricingHydrationGap;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -44,6 +46,22 @@ public class BricklinkPricingMaintenanceReportService {
                 effectiveLimit
         );
         return new BricklinkPricingMaintenanceReport(generatedAt, true, summary, duplicateWorkItems, recentFailures, hydrationGaps);
+    }
+
+    public BricklinkPricingDataQualityReport buildDataQualityReport(int limit) {
+        int effectiveLimit = Math.min(MAX_REPORT_LIMIT, Math.max(1, limit));
+        Integer serviceId = crawlProperties.getBricklinkExternalServiceId();
+        Set<String> statusCodes = crawlProperties.effectivePriceableListingStatusCodes();
+        PricingDataQualitySummary summary = marketplaceListingDao.summarizePricingDataQualityByListingExternalServiceIdAndListingStatusCodes(
+                serviceId,
+                statusCodes
+        );
+        Set<PricingDataQualityGap> gaps = marketplaceListingDao.findPricingDataQualityGapsByListingExternalServiceIdAndListingStatusCodes(
+                serviceId,
+                statusCodes,
+                effectiveLimit
+        );
+        return new BricklinkPricingDataQualityReport(now(), statusCodes, effectiveLimit, summary, gaps);
     }
 
     private ZonedDateTime now() {

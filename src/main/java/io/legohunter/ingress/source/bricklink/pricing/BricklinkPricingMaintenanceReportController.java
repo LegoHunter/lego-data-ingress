@@ -23,6 +23,12 @@ public class BricklinkPricingMaintenanceReportController {
         return ResponseEntity.ok(maintenanceReportService.buildReport(limit));
     }
 
+    @GetMapping("/data-quality-report")
+    @Operation(summary = "List priceable listings whose inventory or catalog data is missing fields the Pricing Plane needs.")
+    public ResponseEntity<BricklinkPricingDataQualityReport> dataQualityReport(@RequestParam(defaultValue = "100") int limit) {
+        return ResponseEntity.ok(maintenanceReportService.buildDataQualityReport(limit));
+    }
+
     @GetMapping("/apply-preview")
     @Operation(summary = "Build a dry-run Pricing Plane apply-readiness preview report.")
     public ResponseEntity<BricklinkPricingApplyPreviewReport> applyPreview(

@@ -799,6 +799,7 @@ The read-only diagnostic endpoints are:
 
 ```http
 GET /internal/bricklink/pricing/maintenance-report?limit=100
+GET /internal/bricklink/pricing/data-quality-report?limit=100
 GET /internal/bricklink/pricing/apply-preview?readinessStatusCode=READY_TO_APPLY&limit=100
 GET /internal/bricklink/pricing/apply-preview?blockReasonCode=NO_CURRENT_SNAPSHOT&limit=100
 GET /internal/bricklink/pricing/apply-selection/dry-run?limit=100
