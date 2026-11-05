@@ -842,6 +842,16 @@ Read-only. It lists BrickLink listings in `lego.bricklink.pricing.crawl.priceabl
 
 Box and instructions grades are checked for used items only; new items are priced without them. A grade of `MS` (missing) or `NA` (not applicable) is a recorded answer, not a gap.
 
+The same counts are exported as Prometheus gauges, refreshed by `BricklinkPricingDataQualityMetrics` after every pricing crawl job run (one aggregate query per run, not per scrape). They are shown on the `lego-data-ingress` Grafana dashboard, Pricing Plane row, as **Listings with Data Gaps** and **Pricing Data Gaps by Type**.
+
+| Meter | Type | Tags | Description |
+| --- | --- | --- | --- |
+| `bricklink_pricing_data_quality_gaps_current` | Gauge | `gap` | Listings with that gap: `condition`, `completeness`, `catalog_item`, `item_number`, `item_type`, `internal_item_id`, `box_grade`, `instructions_grade`. |
+| `bricklink_pricing_data_quality_listings_current` | Gauge | `scope` | `checked` (listings in the priceable statuses) and `with_gaps` (listings with at least one gap). |
+| `bricklink_pricing_data_quality_last_refresh_timestamp_seconds` | Gauge | none | Epoch seconds of the last refresh; 0 until the first crawl run after start-up. |
+
+Every series is registered at start-up and reports 0 until the first refresh; a failed refresh logs `bricklink.pricing.data_quality.metrics_refresh_failed` and keeps the previous values. When the crawl job is disabled the gauges are never refreshed, so check the last-refresh timestamp before trusting a 0.
+
 ### BrickLink Pricing Apply Preview Reports
 
 Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingMaintenanceReportController`
