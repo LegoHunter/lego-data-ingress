@@ -5,6 +5,8 @@ import io.legohunter.data.dao.PricingCrawlWorkItemDao;
 import io.legohunter.data.dto.PricingCrawlWorkItemDuplicate;
 import io.legohunter.data.dto.PricingCrawlWorkItemFailure;
 import io.legohunter.data.dto.PricingCrawlWorkItemMaintenanceSummary;
+import io.legohunter.data.dto.PricingDataQualityGap;
+import io.legohunter.data.dto.PricingDataQualitySummary;
 import io.legohunter.data.dto.PricingHydrationGap;
 import org.junit.jupiter.api.Test;
 
@@ -71,6 +73,46 @@ class BricklinkPricingMaintenanceReportServiceTest {
         verify(workItemDao).findDuplicateMarketplaceListingWorkItems("PENDING", "CLAIMED", 1);
         verify(workItemDao).findRecentFailures(1);
         verify(marketplaceListingDao).findPricingHydrationGapsByListingExternalServiceIdAndListingStatusCode(7, "ACTIVE", 1);
+    }
+
+    @Test
+    void buildDataQualityReportUsesPriceableStatusesAndCapsTheLimit() {
+        MarketplaceListingDao marketplaceListingDao = mock(MarketplaceListingDao.class);
+        BricklinkPricingCrawlProperties properties = new BricklinkPricingCrawlProperties();
+        properties.setBricklinkExternalServiceId(7);
+        properties.setPriceableListingStatusCodes(Set.of("active", "draft"));
+
+        PricingDataQualitySummary summary = PricingDataQualitySummary.builder()
+                .listingsChecked(12)
+                .listingsWithGaps(1)
+                .missingBoxGrade(1)
+                .build();
+        PricingDataQualityGap gap = PricingDataQualityGap.builder()
+                .marketplaceListingId(42)
+                .newOrUsed("U")
+                .missingBoxGrade(true)
+                .build();
+        when(marketplaceListingDao.summarizePricingDataQualityByListingExternalServiceIdAndListingStatusCodes(7, Set.of("ACTIVE", "DRAFT")))
+                .thenReturn(summary);
+        when(marketplaceListingDao.findPricingDataQualityGapsByListingExternalServiceIdAndListingStatusCodes(
+                7,
+                Set.of("ACTIVE", "DRAFT"),
+                BricklinkPricingMaintenanceReportService.MAX_REPORT_LIMIT
+        )).thenReturn(Set.of(gap));
+
+        BricklinkPricingMaintenanceReportService service = new BricklinkPricingMaintenanceReportService(
+                mock(PricingCrawlWorkItemDao.class),
+                marketplaceListingDao,
+                properties
+        );
+
+        BricklinkPricingDataQualityReport report = service.buildDataQualityReport(10_000);
+
+        assertThat(report.generatedAt()).isNotNull();
+        assertThat(report.listingStatusCodes()).containsExactlyInAnyOrder("ACTIVE", "DRAFT");
+        assertThat(report.limit()).isEqualTo(BricklinkPricingMaintenanceReportService.MAX_REPORT_LIMIT);
+        assertThat(report.summary()).isSameAs(summary);
+        assertThat(report.gaps()).containsExactly(gap);
     }
 
     @Test

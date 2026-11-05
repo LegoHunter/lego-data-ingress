@@ -31,11 +31,13 @@ class BricklinkPricingCrawlJobTest {
         when(crawlService.runOnce()).thenReturn(expected);
 
         BricklinkPricingMetricsService metricsService = mock(BricklinkPricingMetricsService.class);
-        BricklinkPricingCrawlJob job = new BricklinkPricingCrawlJob(crawlService, metricsService);
+        BricklinkPricingDataQualityMetrics dataQualityMetrics = mock(BricklinkPricingDataQualityMetrics.class);
+        BricklinkPricingCrawlJob job = new BricklinkPricingCrawlJob(crawlService, metricsService, dataQualityMetrics);
         BricklinkPricingCrawlResult result = job.runOnce();
 
         assertThat(result).isEqualTo(expected);
         verify(crawlService).runOnce();
         verify(metricsService).recordCrawl(expected);
+        verify(dataQualityMetrics).refresh();
     }
 }
