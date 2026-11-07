@@ -1,4 +1,4 @@
-package io.legohunter.ingress.common.storage.model.s3.minio;
+package io.legohunter.ingress.common.storage.model.s3.event;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -11,11 +11,13 @@ public record ResponseElements(
         @JsonProperty("x-amz-request-id")
         String xAmzRequestId,
 
+        // The S3 server (Silo) still sends these two headers with their x-minio- names; they are
+        // part of its compatibility interface.
         @JsonProperty("x-minio-deployment-id")
-        String xMinioDeploymentId,
+        String serverDeploymentId,
 
         @JsonProperty("x-minio-origin-endpoint")
-        String xMinioOriginEndpoint,
+        String serverOriginEndpoint,
 
         @JsonProperty("content-length")
         long contentLength

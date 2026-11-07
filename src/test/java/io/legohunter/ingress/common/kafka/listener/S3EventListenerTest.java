@@ -3,7 +3,7 @@ package io.legohunter.ingress.common.kafka.listener;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
 import io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent;
-import io.legohunter.ingress.upload.router.ObjectStorageEventRouter;
+import io.legohunter.ingress.upload.router.S3EventRouter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,16 +21,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
-class MinioS3EventListenerTest {
+class S3EventListenerTest {
 
     @Mock
-    private ObjectStorageEventRouter objectStorageEventRouter;
+    private S3EventRouter s3EventRouter;
 
-    private MinioS3EventListener listener;
+    private S3EventListener listener;
 
     @BeforeEach
     void setUp() {
-        listener = new MinioS3EventListener(objectStorageEventRouter, new ObjectMapper());
+        listener = new S3EventListener(s3EventRouter, new ObjectMapper());
     }
 
     @Test
@@ -42,7 +42,7 @@ class MinioS3EventListenerTest {
         ));
 
         ArgumentCaptor<ObjectUploadedEvent> captor = ArgumentCaptor.forClass(ObjectUploadedEvent.class);
-        verify(objectStorageEventRouter)
+        verify(s3EventRouter)
                 .routeUpload(captor.capture());
 
         assertThat(captor.getValue())
@@ -62,7 +62,7 @@ class MinioS3EventListenerTest {
     }
 
     @Test
-    void handleS3Event_ignoresUnknownMinioFields() {
+    void handleS3Event_ignoresUnknownServerFields() {
         listener.handleS3Event("""
                 {
                   "EventName": "s3:ObjectCreated:Put",
@@ -94,7 +94,7 @@ class MinioS3EventListenerTest {
                 """);
 
         ArgumentCaptor<ObjectUploadedEvent> captor = ArgumentCaptor.forClass(ObjectUploadedEvent.class);
-        verify(objectStorageEventRouter)
+        verify(s3EventRouter)
                 .routeUpload(captor.capture());
 
         assertThat(captor.getValue())
@@ -119,7 +119,7 @@ class MinioS3EventListenerTest {
         ));
 
         ArgumentCaptor<ObjectDeletedEvent> captor = ArgumentCaptor.forClass(ObjectDeletedEvent.class);
-        verify(objectStorageEventRouter)
+        verify(s3EventRouter)
                 .routeDelete(captor.capture());
 
         assertThat(captor.getValue())
@@ -146,13 +146,13 @@ class MinioS3EventListenerTest {
                 "3001%2Fuuid%2F0123456789abcdef0123456789abcdef.jpg"
         ));
 
-        verifyNoInteractions(objectStorageEventRouter);
+        verifyNoInteractions(s3EventRouter);
     }
 
     @Test
     void handleS3Event_doesNotFailWhenRouterRejectsRecord() {
         doThrow(new IllegalArgumentException("unsupported"))
-                .when(objectStorageEventRouter)
+                .when(s3EventRouter)
                 .routeDelete(any(ObjectDeletedEvent.class));
 
         assertThatCode(() -> listener.handleS3Event(payload(
@@ -162,9 +162,9 @@ class MinioS3EventListenerTest {
         )))
                 .doesNotThrowAnyException();
 
-        verify(objectStorageEventRouter)
+        verify(s3EventRouter)
                 .routeDelete(any(ObjectDeletedEvent.class));
-        verify(objectStorageEventRouter, never())
+        verify(s3EventRouter, never())
                 .routeUpload(any(ObjectUploadedEvent.class));
     }
 

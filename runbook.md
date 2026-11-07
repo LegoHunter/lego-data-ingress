@@ -24,7 +24,7 @@ The service defaults to the `local,sandbox` profiles unless overridden by `sprin
 
 | Area | Mode | Purpose |
 | --- | --- | --- |
-| Photo ingestion | Kafka/S3 event driven | Process uploaded MinIO photo objects into durable DB photo metadata and object-storage state. |
+| Photo ingestion | Kafka/S3 event driven | Process uploaded S3 photo objects into durable DB photo metadata and S3 state. |
 | Photo delete reconciliation | Kafka/S3 event driven | React to final photo object removals. |
 | BrickLink catalog ingestion | Kafka/S3 event driven | Parse BrickLink XML catalog/category files and upsert external catalog/category tables. |
 | Rebrickable catalog ingestion | Kafka/S3 event driven | Parse Rebrickable gzipped CSV catalog/theme files and upsert external catalog/category tables. |
@@ -92,7 +92,7 @@ shared SANDBOX settings used by local development.
 | `management.defaults.metrics.export.enabled` | `false` | Disables default metrics export locally. |
 | `logging.level.root` | `INFO` | Default local log level. |
 | `logging.level.com.bricklink.api` | `DEBUG` | Enables BrickLink REST debug logs locally. |
-| `lego.minio.url` | `https://api.minio.dev.internal.legohunter.io` | Local MinIO URL. |
+| `lego.s3.url` | `https://api.minio.dev.internal.legohunter.io` | S3 URL for local runs (minio-dev until silo-dev replaces it). |
 
 ### Sandbox Profile
 
@@ -102,7 +102,7 @@ shared SANDBOX settings used by local development.
 |---------------------------------| --- | --- |
 | `database-configuration.yml`    | DB access | `lego.data`, `lego.databases`, datasource-related settings. |
 | `kafka-configuration.yml`       | Kafka auth | `lego.kafka.consumer.username/password`, `lego.kafka.producer.username/password`. |
-| `minio-configuration.yml`       | S3/MinIO access | `lego.minio.access-key`, `lego.minio.secret-key`. |
+| `s3-configuration.yml`          | S3 access | `lego.s3.access-key`, `lego.s3.secret-key`. |
 | `flickr-configuration.yml`      | Flickr image hosting | `flickr.user-id`, `flickr.secrets.*`, optional debug flags. |
 | `bitly-configuration.yml`       | Short URLs for image-hosting apply | `bitly.base-url`, `bitly.access-token`, `bitly.group-guid`. |
 | `bricklink-client-api-keys.yml` | BrickLink REST order sync | `bricklink.rest.consumer.*`, `bricklink.rest.token.*`. |
@@ -124,7 +124,10 @@ All imports are plain `file:` imports, so missing files fail startup unless the 
 | `management.endpoint.health.group.readiness.include` | `readinessState,db,imageHostingReadiness` | Readiness group contents. |
 | `management.tracing.sampling.probability` | `1.0` | Samples all traces when tracing is enabled by the runtime. |
 | `kafka.properties.security.protocol` | `SASL_PLAINTEXT` | Cluster-internal Kafka security protocol override. |
-| `lego.minio.url` | `http://minio.minio-dev.svc.cluster.local` | Cluster-internal MinIO URL. |
+
+The S3 URL is not in the shared `kubernetes` profile. Each environment profile sets its own
+`lego.s3.url`: SANDBOX and DEV use `http://minio.minio-dev.svc.cluster.local` until silo-dev replaces
+minio-dev, and PROD uses `http://silo-prod.silo-prod.svc.cluster.local:9000`.
 
 ## REST Controllers
 
@@ -1345,23 +1348,24 @@ Rules:
 | Hyphenated Kafka property keys | Converted to dotted Kafka client keys, for example `max-poll-records` becomes `max.poll.records`. |
 | Sensitive properties | `sasl.jaas.config`, SSL passwords, and key passwords are masked in registrar logs. |
 
-### MinIO S3 Event Router
+### S3 Event Router
 
-Listener: `MinioS3EventListener`
+Listener: `S3EventListener`
 
 Input topic:
 
 ```yaml
-kafka.topic-configuration.minio-s3.topics
+kafka.topic-configuration.s3-events.topics
 ```
 
 Group id:
 
 ```yaml
-kafka.topic-configuration.minio-s3.consumer.group-id
+kafka.topic-configuration.s3-events.consumer.group-id
 ```
 
-Container factory: `minioS3ContainerFactory`
+Container factory: `s3EventsContainerFactory`. Router: `S3EventRouter`, which publishes through
+`s3EventRoutingKafkaTemplate` (topic id `s3-event-routing`).
 
 Routing rules:
 
@@ -1382,9 +1386,9 @@ Unsupported object events are logged as warnings and are not routed.
 | --- | --- | --- | --- |
 | Photo upload | `PhotoUploadS3EventListener` | `upload-photo.topic` | Calls `PhotoProcessingService.process(PhotoUploadEvent)`. |
 | Photo delete | `PhotoDeletedS3EventListener` | `delete-photo.topic` | Calls `PhotoDeletionService.process(ObjectDeletedEvent)`. |
-| BrickLink catalog file split | `BricklinkCatalogS3EventListener` | `upload-bricklink-catalog.topic` | Reads XML from MinIO and publishes one `CatalogEntry` per `ITEM` to `bricklink-catalog-entry.topic`. |
+| BrickLink catalog file split | `BricklinkCatalogS3EventListener` | `upload-bricklink-catalog.topic` | Reads XML from S3 and publishes one `CatalogEntry` per `ITEM` to `bricklink-catalog-entry.topic`. |
 | BrickLink catalog DB upsert | `BricklinkCatalogEntryConsumer` | `bricklink-catalog-entry.topic` | Upserts `external_catalog_item` and category link when category exists. |
-| BrickLink category file split | `BricklinkCategoryS3EventListener` | `upload-bricklink-category.topic` | Reads XML from MinIO and publishes one `CategoryEntry` per `ITEM` to `bricklink-category-entry.topic`. |
+| BrickLink category file split | `BricklinkCategoryS3EventListener` | `upload-bricklink-category.topic` | Reads XML from S3 and publishes one `CategoryEntry` per `ITEM` to `bricklink-category-entry.topic`. |
 | BrickLink category DB upsert | `BricklinkCategoryEntryConsumer` | `bricklink-category-entry.topic` | Upserts `external_category`. |
 | Rebrickable catalog file split | `RebrickableCatalogS3EventListener` | `upload-rebrickable-catalog.topic` | Reads gzipped CSV and publishes one `RebrickableCatalogEntry` per row to `rebrickable-catalog-entry.topic`. |
 | Rebrickable catalog DB upsert | `RebrickableCatalogEntryConsumer` | `rebrickable-catalog-entry.topic` | Upserts `external_catalog_item` and category link when category exists. |
@@ -1798,17 +1802,19 @@ Backed by `lego-imaging` `BitlyProperties`.
 | `bitly.oauth2.client-id` | None | Secret string | OAuth2 client id, currently not used by the readiness check. |
 | `bitly.oauth2.client-secret` | None | Secret string | OAuth2 client secret, currently not used by the readiness check. |
 
-### `lego.minio.*`
+### `lego.s3.*`
 
-Backed by `S3ClientProperties`.
+Backed by `S3ClientProperties` (connection) and `S3BucketProperties` (buckets). The store is Silo, a
+MinIO fork; the client is the MinIO Java SDK (`io.minio:minio`).
 
 | Property | Default | Valid values | Description |
 | --- | --- | --- | --- |
-| `lego.minio.url` | Local/Kubernetes profile sets environment-specific URL | Absolute URI | MinIO/S3 endpoint. |
-| `lego.minio.access-key` | None | Secret string | MinIO access key. |
-| `lego.minio.secret-key` | None | Secret string | MinIO secret key. |
+| `lego.s3.url` | Each environment profile sets its own | Absolute URI | S3 endpoint. |
+| `lego.s3.access-key` | None | Secret string | S3 access key (from `s3-configuration.yml`). |
+| `lego.s3.secret-key` | None | Secret string | S3 secret key (from `s3-configuration.yml`). |
+| `lego.s3.buckets.final-photo` | None; startup fails if blank | Bucket name | Bucket that holds the final scaled photos, `lego-photos-<env>`. |
 
-`lego.minio.url`, `access-key`, and `secret-key` are required by image-hosting readiness when image-hosting sync runtime is required.
+`lego.s3.url`, `access-key`, and `secret-key` are required by image-hosting readiness when image-hosting sync runtime is required.
 
 ### `kafka.*`
 
@@ -1822,7 +1828,7 @@ Backed by `KafkaCustomProperties` and Spring Kafka properties.
 | `kafka.consumer-defaults.*` | Sandbox defines deserializers/auth | Spring Kafka consumer properties | Defaults merged into every topic consumer. |
 | `kafka.producer-defaults.*` | Sandbox defines serializers/retries/auth | Spring Kafka producer properties | Defaults merged into every topic producer. |
 | `kafka.topic-configuration.<id>.topic` | Topic-specific | Single topic name | Used by most listeners/templates. |
-| `kafka.topic-configuration.<id>.topics` | Topic-specific | Comma-separated or YAML list of topic names | Used by listeners that subscribe to multiple topics, such as `minio-s3`. |
+| `kafka.topic-configuration.<id>.topics` | Topic-specific | Comma-separated or YAML list of topic names | Used by listeners that subscribe to multiple topics, such as `s3-events`. |
 | `kafka.topic-configuration.<id>.consumer.group-id` | Topic-specific | String | Consumer group id. |
 | `kafka.topic-configuration.<id>.consumer.concurrency` | Topic-specific | Integer | Used only where the listener annotation references it. Currently `upload-photo`. |
 | `kafka.topic-configuration.<id>.consumer.properties.*` | Topic-specific | Kafka/Spring Kafka properties | Per-topic consumer overrides. Hyphens are converted to dots. |
@@ -1832,8 +1838,8 @@ Sandbox topic ids currently configured:
 
 | Topic id | Role |
 | --- | --- |
-| `minio-s3` | Raw MinIO S3 event input. |
-| `upload-minio-s3` | Producer for routed upload/delete events. |
+| `s3-events` | Raw S3 bucket-event input (`<env>-s3-events`). |
+| `s3-event-routing` | Producer for routed upload/delete events. |
 | `upload-photo` | Routed photo upload events. |
 | `delete-photo` | Routed photo delete events. |
 | `upload-bricklink-catalog` | Routed BrickLink catalog file events. |
@@ -1875,7 +1881,7 @@ Checks:
 | --- | --- | --- |
 | `scheduled-sync` | Required if `require-scheduled-sync-enabled=true`; otherwise warning when disabled | Scheduled sync enabled, batch size > 0, concurrency > 0. |
 | `database` | Required if scheduled sync is enabled or required | `spring.datasource.database-key-name` and `DataSource` bean. |
-| `s3` | Required if scheduled sync is enabled or required | `lego.minio.url`, `lego.minio.access-key`, `lego.minio.secret-key`. |
+| `s3` | Required if scheduled sync is enabled or required | `lego.s3.url`, `lego.s3.access-key`, `lego.s3.secret-key`. |
 | `flickr` | Required if scheduled sync is enabled or required | Flickr provider config, external service id, user id, and secrets. |
 | `bitly` | Required if scheduled sync enabled, apply enabled, and `require-bitly-when-apply-enabled=true` | Bitly base URL, access token, and group GUID. |
 
@@ -2382,7 +2388,7 @@ Set `enabled=false` if the job should stop entirely. Existing ShipStation orders
 2. Confirm `/actuator/health/readiness` is `UP` or only has expected non-required warnings.
 3. Watch `image_hosting.sync_job.candidates_selected` for candidate counts.
 4. Review `image_hosting.sync_job.inventory_planned` to confirm planned action volume.
-5. Confirm Flickr credentials and MinIO credentials are present.
+5. Confirm Flickr credentials and S3 credentials are present.
 6. Confirm Bitly credentials are present before enabling apply because album short URLs may be created or recovered.
 7. Set `lego.image-hosting.sync.scheduled.apply=true` only after dry-run plans look correct.
 8. Watch `image_hosting.sync_job.inventory_completed`, `image_hosting.album_*`, and `image_hosting.short_url` logs.

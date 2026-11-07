@@ -20,7 +20,7 @@ logging:
 lego:
   environment:
     code: local
-  minio:
+  s3:
     url: https://api.minio.dev.internal.legohunter.io
   bricklink:
     orders:

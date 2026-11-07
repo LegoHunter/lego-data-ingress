@@ -2,7 +2,7 @@ package io.legohunter.ingress.upload.router;
 
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
 import io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent;
-import io.legohunter.ingress.config.storage.ObjectStorageProperties;
+import io.legohunter.ingress.config.storage.S3BucketProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
 
 @Slf4j
 @Component
-public class ObjectStorageEventRouter {
+public class S3EventRouter {
 
     private static final String PHOTO_UPLOAD_PREFIX = "photos/";
     private static final String REJECTED_PHOTO_PREFIX = "photos/rejected/";
@@ -21,15 +21,15 @@ public class ObjectStorageEventRouter {
     private static final String JPEG_EXTENSION = ".jpg";
     private static final Pattern MD5_PATTERN = Pattern.compile("^[a-fA-F0-9]{32}$");
 
-    private final KafkaTemplate<String, Object> uploadMinioS3KafkaTemplate;
-    private final ObjectStorageProperties objectStorageProperties;
+    private final KafkaTemplate<String, Object> s3EventRoutingKafkaTemplate;
+    private final S3BucketProperties s3BucketProperties;
 
-    public ObjectStorageEventRouter(
-            @Qualifier("uploadMinioS3KafkaTemplate")
-            KafkaTemplate<String, Object> uploadMinioS3KafkaTemplate,
-            ObjectStorageProperties objectStorageProperties) {
-        this.uploadMinioS3KafkaTemplate = uploadMinioS3KafkaTemplate;
-        this.objectStorageProperties = objectStorageProperties;
+    public S3EventRouter(
+            @Qualifier("s3EventRoutingKafkaTemplate")
+            KafkaTemplate<String, Object> s3EventRoutingKafkaTemplate,
+            S3BucketProperties s3BucketProperties) {
+        this.s3EventRoutingKafkaTemplate = s3EventRoutingKafkaTemplate;
+        this.s3BucketProperties = s3BucketProperties;
     }
 
     @Value("${kafka.topic-configuration.upload-photo.topic}")
@@ -57,7 +57,7 @@ public class ObjectStorageEventRouter {
 
         if (isPhotoUploadKey(key)) {
             log.info("Routing upload event {} with key {} to {}", event, key, photoUploadTopic);
-            uploadMinioS3KafkaTemplate.send(photoUploadTopic, key, event);
+            s3EventRoutingKafkaTemplate.send(photoUploadTopic, key, event);
             return;
         }
 
@@ -74,9 +74,9 @@ public class ObjectStorageEventRouter {
         String bucket = event.getBucket();
         String key = event.getKey();
 
-        if (objectStorageProperties.finalPhotoBucket().equals(bucket) && isFinalPhotoKey(key)) {
+        if (s3BucketProperties.finalPhotoBucket().equals(bucket) && isFinalPhotoKey(key)) {
             log.info("Routing delete event {} with key {} to {}", event, key, photoDeleteTopic);
-            uploadMinioS3KafkaTemplate.send(photoDeleteTopic, key, event);
+            s3EventRoutingKafkaTemplate.send(photoDeleteTopic, key, event);
             return;
         }
 
@@ -90,25 +90,25 @@ public class ObjectStorageEventRouter {
 
         if (key.startsWith("bricklink/catalog/")) {
             log.info("Routing upload event {} with key {} to {}", event, key, bricklinkCatalogTopic);
-            uploadMinioS3KafkaTemplate.send(bricklinkCatalogTopic, key, event);
+            s3EventRoutingKafkaTemplate.send(bricklinkCatalogTopic, key, event);
             return;
         }
 
         if (key.startsWith("bricklink/category/")) {
             log.info("Routing upload event {} with key {} to {}", event, key, bricklinkCategoryTopic);
-            uploadMinioS3KafkaTemplate.send(bricklinkCategoryTopic, key, event);
+            s3EventRoutingKafkaTemplate.send(bricklinkCategoryTopic, key, event);
             return;
         }
 
         if (key.startsWith("rebrickable/catalog/")) {
             log.info("Routing upload event {} with key {} to {}", event, key, rebrickableCatalogTopic);
-            uploadMinioS3KafkaTemplate.send(rebrickableCatalogTopic, key, event);
+            s3EventRoutingKafkaTemplate.send(rebrickableCatalogTopic, key, event);
             return;
         }
 
         if (key.startsWith("rebrickable/category/")) {
             log.info("Routing upload event {} with key {} to {}", event, key, rebrickableThemeTopic);
-            uploadMinioS3KafkaTemplate.send(rebrickableThemeTopic, key, event);
+            s3EventRoutingKafkaTemplate.send(rebrickableThemeTopic, key, event);
             return;
         }
 

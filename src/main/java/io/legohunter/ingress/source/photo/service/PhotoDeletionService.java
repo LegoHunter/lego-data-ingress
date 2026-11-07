@@ -1,7 +1,7 @@
 package io.legohunter.ingress.source.photo.service;
 
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
-import io.legohunter.ingress.config.storage.ObjectStorageProperties;
+import io.legohunter.ingress.config.storage.S3BucketProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
@@ -21,7 +21,7 @@ public class PhotoDeletionService {
     private static final Pattern MD5_PATTERN = Pattern.compile("^[a-fA-F0-9]{32}$");
 
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
-    private final ObjectStorageProperties objectStorageProperties;
+    private final S3BucketProperties s3BucketProperties;
 
     public void process(ObjectDeletedEvent event) {
 
@@ -84,7 +84,7 @@ public class PhotoDeletionService {
     }
 
     String extractMd5(String key) {
-        validateFinalPhotoDelete(objectStorageProperties.finalPhotoBucket(), key);
+        validateFinalPhotoDelete(s3BucketProperties.finalPhotoBucket(), key);
 
         String filename = key.split("/")[2];
         String md5 = filename.substring(0, filename.length() - JPEG_EXTENSION.length());
@@ -97,7 +97,7 @@ public class PhotoDeletionService {
     }
 
     private void validateFinalPhotoDelete(String bucket, String key) {
-        if (!objectStorageProperties.finalPhotoBucket().equals(bucket)) {
+        if (!s3BucketProperties.finalPhotoBucket().equals(bucket)) {
             throw new IllegalArgumentException("Unsupported photo delete bucket [%s]".formatted(bucket));
         }
 

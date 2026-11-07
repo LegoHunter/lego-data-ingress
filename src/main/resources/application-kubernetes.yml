@@ -29,8 +29,6 @@ kafka:
     security.protocol: SASL_PLAINTEXT
 
 lego:
-  minio:
-    url: http://minio.minio-dev.svc.cluster.local
   bricklink:
     pricing:
       crawl:

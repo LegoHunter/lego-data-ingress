@@ -3,7 +3,7 @@ spring:
     import:
       - file:${import-path}/database-configuration.yml
       - file:${import-path}/kafka-configuration.yml
-      - file:${import-path}/minio-configuration.yml
+      - file:${import-path}/s3-configuration.yml
       - file:${import-path}/flickr-configuration.yml
       - file:${import-path}/bitly-configuration.yml
       - file:${import-path}/bricklink-client-api-keys.yml
@@ -28,7 +28,9 @@ spring:
 lego:
   environment:
     code: dev
-  object-storage:
+  s3:
+    # minio-dev serves SANDBOX and DEV until silo-dev replaces it.
+    url: http://minio.minio-dev.svc.cluster.local
     buckets:
       final-photo: lego-photos-dev
   bricklink:
@@ -98,15 +100,15 @@ kafka:
       # Metadata refresh interval (longer interval reduces churn)
       metadata.max.age.ms: 300000
   topic-configuration:
-    minio-s3:
-      topics: dev-minio-s3-events
+    s3-events:
+      topics: dev-s3-events
       consumer:
-        group-id: dev-minio-s3-events-group
+        group-id: dev-s3-events-group
         properties:
           value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       producer:
         retries: 3
-    upload-minio-s3:
+    s3-event-routing:
       topics: dev-upload-photo, dev-delete-photo, dev-upload-bricklink-catalog, dev-upload-bricklink-category, dev-upload-rebrickable-catalog, dev-upload-rebrickable-theme
       producer:
         retries: 3

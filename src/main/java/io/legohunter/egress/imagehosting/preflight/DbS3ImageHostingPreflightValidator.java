@@ -8,7 +8,7 @@ import io.legohunter.egress.imagehosting.ImageHostingSyncRequest;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingAlbum;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingPhoto;
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateSnapshot;
-import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.s3.api.S3Service;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -24,7 +24,7 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class DbS3ImageHostingPreflightValidator implements ImageHostingPreflightValidator {
-    private final MinioService minioService;
+    private final S3Service s3Service;
 
     @Override
     public ImageHostingPreflightResult validate(ImageHostingDesiredStateSnapshot snapshot, ImageHostingSyncRequest request) {
@@ -158,7 +158,7 @@ public class DbS3ImageHostingPreflightValidator implements ImageHostingPreflight
                     itemInventoryPhotoId,
                     "Inventory photo [%s] must have S3 bucket and key before image hosting sync".formatted(itemInventoryPhotoId)
             ));
-        } else if (!minioService.objectExists(inventoryPhoto.getS3Bucket(), inventoryPhoto.getS3Key())) {
+        } else if (!s3Service.objectExists(inventoryPhoto.getS3Bucket(), inventoryPhoto.getS3Key())) {
             issues.add(issue(
                     ImageHostingPreflightIssueType.S3_OBJECT_MISSING,
                     snapshot.getItemInventoryId(),

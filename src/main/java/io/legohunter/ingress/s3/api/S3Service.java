@@ -2,7 +2,7 @@ package io.legohunter.ingress.s3.api;
 
 import java.io.InputStream;
 
-public interface MinioService {
+public interface S3Service {
 
     InputStream getObject(String bucket, String key);
 

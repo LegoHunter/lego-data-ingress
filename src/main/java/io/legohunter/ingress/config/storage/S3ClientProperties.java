@@ -4,7 +4,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-@ConfigurationProperties(prefix = "lego.minio")
+@ConfigurationProperties(prefix = "lego.s3")
 @Getter
 @Setter
 public class S3ClientProperties {

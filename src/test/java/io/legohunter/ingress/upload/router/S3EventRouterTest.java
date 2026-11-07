@@ -2,7 +2,7 @@ package io.legohunter.ingress.upload.router;
 
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
 import io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent;
-import io.legohunter.ingress.config.storage.ObjectStorageProperties;
+import io.legohunter.ingress.config.storage.S3BucketProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,16 +18,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
-class ObjectStorageEventRouterTest {
+class S3EventRouterTest {
 
     @Mock
     private KafkaTemplate<String, Object> kafkaTemplate;
 
-    private ObjectStorageEventRouter router;
+    private S3EventRouter router;
 
     @BeforeEach
     void setUp() {
-        router = new ObjectStorageEventRouter(kafkaTemplate, objectStorageProperties("lego-photos-sandbox"));
+        router = new S3EventRouter(kafkaTemplate, s3BucketProperties("lego-photos-sandbox"));
 
         ReflectionTestUtils.setField(router, "photoUploadTopic", "sandbox-upload-photo");
         ReflectionTestUtils.setField(router, "photoDeleteTopic", "sandbox-delete-photo");
@@ -139,9 +139,9 @@ class ObjectStorageEventRouterTest {
                 .build();
     }
 
-    private static ObjectStorageProperties objectStorageProperties(String finalPhotoBucket) {
-        ObjectStorageProperties properties = new ObjectStorageProperties();
-        ObjectStorageProperties.Buckets buckets = new ObjectStorageProperties.Buckets();
+    private static S3BucketProperties s3BucketProperties(String finalPhotoBucket) {
+        S3BucketProperties properties = new S3BucketProperties();
+        S3BucketProperties.Buckets buckets = new S3BucketProperties.Buckets();
         buckets.setFinalPhoto(finalPhotoBucket);
         properties.setBuckets(buckets);
         return properties;
