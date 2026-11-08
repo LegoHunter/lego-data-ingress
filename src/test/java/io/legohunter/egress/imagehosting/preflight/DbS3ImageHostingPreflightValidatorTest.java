@@ -9,7 +9,7 @@ import io.legohunter.egress.imagehosting.ImageHostingSyncRequest;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingAlbum;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingPhoto;
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateSnapshot;
-import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.s3.api.S3Service;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -38,33 +38,33 @@ class DbS3ImageHostingPreflightValidatorTest {
             .build();
 
     @Mock
-    private MinioService minioService;
+    private S3Service s3Service;
 
     private DbS3ImageHostingPreflightValidator validator;
 
     @BeforeEach
     void setUp() {
-        validator = new DbS3ImageHostingPreflightValidator(minioService);
+        validator = new DbS3ImageHostingPreflightValidator(s3Service);
     }
 
     @Test
     void validate_acceptsDbDesiredStateWhenPrimaryAndS3ObjectsAreValid() {
         DesiredImageHostingPhoto photo = desiredPhoto(photo(11, true), externalImage(201L, 11, "flickr-photo-11"));
-        when(minioService.objectExists("photos", "100/11.jpg")).thenReturn(true);
+        when(s3Service.objectExists("photos", "100/11.jpg")).thenReturn(true);
 
         ImageHostingPreflightResult result = validator.validate(snapshot(List.of(photo)), REQUEST);
 
         assertThat(result.isValid()).isTrue();
         assertThat(result.issues()).isEmpty();
-        verify(minioService).objectExists("photos", "100/11.jpg");
+        verify(s3Service).objectExists("photos", "100/11.jpg");
     }
 
     @Test
     void validate_requiresExactlyOnePrimaryPhotoWhenPhotosExist() {
         DesiredImageHostingPhoto first = desiredPhoto(photo(11, false), null);
         DesiredImageHostingPhoto second = desiredPhoto(photo(12, false), null);
-        when(minioService.objectExists("photos", "100/11.jpg")).thenReturn(true);
-        when(minioService.objectExists("photos", "100/12.jpg")).thenReturn(true);
+        when(s3Service.objectExists("photos", "100/11.jpg")).thenReturn(true);
+        when(s3Service.objectExists("photos", "100/12.jpg")).thenReturn(true);
 
         ImageHostingPreflightResult missingPrimary = validator.validate(snapshot(List.of(first, second)), REQUEST);
 
@@ -91,13 +91,13 @@ class DbS3ImageHostingPreflightValidatorTest {
         assertThat(result.issues())
                 .extracting(ImageHostingPreflightIssue::getType)
                 .contains(S3_LOCATION_MISSING);
-        verify(minioService, never()).objectExists("photos", null);
+        verify(s3Service, never()).objectExists("photos", null);
     }
 
     @Test
     void validate_reportsMissingS3ObjectForInventoryPhoto() {
         DesiredImageHostingPhoto photo = desiredPhoto(photo(11, true), null);
-        when(minioService.objectExists("photos", "100/11.jpg")).thenReturn(false);
+        when(s3Service.objectExists("photos", "100/11.jpg")).thenReturn(false);
 
         ImageHostingPreflightResult result = validator.validate(snapshot(List.of(photo)), REQUEST);
 
@@ -113,8 +113,8 @@ class DbS3ImageHostingPreflightValidatorTest {
     void validate_reportsDuplicateHostedPhotoIdsAndUnexpectedMembershipRows() {
         DesiredImageHostingPhoto first = desiredPhoto(photo(11, true), externalImage(201L, 11, "flickr-photo"));
         DesiredImageHostingPhoto second = desiredPhoto(photo(12, false), externalImage(202L, 12, "flickr-photo"));
-        when(minioService.objectExists("photos", "100/11.jpg")).thenReturn(true);
-        when(minioService.objectExists("photos", "100/12.jpg")).thenReturn(true);
+        when(s3Service.objectExists("photos", "100/11.jpg")).thenReturn(true);
+        when(s3Service.objectExists("photos", "100/12.jpg")).thenReturn(true);
 
         ImageHostingPreflightResult result = validator.validate(
                 snapshot(

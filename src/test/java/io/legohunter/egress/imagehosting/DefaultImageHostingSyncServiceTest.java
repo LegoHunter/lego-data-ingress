@@ -33,7 +33,7 @@ import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceRequest;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.service.hosting.api.ImageHostingService;
-import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.s3.api.S3Service;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -72,7 +72,7 @@ class DefaultImageHostingSyncServiceTest {
     private ImageHostingService imageHostingService;
 
     @Mock
-    private MinioService minioService;
+    private S3Service s3Service;
 
     @Mock
     private ItemInventoryDao itemInventoryDao;
@@ -123,7 +123,7 @@ class DefaultImageHostingSyncServiceTest {
 
         service = new DefaultImageHostingSyncService(
                 Optional.of(imageHostingService),
-                minioService,
+                s3Service,
                 itemInventoryDao,
                 itemInventoryPhotoDao,
                 externalCatalogItemDao,
@@ -162,7 +162,7 @@ class DefaultImageHostingSyncServiceTest {
         when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
                 .thenReturn(Optional.empty());
-        when(minioService.getObject("photos", "100/front.jpg"))
+        when(s3Service.getObject("photos", "100/front.jpg"))
                 .thenReturn(new ByteArrayInputStream("image".getBytes()));
         when(imageHostingService.uploadPhoto(any())).thenReturn(response("flickr-photo-11"));
         when(externalImageDao.upsert(any())).thenAnswer(invocation -> {
@@ -256,7 +256,7 @@ class DefaultImageHostingSyncServiceTest {
         when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
                 .thenReturn(Optional.empty());
-        when(minioService.getObject("photos", "100/front.jpg"))
+        when(s3Service.getObject("photos", "100/front.jpg"))
                 .thenReturn(new ByteArrayInputStream("image".getBytes()));
         when(imageHostingService.uploadPhoto(any())).thenReturn(response("flickr-photo-11"));
         when(externalImageDao.upsert(any())).thenAnswer(invocation -> {
@@ -536,7 +536,7 @@ class DefaultImageHostingSyncServiceTest {
         when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
                 .thenReturn(Optional.empty());
-        when(minioService.getObject("photos", "100/front.jpg"))
+        when(s3Service.getObject("photos", "100/front.jpg"))
                 .thenReturn(new ByteArrayInputStream("image".getBytes()));
         when(imageHostingService.uploadPhoto(any())).thenReturn(errorResponse(99, "provider rejected upload"));
 
@@ -572,7 +572,7 @@ class DefaultImageHostingSyncServiceTest {
         when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
                 .thenReturn(Optional.empty());
-        when(minioService.getObject("photos", "100/front.jpg"))
+        when(s3Service.getObject("photos", "100/front.jpg"))
                 .thenReturn(new ByteArrayInputStream("image".getBytes()));
         when(imageHostingService.uploadPhoto(any()))
                 .thenReturn(errorResponse(PhotoServiceErrorType.SERVICE_UNAVAILABLE, 503, "Flickr unavailable"))
@@ -624,7 +624,7 @@ class DefaultImageHostingSyncServiceTest {
         assertThat(result.getFailureMessages())
                 .containsExactly("Photo [11] failed: Previous failed image sync exists and retryFailed=false");
 
-        verifyNoInteractions(minioService);
+        verifyNoInteractions(s3Service);
         verify(imageHostingService, never()).uploadPhoto(any());
         verify(externalImageDao, never()).upsert(any());
         verify(externalImageAlbumDao).update(album);
@@ -648,7 +648,7 @@ class DefaultImageHostingSyncServiceTest {
         when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
                 .thenReturn(Optional.of(failedImage));
-        when(minioService.getObject("photos", "100/front.jpg"))
+        when(s3Service.getObject("photos", "100/front.jpg"))
                 .thenReturn(new ByteArrayInputStream("image".getBytes()));
         when(imageHostingService.uploadPhoto(any())).thenReturn(response("flickr-photo-11"));
         when(externalImageDao.upsert(any())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -683,7 +683,7 @@ class DefaultImageHostingSyncServiceTest {
         when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
                 .thenReturn(Optional.empty());
-        when(minioService.getObject("photos", "100/front.jpg"))
+        when(s3Service.getObject("photos", "100/front.jpg"))
                 .thenReturn(new ByteArrayInputStream("image".getBytes()));
         when(imageHostingService.uploadPhoto(any())).thenReturn(response("flickr-photo-11"));
         when(externalImageDao.upsert(any())).thenAnswer(invocation -> {
@@ -747,7 +747,7 @@ class DefaultImageHostingSyncServiceTest {
         assertThat(result.isAlbumCreated()).isFalse();
         assertThat(result.isMembershipUpdated()).isFalse();
 
-        verifyNoInteractions(imageHostingService, minioService, externalImageDao, externalImageAlbumDao, externalImageAlbumImageDao);
+        verifyNoInteractions(imageHostingService, s3Service, externalImageDao, externalImageAlbumDao, externalImageAlbumImageDao);
     }
 
     @Test
@@ -770,7 +770,7 @@ class DefaultImageHostingSyncServiceTest {
         assertThat(result.getFailureMessages())
                 .containsExactly("Photo [11] failed: Preflight failed: S3 object [photos/100/front.jpg] is not available for inventory photo [11]");
 
-        verifyNoInteractions(imageHostingService, minioService, itemInventoryDao, itemInventoryPhotoDao);
+        verifyNoInteractions(imageHostingService, s3Service, itemInventoryDao, itemInventoryPhotoDao);
         verifyNoInteractions(externalImageDao, externalImageAlbumDao, externalImageAlbumImageDao);
     }
 

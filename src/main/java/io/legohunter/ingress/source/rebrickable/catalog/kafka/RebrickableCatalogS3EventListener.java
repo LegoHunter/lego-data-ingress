@@ -28,7 +28,7 @@ import java.util.zip.GZIPInputStream;
 @Slf4j
 public class RebrickableCatalogS3EventListener {
 
-    private final MinioClient minioClient;
+    private final MinioClient s3Client;
     private final KafkaTemplate<String, RebrickableCatalogEntry> rebrickableCatalogEntryKafkaTemplate;
 
     @Value("${kafka.topic-configuration.rebrickable-catalog-entry.topic}")
@@ -46,7 +46,7 @@ public class RebrickableCatalogS3EventListener {
 
             log.info("Processing S3 PUT: bucket={}, key={}", bucket, key);
 
-            try (InputStream inputStream = minioClient.getObject(
+            try (InputStream inputStream = s3Client.getObject(
                     GetObjectArgs.builder().bucket(bucket).object(key).build())) {
 
                 CSVParser csvParser = null;

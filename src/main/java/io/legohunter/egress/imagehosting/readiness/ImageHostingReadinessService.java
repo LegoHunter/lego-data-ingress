@@ -96,13 +96,13 @@ public class ImageHostingReadinessService {
     private void validateS3(List<ImageHostingReadinessCheck> checks, boolean required) {
         List<String> missing = new ArrayList<>();
         if (!hasText(s3ClientProperties.getUrl())) {
-            missing.add("lego.minio.url");
+            missing.add("lego.s3.url");
         }
         if (!hasText(s3ClientProperties.getAccessKey())) {
-            missing.add("lego.minio.access-key");
+            missing.add("lego.s3.access-key");
         }
         if (!hasText(s3ClientProperties.getSecretKey())) {
-            missing.add("lego.minio.secret-key");
+            missing.add("lego.s3.secret-key");
         }
         addConfigCheck(checks, "s3", required, missing);
     }

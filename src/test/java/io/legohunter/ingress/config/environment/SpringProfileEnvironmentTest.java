@@ -30,7 +30,7 @@ class SpringProfileEnvironmentTest {
     private static final List<String> CREDENTIAL_IMPORTS = List.of(
             "file:${import-path}/database-configuration.yml",
             "file:${import-path}/kafka-configuration.yml",
-            "file:${import-path}/minio-configuration.yml",
+            "file:${import-path}/s3-configuration.yml",
             "file:${import-path}/flickr-configuration.yml",
             "file:${import-path}/bitly-configuration.yml",
             "file:${import-path}/bricklink-client-api-keys.yml",
@@ -60,6 +60,46 @@ class SpringProfileEnvironmentTest {
         assertThat(imports(effective)).containsExactlyElementsOf(CREDENTIAL_IMPORTS);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
+    void podUsesItsOwnEnvironmentS3StoreAndFinalPhotoBucket(String env) {
+        Properties effective = podConfiguration(env);
+
+        assertThat(effective.getProperty("lego.s3.url")).isEqualTo(switch (env) {
+            // minio-dev serves SANDBOX and DEV until silo-dev replaces it (HOMELAB-54).
+            case "sandbox", "dev" -> "http://minio.minio-dev.svc.cluster.local";
+            case "prod" -> "http://silo-prod.silo-prod.svc.cluster.local:9000";
+            default -> throw new IllegalArgumentException(env);
+        });
+        assertThat(effective.getProperty("lego.s3.buckets.final-photo")).isEqualTo("lego-photos-" + env);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev"})
+    void podConsumesAndRoutesS3EventsOnItsOwnEnvironmentTopics(String env) {
+        Properties effective = podConfiguration(env);
+
+        assertThat(effective.getProperty("kafka.topic-configuration.s3-events.topics")).isEqualTo(env + "-s3-events");
+        assertThat(effective.getProperty("kafka.topic-configuration.s3-events.consumer.group-id")).isEqualTo(env + "-s3-events-group");
+        assertThat(effective.getProperty("kafka.topic-configuration.s3-event-routing.topics").split(",\\s*"))
+                .isNotEmpty()
+                .allSatisfy(topic -> assertThat(topic).startsWith(env + "-"));
+    }
+
+    @Test
+    void noProfileUsesTheRetiredObjectStoreNames() {
+        for (String file : new String[]{"application.yml", "application-sandbox.yml", "application-dev.yml",
+                "application-prod.yml", "application-kubernetes.yml", "application-local.yml"}) {
+            Properties properties = load(file);
+            assertThat(properties.stringPropertyNames())
+                    .as(file)
+                    .noneMatch(name -> name.startsWith("lego.minio.")
+                            || name.startsWith("lego.object-storage.")
+                            || name.contains(".minio-s3.")
+                            || name.contains(".upload-minio-s3."));
+        }
+    }
+
     @Test
     void sandboxRunsTheInventoryReconciliationAndTheLotAuditOnASchedule() {
         Properties sandbox = podConfiguration("sandbox");
@@ -81,7 +121,9 @@ class SpringProfileEnvironmentTest {
     @Test
     void sharedProfilesDoNotChooseADatabase() {
         for (String shared : new String[]{"application.yml", "application-kubernetes.yml"}) {
-            assertThat(load(shared)).as(shared).doesNotContainKey("spring.datasource.database-key-name");
+            assertThat(load(shared)).as(shared)
+                    .doesNotContainKey("spring.datasource.database-key-name")
+                    .doesNotContainKey("lego.s3.url");
         }
     }
 

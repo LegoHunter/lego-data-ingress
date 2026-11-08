@@ -6,8 +6,8 @@ import io.legohunter.imaging.metadata.impl.MetadataExtractorService;
 import io.legohunter.imaging.metadata.model.ConditionEnum;
 import io.legohunter.imaging.metadata.model.ImageMetadata;
 import io.legohunter.imaging.scaling.ImageScalingService;
-import io.legohunter.ingress.config.storage.ObjectStorageProperties;
-import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.config.storage.S3BucketProperties;
+import io.legohunter.ingress.s3.api.S3Service;
 import io.legohunter.ingress.source.photo.metrics.PhotoMetricsService;
 import io.legohunter.ingress.source.photo.model.PhotoUploadEvent;
 import io.legohunter.data.dao.ExternalCatalogItemDao;
@@ -52,7 +52,7 @@ class PhotoProcessingServiceTest {
     private static final int BRICKLINK_SERVICE_ID = 2;
 
     @Mock
-    private MinioService minioService;
+    private S3Service s3Service;
 
     @Mock
     private ImageScalingService imageScalingService;
@@ -67,7 +67,7 @@ class PhotoProcessingServiceTest {
     private PhotoMetricsService photoMetricsService;
 
     @Mock
-    private ObjectStorageProperties objectStorageProperties;
+    private S3BucketProperties s3BucketProperties;
 
     @Mock
     private ItemInventoryDao itemInventoryDao;
@@ -91,7 +91,7 @@ class PhotoProcessingServiceTest {
     void setUp() {
         originalBytes = "original-image".getBytes();
         scaledBytes = "scaled-image".getBytes();
-        lenient().when(objectStorageProperties.finalPhotoBucket()).thenReturn("lego-photos-sandbox");
+        lenient().when(s3BucketProperties.finalPhotoBucket()).thenReturn("lego-photos-sandbox");
         lenient().when(metadataFingerprintService.calculateHash(any())).thenReturn("metadata-hash");
         lenient().doAnswer(invocation -> invocation.getArgument(0))
                 .when(itemInventoryDao)
@@ -111,7 +111,7 @@ class PhotoProcessingServiceTest {
         );
         ExternalCatalogItem externalCatalogItem = externalCatalogItem(123);
 
-        when(minioService.getObject("lego-uploads-sandbox", "photos/test.jpg"))
+        when(s3Service.getObject("lego-uploads-sandbox", "photos/test.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata);
@@ -145,7 +145,7 @@ class PhotoProcessingServiceTest {
                 )
                 .containsExactly("uuid-1", "Front view", true, false, true, 1, 2, 4);
 
-        verify(minioService).putObject(
+        verify(s3Service).putObject(
                 eq("lego-photos-sandbox"),
                 eq("3001/uuid-1/md5-1.jpg"),
                 any(InputStream.class),
@@ -165,7 +165,7 @@ class PhotoProcessingServiceTest {
                 PROCESSED
         );
         verify(itemInventoryPhotoDao).setPrimaryPhoto(999, "md5-1");
-        verify(minioService).deleteObject("lego-uploads-sandbox", "photos/test.jpg");
+        verify(s3Service).deleteObject("lego-uploads-sandbox", "photos/test.jpg");
         verify(photoMetricsService).incrementProcessed("event");
     }
 
@@ -173,7 +173,7 @@ class PhotoProcessingServiceTest {
     void process_event_shouldAcknowledgeStaleObjectEventsWhenSourceObjectIsMissing() {
         PhotoUploadEvent event = new PhotoUploadEvent("lego-uploads-sandbox", "photos/missing.jpg");
 
-        when(minioService.getObject("lego-uploads-sandbox", "photos/missing.jpg"))
+        when(s3Service.getObject("lego-uploads-sandbox", "photos/missing.jpg"))
                 .thenThrow(new S3ObjectNotFoundException("lego-uploads-sandbox", "photos/missing.jpg", null));
 
         service.process(event);
@@ -182,8 +182,8 @@ class PhotoProcessingServiceTest {
         verify(photoMetricsService, never()).incrementFailed(anyString());
         verify(photoMetricsService, never()).incrementDuplicate(anyString());
         verify(photoMetricsService).incrementSkipped("event", "source_missing");
-        verify(minioService, never()).copyObject(anyString(), anyString(), anyString(), anyString());
-        verify(minioService, never()).deleteObject(anyString(), anyString());
+        verify(s3Service, never()).copyObject(anyString(), anyString(), anyString(), anyString());
+        verify(s3Service, never()).deleteObject(anyString(), anyString());
         verify(itemInventoryDao, never()).upsert(any());
         verify(itemInventoryPhotoDao, never()).insertPhoto(
                 any(),
@@ -224,7 +224,7 @@ class PhotoProcessingServiceTest {
 
         service.process(file);
 
-        verify(minioService, never()).deleteObject(anyString(), anyString());
+        verify(s3Service, never()).deleteObject(anyString(), anyString());
         verify(itemInventoryPhotoDao).insertPhoto(
                 200,
                 "md5-2",
@@ -253,7 +253,7 @@ class PhotoProcessingServiceTest {
                 "3001/uuid-1/old-md5.jpg"
         );
 
-        when(minioService.getObject("lego-uploads-sandbox", "photos/nested/test.jpg"))
+        when(s3Service.getObject("lego-uploads-sandbox", "photos/nested/test.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", true, false, true, "Updated caption"));
@@ -297,7 +297,7 @@ class PhotoProcessingServiceTest {
                 )
                 .containsExactly(999, "uuid-1", "Updated caption", false, true);
 
-        verify(minioService).putObject(
+        verify(s3Service).putObject(
                 eq("lego-photos-sandbox"),
                 eq("3001/uuid-1/new-md5.jpg"),
                 any(InputStream.class),
@@ -317,8 +317,8 @@ class PhotoProcessingServiceTest {
                 PROCESSED
         );
         verify(itemInventoryPhotoDao).setPrimaryPhoto(999, "new-md5");
-        verify(minioService).deleteObject("lego-photos-sandbox", "3001/uuid-1/old-md5.jpg");
-        verify(minioService).deleteObject("lego-uploads-sandbox", "photos/nested/test.jpg");
+        verify(s3Service).deleteObject("lego-photos-sandbox", "3001/uuid-1/old-md5.jpg");
+        verify(s3Service).deleteObject("lego-uploads-sandbox", "photos/nested/test.jpg");
         verify(itemInventoryPhotoDao, never()).insertPhoto(
                 any(),
                 any(),
@@ -346,7 +346,7 @@ class PhotoProcessingServiceTest {
                 "3001/uuid-1/same-md5.jpg"
         );
 
-        when(minioService.getObject("lego-uploads-sandbox", "photos/test.jpg"))
+        when(s3Service.getObject("lego-uploads-sandbox", "photos/test.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", false, true, true, "Metadata-only caption"));
@@ -367,7 +367,7 @@ class PhotoProcessingServiceTest {
 
         service.process(event);
 
-        verify(minioService, never()).putObject(any(), any(), any(), anyLong(), any());
+        verify(s3Service, never()).putObject(any(), any(), any(), anyLong(), any());
         verify(itemInventoryPhotoDao).updateMetadata(10, "test.jpg", "metadata-hash", false, "Metadata-only caption", PROCESSED);
         verify(itemInventoryPhotoDao, never()).replaceStoredObject(
                 any(),
@@ -382,8 +382,8 @@ class PhotoProcessingServiceTest {
                 any(PhotoStatus.class)
         );
         verify(itemInventoryPhotoDao, never()).setPrimaryPhoto(any(), any());
-        verify(minioService, never()).deleteObject("lego-photos-sandbox", "3001/uuid-1/same-md5.jpg");
-        verify(minioService).deleteObject("lego-uploads-sandbox", "photos/test.jpg");
+        verify(s3Service, never()).deleteObject("lego-photos-sandbox", "3001/uuid-1/same-md5.jpg");
+        verify(s3Service).deleteObject("lego-uploads-sandbox", "photos/test.jpg");
     }
 
     @Test
@@ -406,7 +406,7 @@ class PhotoProcessingServiceTest {
                 "3001/uuid-1/same-md5.jpg"
         );
 
-        when(minioService.getObject("lego-uploads-sandbox", "photos/test.jpg"))
+        when(s3Service.getObject("lego-uploads-sandbox", "photos/test.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata(
@@ -493,7 +493,7 @@ class PhotoProcessingServiceTest {
         existingPhoto.setCaption("Stickers applied except for astronaut torso and 4 NASA stickers.");
         existingPhoto.setPrimary(false);
 
-        when(minioService.getObject("lego-uploads-sandbox", "photos/DSC_9908.jpg"))
+        when(s3Service.getObject("lego-uploads-sandbox", "photos/DSC_9908.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata(
@@ -523,13 +523,13 @@ class PhotoProcessingServiceTest {
         service.process(event);
 
         verify(photoMetricsService).incrementDuplicate("event");
-        verify(minioService).copyObject(
+        verify(s3Service).copyObject(
                 "lego-uploads-sandbox",
                 "photos/DSC_9908.jpg",
                 "lego-uploads-sandbox",
                 "photos/duplicate/DSC_9908.jpg"
         );
-        verify(minioService).deleteObject("lego-uploads-sandbox", "photos/DSC_9908.jpg");
+        verify(s3Service).deleteObject("lego-uploads-sandbox", "photos/DSC_9908.jpg");
         verify(itemInventoryDao, never()).upsert(any());
         verify(itemInventoryPhotoDao, never()).updateMetadata(
                 any(),
@@ -551,14 +551,14 @@ class PhotoProcessingServiceTest {
                 any(),
                 any(PhotoStatus.class)
         );
-        verify(minioService, never()).putObject(any(), any(), any(), anyLong(), any());
+        verify(s3Service, never()).putObject(any(), any(), any(), anyLong(), any());
     }
 
     @Test
     void process_shouldSkipDuplicatePhoto() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/photo.jpg");
 
-        when(minioService.getObject("bucket", "photos/photo.jpg"))
+        when(s3Service.getObject("bucket", "photos/photo.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", null, null, null, null));
@@ -574,36 +574,36 @@ class PhotoProcessingServiceTest {
         service.process(event);
 
         verify(photoMetricsService).incrementDuplicate("event");
-        verify(minioService).copyObject(
+        verify(s3Service).copyObject(
                 "bucket",
                 "photos/photo.jpg",
                 "bucket",
                 "photos/duplicate/photo.jpg"
         );
-        verify(minioService).deleteObject("bucket", "photos/photo.jpg");
+        verify(s3Service).deleteObject("bucket", "photos/photo.jpg");
         verify(itemInventoryDao, never()).upsert(any());
         verify(externalCatalogItemDao, never()).findByExternalServiceIdAndExternalItemKey(any(), any());
-        verify(minioService, never()).putObject(any(), any(), any(), anyLong(), any());
+        verify(s3Service, never()).putObject(any(), any(), any(), anyLong(), any());
     }
 
     @Test
     void process_shouldMoveUnprocessableSourceToRejectedWhenMetadataCannotBeExtracted() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/metadata.json");
 
-        when(minioService.getObject("bucket", "photos/metadata.json"))
+        when(s3Service.getObject("bucket", "photos/metadata.json"))
                 .thenReturn(new ByteArrayInputStream("{}".getBytes()));
         when(metadataExtractorService.extractMetadata(any(byte[].class)))
                 .thenThrow(new RuntimeException("not an image"));
 
         service.process(event);
 
-        verify(minioService).copyObject(
+        verify(s3Service).copyObject(
                 "bucket",
                 "photos/metadata.json",
                 "bucket",
                 "photos/rejected/metadata.json"
         );
-        verify(minioService).deleteObject("bucket", "photos/metadata.json");
+        verify(s3Service).deleteObject("bucket", "photos/metadata.json");
         verify(photoMetricsService).incrementFailed("event");
     }
 
@@ -611,20 +611,20 @@ class PhotoProcessingServiceTest {
     void process_shouldMoveSourceToRejectedWhenRequiredMetadataIsMissing() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/photo.jpg");
 
-        when(minioService.getObject("bucket", "photos/photo.jpg"))
+        when(s3Service.getObject("bucket", "photos/photo.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata(null, "3001", null, null, null, null));
 
         service.process(event);
 
-        verify(minioService).copyObject(
+        verify(s3Service).copyObject(
                 "bucket",
                 "photos/photo.jpg",
                 "bucket",
                 "photos/rejected/photo.jpg"
         );
-        verify(minioService).deleteObject("bucket", "photos/photo.jpg");
+        verify(s3Service).deleteObject("bucket", "photos/photo.jpg");
         verify(imageScalingService, never()).scale(any());
         verify(photoMetricsService).incrementFailed("event");
     }
@@ -633,7 +633,7 @@ class PhotoProcessingServiceTest {
     void process_shouldMoveSourceToRejectedWhenExternalCatalogItemIsNotFound() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/photo.jpg");
 
-        when(minioService.getObject("bucket", "photos/photo.jpg"))
+        when(s3Service.getObject("bucket", "photos/photo.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "9999", null, null, null, null));
@@ -650,14 +650,14 @@ class PhotoProcessingServiceTest {
 
         service.process(event);
 
-        verify(minioService).copyObject(
+        verify(s3Service).copyObject(
                 "bucket",
                 "photos/photo.jpg",
                 "bucket",
                 "photos/rejected/photo.jpg"
         );
-        verify(minioService).deleteObject("bucket", "photos/photo.jpg");
-        verify(minioService, never()).putObject(any(), any(), any(), anyLong(), any());
+        verify(s3Service).deleteObject("bucket", "photos/photo.jpg");
+        verify(s3Service, never()).putObject(any(), any(), any(), anyLong(), any());
         verify(photoMetricsService).incrementFailed("event");
     }
 
@@ -673,7 +673,7 @@ class PhotoProcessingServiceTest {
                 "Front view"
         );
 
-        when(minioService.getObject("lego-uploads-sandbox", "photos/nested/album/test.jpg"))
+        when(s3Service.getObject("lego-uploads-sandbox", "photos/nested/album/test.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata);
@@ -691,17 +691,17 @@ class PhotoProcessingServiceTest {
 
         service.process(event);
 
-        verify(minioService).deleteObject("lego-uploads-sandbox", "photos/nested/album/test.jpg");
-        verify(minioService).deleteObject("lego-uploads-sandbox", "photos/nested/album/");
-        verify(minioService).deleteObject("lego-uploads-sandbox", "photos/nested/");
-        verify(minioService, never()).deleteObject("lego-uploads-sandbox", "photos/");
+        verify(s3Service).deleteObject("lego-uploads-sandbox", "photos/nested/album/test.jpg");
+        verify(s3Service).deleteObject("lego-uploads-sandbox", "photos/nested/album/");
+        verify(s3Service).deleteObject("lego-uploads-sandbox", "photos/nested/");
+        verify(s3Service, never()).deleteObject("lego-uploads-sandbox", "photos/");
     }
 
     @Test
     void process_shouldFailBeforeDatabaseWriteWhenUploadFails() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/photo.jpg");
 
-        when(minioService.getObject("bucket", "photos/photo.jpg"))
+        when(s3Service.getObject("bucket", "photos/photo.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", null, null, null, null));
@@ -716,14 +716,14 @@ class PhotoProcessingServiceTest {
         when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
                 .thenReturn(Optional.of(externalCatalogItem(123)));
         doThrow(new RuntimeException("upload failed"))
-                .when(minioService)
+                .when(s3Service)
                 .putObject(any(), any(), any(), anyLong(), any());
 
         assertThatThrownBy(() -> service.process(event))
                 .isInstanceOf(PhotoProcessingException.class);
 
         verify(itemInventoryDao, never()).upsert(any());
-        verify(minioService, never()).copyObject(anyString(), anyString(), anyString(), anyString());
+        verify(s3Service, never()).copyObject(anyString(), anyString(), anyString(), anyString());
         verify(itemInventoryPhotoDao, never()).insertPhoto(
                 any(),
                 any(),
@@ -743,7 +743,7 @@ class PhotoProcessingServiceTest {
     void process_shouldRollbackUploadedObjectWhenPhotoInsertFails() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/photo.jpg");
 
-        when(minioService.getObject("bucket", "photos/photo.jpg"))
+        when(s3Service.getObject("bucket", "photos/photo.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", null, null, null, null));
@@ -776,9 +776,9 @@ class PhotoProcessingServiceTest {
         assertThatThrownBy(() -> service.process(event))
                 .isInstanceOf(PhotoProcessingException.class);
 
-        verify(minioService).deleteObject("lego-photos-sandbox", "3001/uuid-1/md5-rollback.jpg");
-        verify(minioService, never()).copyObject(anyString(), anyString(), anyString(), anyString());
-        verify(minioService, never()).deleteObject("bucket", "photos/photo.jpg");
+        verify(s3Service).deleteObject("lego-photos-sandbox", "3001/uuid-1/md5-rollback.jpg");
+        verify(s3Service, never()).copyObject(anyString(), anyString(), anyString(), anyString());
+        verify(s3Service, never()).deleteObject("bucket", "photos/photo.jpg");
         verify(photoMetricsService).incrementFailed("event");
     }
 
@@ -786,7 +786,7 @@ class PhotoProcessingServiceTest {
     void process_shouldNotSetPrimaryWhenPrimaryMetadataIsFalseOrAbsent() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/photo.jpg");
 
-        when(minioService.getObject("bucket", "photos/photo.jpg"))
+        when(s3Service.getObject("bucket", "photos/photo.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", false, null, null, null));

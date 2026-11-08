@@ -7,8 +7,8 @@ import io.legohunter.imaging.metadata.model.ConditionEnum;
 import io.legohunter.imaging.metadata.model.ImageMetadata;
 import io.legohunter.imaging.scaling.ImageScalingService;
 import io.legohunter.ingress.common.logging.LoggingContext;
-import io.legohunter.ingress.config.storage.ObjectStorageProperties;
-import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.config.storage.S3BucketProperties;
+import io.legohunter.ingress.s3.api.S3Service;
 import io.legohunter.ingress.s3.exception.S3ObjectNotFoundException;
 import io.legohunter.ingress.source.photo.metrics.PhotoMetricsService;
 import io.legohunter.ingress.source.photo.model.PhotoUploadEvent;
@@ -47,12 +47,12 @@ public class PhotoProcessingService {
     private static final String DUPLICATE_PHOTO_PREFIX = "photos/duplicate/";
     private static final int BRICKLINK_SERVICE_ID = 2;
 
-    private final MinioService minioService;
+    private final S3Service s3Service;
     private final ImageScalingService imageScalingService;
     private final MetadataExtractorService metadataExtractorService;
     private final MetadataFingerprintService metadataFingerprintService;
     private final PhotoMetricsService photoMetricsService;
-    private final ObjectStorageProperties objectStorageProperties;
+    private final S3BucketProperties s3BucketProperties;
 
     private final ItemInventoryDao itemInventoryDao;
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
@@ -69,7 +69,7 @@ public class PhotoProcessingService {
                 event.getObjectKey(),
                 "event",
                 true,
-                () -> minioService.getObject(
+                () -> s3Service.getObject(
                         event.getBucket(),
                         event.getObjectKey()
                 ),
@@ -490,7 +490,7 @@ public class PhotoProcessingService {
         // =========================================================
 
         String finalBucket =
-                objectStorageProperties.finalPhotoBucket();
+                s3BucketProperties.finalPhotoBucket();
 
         boolean uploadFinalObject =
                 !replaceExistingPhoto || contentChanged;
@@ -499,7 +499,7 @@ public class PhotoProcessingService {
 
             if (uploadFinalObject) {
 
-                minioService.putObject(
+                s3Service.putObject(
                         finalBucket,
                         destinationKey,
                         new ByteArrayInputStream(scaledBytes),
@@ -600,7 +600,7 @@ public class PhotoProcessingService {
 
                 try {
 
-                    minioService.deleteObject(
+                    s3Service.deleteObject(
                             finalBucket,
                             destinationKey
                     );
@@ -653,7 +653,7 @@ public class PhotoProcessingService {
 
             try {
 
-                minioService.deleteObject(
+                s3Service.deleteObject(
                         replacedPhoto.getS3Bucket(),
                         replacedPhoto.getS3Key()
                 );
@@ -683,7 +683,7 @@ public class PhotoProcessingService {
 
             try {
 
-                minioService.deleteObject(
+                s3Service.deleteObject(
                         event.getBucket(),
                         event.getObjectKey()
                 );
@@ -928,14 +928,14 @@ public class PhotoProcessingService {
 
         try {
 
-            minioService.copyObject(
+            s3Service.copyObject(
                     bucket,
                     sourceKey,
                     bucket,
                     destinationKey
             );
 
-            minioService.deleteObject(
+            s3Service.deleteObject(
                     bucket,
                     sourceKey
             );
@@ -967,7 +967,7 @@ public class PhotoProcessingService {
     private void deleteSourceFolderMarkers(String bucket, String sourceKey) {
         for (String folderMarkerKey : folderMarkerKeys(sourceKey)) {
             try {
-                minioService.deleteObject(bucket, folderMarkerKey);
+                s3Service.deleteObject(bucket, folderMarkerKey);
 
                 log.info(
                         "photo.source.folder_marker.deleted bucket={} key={}",

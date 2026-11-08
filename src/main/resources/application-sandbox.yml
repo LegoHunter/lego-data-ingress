@@ -3,7 +3,7 @@ spring:
     import:
       - file:${import-path}/database-configuration.yml
       - file:${import-path}/kafka-configuration.yml
-      - file:${import-path}/minio-configuration.yml
+      - file:${import-path}/s3-configuration.yml
       - file:${import-path}/flickr-configuration.yml
       - file:${import-path}/bitly-configuration.yml
       - file:${import-path}/bricklink-client-api-keys.yml
@@ -28,7 +28,9 @@ spring:
 lego:
   environment:
     code: sandbox
-  object-storage:
+  s3:
+    # minio-dev serves SANDBOX and DEV until silo-dev replaces it.
+    url: http://minio.minio-dev.svc.cluster.local
     buckets:
       final-photo: lego-photos-sandbox
   bricklink:
@@ -206,15 +208,15 @@ kafka:
       # Metadata refresh interval (longer interval reduces churn)
       metadata.max.age.ms: 300000
   topic-configuration:
-    minio-s3:
-      topics: sandbox-minio-s3-events
+    s3-events:
+      topics: sandbox-s3-events
       consumer:
-        group-id: sandbox-minio-s3-events-group
+        group-id: sandbox-s3-events-group
         properties:
           value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       producer:
         retries: 3
-    upload-minio-s3:
+    s3-event-routing:
       topics: sandbox-upload-photo, sandbox-delete-photo, sandbox-upload-bricklink-catalog, sandbox-upload-bricklink-category, sandbox-upload-rebrickable-catalog, sandbox-upload-rebrickable-theme
       producer:
         retries: 3
@@ -223,7 +225,7 @@ kafka:
       topic: sandbox-upload-photo
       consumer:
         group-id: sandbox-upload-photo-group
-        # Image scaling and MinIO/MySQL I/O are performed synchronously per listener.
+        # Image scaling and S3/MySQL I/O are performed synchronously per listener.
         # The topic has 12 partitions; four consumers provide bounded parallelism
         # without increasing the in-flight batch size per consumer.
         concurrency: 4

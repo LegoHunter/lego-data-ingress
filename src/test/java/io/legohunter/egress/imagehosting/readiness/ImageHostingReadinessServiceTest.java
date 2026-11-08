@@ -133,7 +133,7 @@ class ImageHostingReadinessServiceTest {
 
     private static S3ClientProperties configuredS3() {
         S3ClientProperties properties = new S3ClientProperties();
-        properties.setUrl("http://minio.local");
+        properties.setUrl("http://s3.local");
         properties.setAccessKey("access-key");
         properties.setSecretKey("secret-key");
         return properties;

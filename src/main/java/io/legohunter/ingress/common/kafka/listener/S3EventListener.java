@@ -3,10 +3,10 @@ package io.legohunter.ingress.common.kafka.listener;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
 import io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent;
-import io.legohunter.ingress.common.storage.model.s3.minio.Record;
-import io.legohunter.ingress.common.storage.model.s3.minio.S3Entity;
-import io.legohunter.ingress.common.storage.model.s3.minio.S3EventNotification;
-import io.legohunter.ingress.upload.router.ObjectStorageEventRouter;
+import io.legohunter.ingress.common.storage.model.s3.event.Record;
+import io.legohunter.ingress.common.storage.model.s3.event.S3Entity;
+import io.legohunter.ingress.common.storage.model.s3.event.S3EventNotification;
+import io.legohunter.ingress.upload.router.S3EventRouter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -19,15 +19,15 @@ import java.nio.charset.StandardCharsets;
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class MinioS3EventListener {
+public class S3EventListener {
 
-    private final ObjectStorageEventRouter objectStorageEventRouter;
+    private final S3EventRouter s3EventRouter;
     private final ObjectMapper objectMapper;
 
     @KafkaListener(
-            topics = "${kafka.topic-configuration.minio-s3.topics}",
-            groupId = "${kafka.topic-configuration.minio-s3.consumer.group-id}",
-            containerFactory = "minioS3ContainerFactory"
+            topics = "${kafka.topic-configuration.s3-events.topics}",
+            groupId = "${kafka.topic-configuration.s3-events.consumer.group-id}",
+            containerFactory = "s3EventsContainerFactory"
     )
     public void handleS3Event(@Payload String payload) {
         try {
@@ -53,7 +53,7 @@ public class MinioS3EventListener {
 
         try {
             if (isObjectCreated(eventName)) {
-                objectStorageEventRouter.routeUpload(
+                s3EventRouter.routeUpload(
                         ObjectUploadedEvent.builder()
                                 .bucket(bucketName)
                                 .key(key)
@@ -65,7 +65,7 @@ public class MinioS3EventListener {
             }
 
             if (isObjectRemoved(eventName)) {
-                objectStorageEventRouter.routeDelete(
+                s3EventRouter.routeDelete(
                         ObjectDeletedEvent.builder()
                                 .bucket(bucketName)
                                 .key(key)

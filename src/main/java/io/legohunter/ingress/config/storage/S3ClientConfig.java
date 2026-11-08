@@ -13,7 +13,7 @@ public class S3ClientConfig {
 
     @Bean
     public MinioClient s3Client(S3ClientProperties s3ClientProperties) {
-        log.info("Initializing MinioClient with url {}", s3ClientProperties.getUrl());
+        log.info("Initializing the S3 client with url {}", s3ClientProperties.getUrl());
         return MinioClient.builder()
                 .endpoint(s3ClientProperties.getUrl())
                 .credentials(s3ClientProperties.getAccessKey(), s3ClientProperties.getSecretKey())

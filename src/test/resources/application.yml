@@ -5,7 +5,7 @@ spring:
       - classpath:/dev/config/database-configuration.yml
       - classpath:/dev/config/flickr-configuration.yml
       - classpath:/dev/config/kafka-configuration.yml
-      - classpath:/dev/config/minio-configuration.yml
+      - classpath:/dev/config/s3-configuration.yml
       - classpath:/dev/config/shipstation-configuration.yml
   datasource:
     database-key-name: test
@@ -16,11 +16,10 @@ lego:
       # This file replaces src/main/resources/application.yml on the test classpath, so it must set
       # the non-prod stockroom itself or the HOMELAB-20 startup check refuses to start (SANDBOX=C).
       non-prod-stock-room-id: C
-  object-storage:
+  s3:
+    url: http://localhost
     buckets:
       final-photo: lego-photos-sandbox
-  minio:
-    url: http://localhost
 
 kafka:
   bootstrap-servers: localhost:31092
@@ -56,15 +55,15 @@ kafka:
       # Metadata refresh interval (longer interval reduces churn)
       metadata.max.age.ms: 300000
   topic-configuration:
-    minio-s3:
-      topics: sandbox-minio-s3-events
+    s3-events:
+      topics: sandbox-s3-events
       consumer:
-        group-id: sandbox-minio-s3-events-group
+        group-id: sandbox-s3-events-group
         properties:
           value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       producer:
         retries: 3
-    upload-minio-s3:
+    s3-event-routing:
       topics: sandbox-upload-photo, sandbox-delete-photo, sandbox-upload-bricklink-catalog, sandbox-upload-bricklink-category, sandbox-upload-rebrickable-catalog, sandbox-upload-rebrickable-theme
       producer:
         retries: 3

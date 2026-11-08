@@ -1,4 +1,4 @@
 lego:
-  minio:
+  s3:
     accessKey: abcd-1234
     secretKey: xxyyzz

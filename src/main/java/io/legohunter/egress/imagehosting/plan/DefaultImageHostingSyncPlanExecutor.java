@@ -33,7 +33,7 @@ import io.legohunter.imaging.service.sync.model.SyncActionType;
 import io.legohunter.imaging.service.sync.model.SyncPlan;
 import io.legohunter.imaging.service.sync.model.SyncPlanMode;
 import io.legohunter.imaging.service.sync.model.SyncReport;
-import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.s3.api.S3Service;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -66,7 +66,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     private static final String TEMP_FILE_SUFFIX = ".jpg";
 
     private final Optional<ImageHostingService> imageHostingService;
-    private final MinioService minioService;
+    private final S3Service s3Service;
     private final ItemInventoryDao itemInventoryDao;
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
     private final ExternalImageDao externalImageDao;
@@ -452,7 +452,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         Files.createDirectories(properties.getTempDirectory());
         Path tempFile = Files.createTempFile(properties.getTempDirectory(), "photo-%s-".formatted(photo.getItemInventoryPhotoId()), TEMP_FILE_SUFFIX);
         try {
-            try (InputStream inputStream = minioService.getObject(photo.getS3Bucket(), photo.getS3Key())) {
+            try (InputStream inputStream = s3Service.getObject(photo.getS3Bucket(), photo.getS3Key())) {
                 Files.copy(inputStream, tempFile, StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (IOException e) {

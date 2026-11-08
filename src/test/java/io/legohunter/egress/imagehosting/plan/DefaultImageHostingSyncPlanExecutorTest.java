@@ -34,7 +34,7 @@ import io.legohunter.imaging.service.sync.model.SyncActionType;
 import io.legohunter.imaging.service.sync.model.SyncPlan;
 import io.legohunter.imaging.service.sync.model.SyncPlanMode;
 import io.legohunter.imaging.service.sync.model.SyncReport;
-import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.s3.api.S3Service;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -70,7 +70,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
     private ImageHostingService imageHostingService;
 
     @Mock
-    private MinioService minioService;
+    private S3Service s3Service;
 
     @Mock
     private ItemInventoryDao itemInventoryDao;
@@ -101,7 +101,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
         meterRegistry = new SimpleMeterRegistry();
         executor = new DefaultImageHostingSyncPlanExecutor(
                 Optional.of(imageHostingService),
-                minioService,
+                s3Service,
                 itemInventoryDao,
                 itemInventoryPhotoDao,
                 externalImageDao,
@@ -121,7 +121,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
         when(itemInventoryPhotoDao.findByItemInventoryPhotoId(11)).thenReturn(Optional.of(photo));
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
                 .thenReturn(Optional.empty());
-        when(minioService.getObject("photos", "100/front.jpg"))
+        when(s3Service.getObject("photos", "100/front.jpg"))
                 .thenReturn(new ByteArrayInputStream("image-data".getBytes()));
         when(imageHostingService.uploadPhoto(any())).thenReturn(response("flickr-photo-11"));
         when(externalImageDao.upsert(any())).thenAnswer(invocation -> invocation.getArgument(0));

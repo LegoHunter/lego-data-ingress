@@ -33,7 +33,7 @@ import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.model.SimplePhotoServiceRequest;
 import io.legohunter.imaging.service.hosting.api.ImageHostingService;
-import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.s3.api.S3Service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -65,7 +65,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     private static final int BRICKLINK_SERVICE_ID = 2;
 
     private final Optional<ImageHostingService> imageHostingService;
-    private final MinioService minioService;
+    private final S3Service s3Service;
     private final ItemInventoryDao itemInventoryDao;
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
     private final ExternalCatalogItemDao externalCatalogItemDao;
@@ -460,7 +460,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         Path tempFile = Files.createTempFile(properties.getTempDirectory(), "photo-%s-".formatted(photo.getItemInventoryPhotoId()), TEMP_FILE_SUFFIX);
         try {
             // lego-imaging currently uploads from files; keep this as the only temp-file adapter point.
-            try (InputStream inputStream = minioService.getObject(photo.getS3Bucket(), photo.getS3Key())) {
+            try (InputStream inputStream = s3Service.getObject(photo.getS3Bucket(), photo.getS3Key())) {
                 Files.copy(inputStream, tempFile, StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (IOException e) {

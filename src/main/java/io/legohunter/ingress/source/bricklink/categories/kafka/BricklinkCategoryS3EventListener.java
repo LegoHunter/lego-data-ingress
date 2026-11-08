@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Slf4j
 public class BricklinkCategoryS3EventListener {
 
-    private final MinioClient minioClient;
+    private final MinioClient s3Client;
     private final XmlMapper xmlMapper;
 
     @Qualifier("bricklinkCategoryEntryKafkaTemplate")
@@ -47,7 +47,7 @@ public class BricklinkCategoryS3EventListener {
 
             log.info("Processing S3 PUT: bucket={}, key={}", bucket, key);
 
-            try (InputStream inputStream = minioClient.getObject(
+            try (InputStream inputStream = s3Client.getObject(
                     GetObjectArgs.builder().bucket(bucket).object(key).build())) {
 
                 try (JsonParser parser = xmlMapper.getFactory().createParser(inputStream)) {

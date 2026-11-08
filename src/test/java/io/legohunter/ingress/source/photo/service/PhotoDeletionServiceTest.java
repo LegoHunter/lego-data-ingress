@@ -1,7 +1,7 @@
 package io.legohunter.ingress.source.photo.service;
 
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
-import io.legohunter.ingress.config.storage.ObjectStorageProperties;
+import io.legohunter.ingress.config.storage.S3BucketProperties;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.PhotoStatus;
@@ -34,7 +34,7 @@ class PhotoDeletionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new PhotoDeletionService(itemInventoryPhotoDao, objectStorageProperties(BUCKET));
+        service = new PhotoDeletionService(itemInventoryPhotoDao, s3BucketProperties(BUCKET));
     }
 
     @Test
@@ -128,9 +128,9 @@ class PhotoDeletionServiceTest {
                 .build();
     }
 
-    private static ObjectStorageProperties objectStorageProperties(String finalPhotoBucket) {
-        ObjectStorageProperties properties = new ObjectStorageProperties();
-        ObjectStorageProperties.Buckets buckets = new ObjectStorageProperties.Buckets();
+    private static S3BucketProperties s3BucketProperties(String finalPhotoBucket) {
+        S3BucketProperties properties = new S3BucketProperties();
+        S3BucketProperties.Buckets buckets = new S3BucketProperties.Buckets();
         buckets.setFinalPhoto(finalPhotoBucket);
         properties.setBuckets(buckets);
         return properties;

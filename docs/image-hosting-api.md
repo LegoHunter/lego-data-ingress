@@ -642,7 +642,7 @@ configuration needed for scheduled Flickr sync:
 | --- | --- | --- |
 | `scheduled-sync` | `lego.image-hosting.readiness.require-scheduled-sync-enabled=true` | Scheduled sync is enabled, and batch size/concurrency are greater than zero. |
 | `database` | Scheduled sync is enabled or required | `spring.datasource.database-key-name` is configured and a `DataSource` bean exists. |
-| `s3` | Scheduled sync is enabled or required | `lego.minio.url`, `lego.minio.access-key`, and `lego.minio.secret-key` are configured. |
+| `s3` | Scheduled sync is enabled or required | `lego.s3.url`, `lego.s3.access-key`, and `lego.s3.secret-key` are configured. |
 | `flickr` | Scheduled sync is enabled or required | Flickr provider config, external service id, user id, API key/secret, OAuth token, and OAuth token secret are configured. |
 | `bitly` | Scheduled sync is enabled with `apply=true` | Bitly base URL, access token, and group GUID are configured. Missing Bitly config is only a warning in dry-run mode. |
 
@@ -652,7 +652,7 @@ missing property names are reported.
 
 Kubernetes uses the `sandbox,kubernetes` profiles and imports projected
 configuration files from `/etc/.credentials`. The sandbox profile imports
-database, Kafka, and MinIO config as required files and Flickr/Bitly config as
+database, Kafka, and S3 config as required files and Flickr/Bitly config as
 optional files. Flickr configuration is still required by image-hosting
 readiness when scheduled sync is enabled or required. Bitly configuration is
 required only when scheduled sync runs with `apply=true`.

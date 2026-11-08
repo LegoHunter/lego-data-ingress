@@ -64,7 +64,7 @@ flickr:
 
 Phase 1 deliberately stayed single-item only. Batch scheduling, delete sync, replacement sync, retries, and real Flickr smoke tests were deferred until the manual path was stable.
 
-The current upload path writes MinIO objects to a temporary local file before calling `lego-imaging` because the provider facade accepts `PhotoMetaDataV1` file paths today. Keep this adapter isolated in the sync service until `lego-imaging` supports stream or byte-array uploads.
+The current upload path writes S3 objects to a temporary local file before calling `lego-imaging` because the provider facade accepts `PhotoMetaDataV1` file paths today. Keep this adapter isolated in the sync service until `lego-imaging` supports stream or byte-array uploads.
 
 ## Flickr Integration Phase 2
 
@@ -193,7 +193,7 @@ Kubernetes exposes Prometheus at `/actuator/prometheus`. Local profile currently
 
 ### Smoke Validation
 
-1. Pick an `item_inventory_id` with processed `item_inventory_photo` rows and valid MinIO objects.
+1. Pick an `item_inventory_id` with processed `item_inventory_photo` rows and valid S3 objects.
 2. Start the service with Flickr enabled through `/dev/config/flickr-configuration.yml`.
 3. Run a dry run and confirm `outcome=DRY_RUN` and `photosDiscovered > 0`.
 4. Run a real sync with `dryRun=false`.

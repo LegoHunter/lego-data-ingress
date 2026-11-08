@@ -1,7 +1,7 @@
 package io.legohunter.ingress.source.rebrickable.categories.kafka;
 
 import io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent;
-import io.legohunter.ingress.common.storage.model.s3.minio.S3Event;
+import io.legohunter.ingress.common.storage.model.s3.event.S3Event;
 import io.legohunter.ingress.source.rebrickable.categories.model.RebrickableThemeEntry;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
@@ -31,7 +31,7 @@ import java.util.zip.GZIPInputStream;
 @Slf4j
 public class RebrickableThemeS3EventListener {
 
-    private final MinioClient minioClient;
+    private final MinioClient s3Client;
     private final KafkaTemplate<String, RebrickableThemeEntry> rebrickableThemeEntryKafkaTemplate;
 
     @Value("${kafka.topic-configuration.rebrickable-theme-entry.topic}")
@@ -47,7 +47,7 @@ public class RebrickableThemeS3EventListener {
 
         log.info("Processing S3 PUT: bucket={}, key={}", bucket, key);
 
-        try (InputStream inputStream = minioClient.getObject(
+        try (InputStream inputStream = s3Client.getObject(
                 GetObjectArgs.builder().bucket(bucket).object(key).build())) {
 
             CSVParser csvParser = null;

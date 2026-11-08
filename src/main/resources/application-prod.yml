@@ -3,7 +3,7 @@ spring:
     import:
       - file:${import-path}/database-configuration.yml
       - file:${import-path}/kafka-configuration.yml
-      - file:${import-path}/minio-configuration.yml
+      - file:${import-path}/s3-configuration.yml
       - file:${import-path}/flickr-configuration.yml
       - file:${import-path}/bitly-configuration.yml
       - file:${import-path}/bricklink-client-api-keys.yml
@@ -26,6 +26,10 @@ spring:
       pool-name: rasppi5-01-mysql-jdbc-pool
 
 lego:
+  s3:
+    url: http://silo-prod.silo-prod.svc.cluster.local:9000
+    buckets:
+      final-photo: lego-photos-prod
   # The only runtime allowed to write to real orders (ShipStation, BrickLink order status,
   # Drive Thru emails). See HOMELAB-14.
   environment:

@@ -9,13 +9,13 @@ import org.springframework.util.StringUtils;
 @Getter
 @Setter
 @Configuration
-@ConfigurationProperties(prefix = "lego.object-storage")
-public class ObjectStorageProperties {
+@ConfigurationProperties(prefix = "lego.s3")
+public class S3BucketProperties {
     private Buckets buckets = new Buckets();
 
     public String finalPhotoBucket() {
         if (!StringUtils.hasText(buckets.getFinalPhoto())) {
-            throw new IllegalStateException("lego.object-storage.buckets.final-photo must be configured");
+            throw new IllegalStateException("lego.s3.buckets.final-photo must be configured");
         }
         return buckets.getFinalPhoto().trim();
     }
