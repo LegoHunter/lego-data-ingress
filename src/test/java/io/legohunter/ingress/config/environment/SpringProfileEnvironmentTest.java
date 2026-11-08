@@ -6,6 +6,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.core.io.FileSystemResource;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 import java.util.stream.IntStream;
@@ -75,7 +76,7 @@ class SpringProfileEnvironmentTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"sandbox", "dev"})
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
     void podConsumesAndRoutesS3EventsOnItsOwnEnvironmentTopics(String env) {
         Properties effective = podConfiguration(env);
 
@@ -84,6 +85,48 @@ class SpringProfileEnvironmentTest {
         assertThat(effective.getProperty("kafka.topic-configuration.s3-event-routing.topics").split(",\\s*"))
                 .isNotEmpty()
                 .allSatisfy(topic -> assertThat(topic).startsWith(env + "-"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
+    void podUsesItsOwnEnvironmentKafkaCluster(String env) {
+        // SANDBOX and DEV share redpanda-dev; PROD has its own cluster (HOMELAB-47). Without its own
+        // setting, a profile would fall back to application.yml, which points at redpanda-dev.
+        String cluster = env.equals("prod") ? "redpanda-prod" : "redpanda-dev";
+        assertThat(podConfiguration(env).getProperty("kafka.bootstrap-servers").split(","))
+                .containsExactly(IntStream.range(0, 3)
+                        .mapToObj(i -> "%s-%d.%s.%s.svc.cluster.local:9092".formatted(cluster, i, cluster, cluster))
+                        .toArray(String[]::new));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
+    void everyTopicAndConsumerGroupBelongsToThePodsEnvironment(String env) {
+        Properties effective = podConfiguration(env);
+        List<String> keys = effective.stringPropertyNames().stream()
+                .filter(key -> key.startsWith("kafka.topic-configuration."))
+                .toList();
+        List<String> topics = keys.stream()
+                .filter(key -> key.endsWith(".topic") || key.endsWith(".topics"))
+                .flatMap(key -> Arrays.stream(effective.getProperty(key).split(",\\s*")))
+                .toList();
+        List<String> groups = keys.stream()
+                .filter(key -> key.endsWith(".group-id"))
+                .map(effective::getProperty)
+                .toList();
+
+        assertThat(topics).hasSizeGreaterThan(15).allSatisfy(topic -> assertThat(topic).startsWith(env + "-"));
+        assertThat(groups).hasSizeGreaterThan(10).allSatisfy(group -> assertThat(group).startsWith(env + "-").endsWith("-group"));
+    }
+
+    @Test
+    void prodNeverNamesALowerEnvironmentResource() {
+        Properties prod = podConfiguration("prod");
+        assertThat(prod.stringPropertyNames().stream()
+                .filter(name -> name.startsWith("kafka.") || name.startsWith("lego.s3.")
+                        || name.startsWith("spring.datasource.") || name.startsWith("spring.config.import"))
+                .map(name -> name + "=" + prod.getProperty(name)))
+                .noneMatch(entry -> entry.matches("(?i).*(sandbox|redpanda-dev|minio|-dev\\b|\\bdev-).*"));
     }
 
     @Test
