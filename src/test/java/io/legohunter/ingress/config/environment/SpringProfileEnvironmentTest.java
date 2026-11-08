@@ -67,8 +67,8 @@ class SpringProfileEnvironmentTest {
         Properties effective = podConfiguration(env);
 
         assertThat(effective.getProperty("lego.s3.url")).isEqualTo(switch (env) {
-            // minio-dev serves SANDBOX and DEV until silo-dev replaces it (HOMELAB-54).
-            case "sandbox", "dev" -> "http://minio.minio-dev.svc.cluster.local";
+            // silo-dev serves SANDBOX and DEV (HOMELAB-54).
+            case "sandbox", "dev" -> "http://silo-dev.silo-dev.svc.cluster.local:9000";
             case "prod" -> "http://silo-prod.silo-prod.svc.cluster.local:9000";
             default -> throw new IllegalArgumentException(env);
         });
