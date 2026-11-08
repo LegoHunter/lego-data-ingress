@@ -268,7 +268,7 @@ class BricklinkMarketplaceSyncServiceTest {
         Inventory before = remoteInventory("Human notes " + systemBlock());
         arrangeRequestAndContext(before);
         when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
-                eq("PENDING"), eq(Set.of("PRICE_UPDATE", "LISTING_CREATE")), any(ZonedDateTime.class), eq(5)))
+                eq("PENDING"), eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")), any(ZonedDateTime.class), eq(5)))
                 .thenReturn(Set.of(manual));
         MarketplaceListingSyncRequest claimedManual = claimedRequest();
         claimedManual.setPricingDecisionId(null);
@@ -814,7 +814,7 @@ class BricklinkMarketplaceSyncServiceTest {
     private void arrangeListingCreate(MarketplaceListingSyncRequest request, BricklinkMarketplaceListing mapping) {
         when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
                 eq("PENDING"),
-                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE")),
+                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")),
                 any(ZonedDateTime.class),
                 eq(5)
         ))
@@ -851,7 +851,7 @@ class BricklinkMarketplaceSyncServiceTest {
     private void arrangeRequestAndContext(Inventory remoteInventory) {
         when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
                 eq("PENDING"),
-                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE")),
+                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")),
                 any(ZonedDateTime.class),
                 eq(5)
         ))
@@ -881,7 +881,7 @@ class BricklinkMarketplaceSyncServiceTest {
     private void arrangeListingCreateRequestAndContext() {
         when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
                 eq("PENDING"),
-                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE")),
+                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")),
                 any(ZonedDateTime.class),
                 eq(5)
         ))

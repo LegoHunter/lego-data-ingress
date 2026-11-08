@@ -1,6 +1,7 @@
 package io.legohunter.ingress.source.bricklink.pricing;
 
 import com.bricklink.api.rest.client.BricklinkRestClient;
+import com.bricklink.api.rest.exception.BricklinkClientException;
 import com.bricklink.api.rest.model.v1.BricklinkResource;
 import com.bricklink.api.rest.model.v1.Inventory;
 import io.legohunter.data.dao.BricklinkMarketplaceListingDao;
@@ -41,7 +42,12 @@ public class BricklinkMarketplaceSyncService {
     static final String STATUS_BLOCKED = "BLOCKED";
     private static final String TYPE_LISTING_CREATE = "LISTING_CREATE";
     private static final String TYPE_PRICE_UPDATE = "PRICE_UPDATE";
+    static final String TYPE_LISTING_DELETE = "LISTING_DELETE";
+    /** The sync request types this service claims and processes. */
+    static final Set<String> SUPPORTED_TYPES = Set.of(TYPE_PRICE_UPDATE, TYPE_LISTING_CREATE, TYPE_LISTING_DELETE);
     private static final String LISTING_STATUS_ACTIVE = "ACTIVE";
+    static final String LISTING_STATUS_ENDED = "ENDED";
+    static final String SAFETY_REMOTE_DELETED = "REMOTE_DELETED";
 
     private final BricklinkMarketplaceSyncProperties properties;
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao;
@@ -63,7 +69,7 @@ public class BricklinkMarketplaceSyncService {
         }
         Set<MarketplaceListingSyncRequest> requests = marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
                 STATUS_PENDING,
-                Set.of(TYPE_PRICE_UPDATE, TYPE_LISTING_CREATE),
+                SUPPORTED_TYPES,
                 now(),
                 properties.effectiveBatchSize()
         );
@@ -76,7 +82,7 @@ public class BricklinkMarketplaceSyncService {
             MarketplaceListingSyncRequest effectiveRequest = request;
             try {
                 String syncRequestType = normalize(request.getSyncRequestTypeCode());
-                if (!Set.of(TYPE_PRICE_UPDATE, TYPE_LISTING_CREATE).contains(syncRequestType)) {
+                if (!SUPPORTED_TYPES.contains(syncRequestType)) {
                     counters.blocked++;
                     markBlocked(request, "UNSUPPORTED_SYNC_TYPE", "Unsupported sync request type: " + request.getSyncRequestTypeCode());
                     continue;
@@ -96,6 +102,8 @@ public class BricklinkMarketplaceSyncService {
 
                 if (TYPE_LISTING_CREATE.equals(syncRequestType)) {
                     processListingCreate(effectiveRequest, mode, counters);
+                } else if (TYPE_LISTING_DELETE.equals(syncRequestType)) {
+                    processListingDelete(effectiveRequest, mode, counters);
                 } else {
                     processPriceUpdate(effectiveRequest, mode, counters);
                 }
@@ -446,6 +454,157 @@ public class BricklinkMarketplaceSyncService {
     }
 
     /**
+     * Deletes the BrickLink lot of a lower-environment listing (HOMELAB-40 teardown of seeded items).
+     *
+     * <p>Stricter than a price update, because a delete cannot be undone:
+     * <ul>
+     *   <li>refused in PROD, always;</li>
+     *   <li>the lot must be in this environment's stockroom, whatever
+     *       {@code non-prod-require-stock-room} says;</li>
+     *   <li>the lot must carry a system remarks block, whatever {@code require-system-remarks-block}
+     *       says, naming this environment, this listing and this inventory item.</li>
+     * </ul>
+     * Success is proven by reading the lot back: only "not found" counts. A lot that is already gone
+     * (an earlier attempt deleted it, or someone did by hand) completes the request without a call.
+     * The listing then ends ({@value #LISTING_STATUS_ENDED}) and loses its lot id, so pricing leaves it
+     * alone and lego-data-service can remove the seeded item's rows.
+     */
+    private void processListingDelete(
+            MarketplaceListingSyncRequest request,
+            BricklinkMarketplaceSyncMode mode,
+            Counters counters
+    ) {
+        if (properties.isProduction()) {
+            counters.blocked++;
+            if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+                markBlocked(request, "LISTING_DELETE_REFUSED_IN_PROD", "LISTING_DELETE is only for lower-environment teardown and is never run in PROD");
+            }
+            log.warn(
+                    "bricklink.marketplace_sync.listing_delete_refused_in_prod marketplaceListingSyncRequestId={} marketplaceListingId={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId()
+            );
+            return;
+        }
+        SyncContext context = context(request, false);
+        Integer lotId = context.bricklinkInventoryId();
+        Inventory remoteInventory = lotId == null ? null : readLot(lotId.longValue());
+        if (remoteInventory == null) {
+            if (mode == BricklinkMarketplaceSyncMode.DRY_RUN) {
+                counters.dryRunVerified++;
+            } else {
+                transactions.executeWithoutResult(status -> {
+                    endListingWithoutLot(context);
+                    markSucceeded(request, null);
+                });
+                counters.remoteVerified++;
+            }
+            log.info(
+                    "bricklink.marketplace_sync.listing_delete_no_lot marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} mode={} message=no lot on BrickLink, listing ended locally",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    lotId,
+                    mode
+            );
+            return;
+        }
+
+        BricklinkRemoteInventorySafetyResult safety = listingDeleteSafety(context, remoteInventory);
+        if (!safety.allowed()) {
+            counters.blocked++;
+            if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+                markBlocked(request, safety.statusCode(), safety.message());
+            }
+            log.warn(
+                    "bricklink.marketplace_sync.listing_delete_blocked marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} statusCode={} message={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    lotId,
+                    safety.statusCode(),
+                    safety.message()
+            );
+            return;
+        }
+        if (mode == BricklinkMarketplaceSyncMode.DRY_RUN) {
+            counters.dryRunVerified++;
+            log.info(
+                    "bricklink.marketplace_sync.listing_delete_dry_run marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} stockRoomId={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    lotId,
+                    remoteInventory.getStock_room_id()
+            );
+            return;
+        }
+
+        // Record which lot this request deletes before deleting it.
+        request.setRemoteInventoryId(lotId.toString());
+        marketplaceListingSyncRequestDao.update(request);
+        bricklinkRestClient.deleteInventory(lotId.longValue());
+        counters.remoteUpdated++;
+        if (readLot(lotId.longValue()) != null) {
+            throw new IllegalStateException("BrickLink lot " + lotId + " still exists after the delete call");
+        }
+        transactions.executeWithoutResult(status -> {
+            endListingWithoutLot(context);
+            markSucceeded(request, null);
+        });
+        counters.remoteVerified++;
+        log.info(
+                "bricklink.marketplace_sync.listing_deleted marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} stockRoomId={}",
+                request.getMarketplaceListingSyncRequestId(),
+                request.getMarketplaceListingId(),
+                lotId,
+                remoteInventory.getStock_room_id()
+        );
+    }
+
+    /** The lot, or null when BrickLink says it does not exist. Any other error propagates. */
+    private Inventory readLot(long lotId) {
+        try {
+            return data(bricklinkRestClient.getInventories(lotId));
+        } catch (BricklinkClientException e) {
+            if (e.isNotFound()) {
+                return null;
+            }
+            throw e;
+        }
+    }
+
+    private BricklinkRemoteInventorySafetyResult listingDeleteSafety(SyncContext context, Inventory remoteInventory) {
+        String stockroom = properties.effectiveNonProdStockRoomId();
+        if (!Boolean.TRUE.equals(remoteInventory.getIs_stock_room())) {
+            return BricklinkRemoteInventorySafetyResult.blocked("REMOTE_NOT_STOCKROOM", "Refusing to delete a lot that is not in a stockroom");
+        }
+        if (!stockroom.equalsIgnoreCase(trim(remoteInventory.getStock_room_id()))) {
+            return BricklinkRemoteInventorySafetyResult.blocked("REMOTE_STOCKROOM_MISMATCH",
+                    "Refusing to delete a lot in stockroom " + remoteInventory.getStock_room_id() + ", not this environment's stockroom " + stockroom);
+        }
+        if (BricklinkInventorySystemRemarks.parse(remoteInventory.getRemarks()).isEmpty()) {
+            return BricklinkRemoteInventorySafetyResult.blocked("REMOTE_SYSTEM_BLOCK_MISSING", "Refusing to delete a lot without a system remarks block");
+        }
+        // Lot id, managed flag, environment, listing id and inventory UUID.
+        return safetyService.verify(properties, context.listing(), context.bricklinkListing(), context.itemInventory(), remoteInventory);
+    }
+
+    private void endListingWithoutLot(SyncContext context) {
+        ZonedDateTime at = now();
+        MarketplaceListing listing = context.listing();
+        listing.setListingStatusCode(LISTING_STATUS_ENDED);
+        listing.setExternalListingId(null);
+        listing.setLastSynchronizedAt(at);
+        marketplaceListingDao.update(listing);
+
+        BricklinkMarketplaceListing bricklinkListing = context.bricklinkListing();
+        bricklinkListing.setBricklinkInventoryId(null);
+        bricklinkListing.setLastRemoteQuantity(0);
+        bricklinkListing.setLastRemoteVerifiedAt(at);
+        bricklinkListing.setLastRemoteSafetyStatusCode(SAFETY_REMOTE_DELETED);
+        bricklinkListing.setLastRemoteSafetyMessage("BrickLink lot deleted or absent; listing ended");
+        bricklinkMarketplaceListingDao.update(bricklinkListing);
+    }
+
+    /**
      * A created (or adopted) lot must hold exactly the quantity this listing put up. BrickLink's create
      * call may consolidate a new lot into a matching existing one (its changelog says so without
      * detail), which would leave one lot with a larger quantity that passes every other check. Only
@@ -596,7 +755,7 @@ public class BricklinkMarketplaceSyncService {
         ZonedDateTime cutoff = now().minus(properties.effectiveStaleClaimTimeout());
         int released = 0;
         for (MarketplaceListingSyncRequest request : marketplaceListingSyncRequestDao.findBySyncRequestStatusCode(STATUS_CLAIMED)) {
-            if (!Set.of(TYPE_PRICE_UPDATE, TYPE_LISTING_CREATE).contains(normalize(request.getSyncRequestTypeCode()))) {
+            if (!SUPPORTED_TYPES.contains(normalize(request.getSyncRequestTypeCode()))) {
                 continue;
             }
             if (request.getClaimedAt() == null || request.getClaimedAt().isAfter(cutoff)) {
