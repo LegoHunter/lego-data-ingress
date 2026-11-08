@@ -11,10 +11,12 @@ on:
   push:
     branches:
       - 'feature/**'
+      # PROD: the push of the develop -> main merge commit. The `prod` Environment only accepts
+      # refs/heads/main, which a pull_request run never has (HOMELAB-29).
+      - main
   pull_request:
     branches:
       - develop
-      - main
     types:
       - opened
       - reopened
