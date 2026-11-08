@@ -50,3 +50,136 @@ lego:
         enabled: true
         apply: true
         fixed-delay-ms: 3600000
+
+# redpanda-prod (HOMELAB-47): a dedicated 3-broker cluster. In the cluster the kubernetes profile sets
+# SASL_PLAINTEXT on the internal listener (9092). Users prodproducer/prodconsumer come from
+# kafka-configuration.yml; their ACLs cover every prod- topic and prod-…-group by prefix.
+kafka:
+  bootstrap-servers: redpanda-prod-0.redpanda-prod.redpanda-prod.svc.cluster.local:9092,redpanda-prod-1.redpanda-prod.redpanda-prod.svc.cluster.local:9092,redpanda-prod-2.redpanda-prod.redpanda-prod.svc.cluster.local:9092
+  properties:
+    security.protocol: SASL_SSL
+    sasl.mechanism: SCRAM-SHA-512
+  consumer-defaults:
+    key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+    properties:
+      sasl.jaas.config: "org.apache.kafka.common.security.scram.ScramLoginModule required username='${lego.kafka.consumer.username}' password='${lego.kafka.consumer.password}';"
+      spring.json.trusted.packages: "*"
+      spring.json.use.type.headers: true
+  producer-defaults:
+    key-serializer: org.apache.kafka.common.serialization.StringSerializer
+    value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    retries: 10
+    properties:
+      spring.json.trusted.packages: "*"
+      sasl.jaas.config: "org.apache.kafka.common.security.scram.ScramLoginModule required username='${lego.kafka.producer.username}' password='${lego.kafka.producer.password}';"
+      # Reduce noisy INFO logs from NetworkClient
+      log.level.org.apache.kafka.clients.NetworkClient: WARN
+      # Maximum time to wait for a request to complete
+      request.timeout.ms: 60000
+      # How long to wait for a broker connection before timing out
+      max.block.ms: 60000
+      # Enable idempotence to avoid duplicate messages on retries
+      enable.idempotence: true
+      # Backoff between retries
+      retry.backoff.ms: 500
+      # Reduce aggressive reconnect attempts on slow connections
+      connections.max.idle.ms: 300000
+      # Metadata refresh interval (longer interval reduces churn)
+      metadata.max.age.ms: 300000
+  topic-configuration:
+    s3-events:
+      topics: prod-s3-events
+      consumer:
+        group-id: prod-s3-events-group
+        properties:
+          value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      producer:
+        retries: 3
+    s3-event-routing:
+      topics: prod-upload-photo, prod-delete-photo, prod-upload-bricklink-catalog, prod-upload-bricklink-category, prod-upload-rebrickable-catalog, prod-upload-rebrickable-theme
+      producer:
+        retries: 3
+        value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    upload-photo:
+      topic: prod-upload-photo
+      consumer:
+        group-id: prod-upload-photo-group
+        # Image scaling and S3/MySQL I/O are performed synchronously per listener.
+        # The topic has 12 partitions; four consumers provide bounded parallelism
+        # without increasing the in-flight batch size per consumer.
+        concurrency: 4
+        properties:
+          max-poll-records: 1
+          max-poll-interval-ms: 1800000
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    delete-photo:
+      topic: prod-delete-photo
+      consumer:
+        group-id: prod-delete-photo-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent
+      producer:
+        retries: 3
+    upload-bricklink-catalog:
+      topic: prod-upload-bricklink-catalog
+      consumer:
+        group-id: prod-upload-bricklink-catalog-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    upload-bricklink-category:
+      topic: prod-upload-bricklink-category
+      consumer:
+        group-id: prod-upload-bricklink-category-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    upload-rebrickable-catalog:
+      topic: prod-upload-rebrickable-catalog
+      consumer:
+        group-id: prod-upload-rebrickable-catalog-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    upload-rebrickable-theme:
+      topic: prod-upload-rebrickable-theme
+      consumer:
+        group-id: prod-upload-rebrickable-theme-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    photo-upload-entry:
+      topic: prod-photo-upload-entry
+      consumer:
+        group-id: prod-photo-upload-entry-group
+    bricklink-catalog-entry:
+      topic: prod-bricklink-catalog-entry
+      consumer:
+        group-id: prod-bricklink-catalog-entry-group
+      producer:
+        retries: 3
+    bricklink-category-entry:
+      topic: prod-bricklink-category-entry
+      consumer:
+        group-id: prod-bricklink-category-entry-group
+      producer:
+        retries: 3
+    rebrickable-catalog-entry:
+      topic: prod-rebrickable-catalog-entry
+      consumer:
+        group-id: prod-rebrickable-catalog-entry-group
+      producer:
+        retries: 3
+    rebrickable-theme-entry:
+      topic: prod-rebrickable-theme-entry
+      consumer:
+        group-id: prod-rebrickable-theme-entry-group
+      producer:
+        retries: 3
