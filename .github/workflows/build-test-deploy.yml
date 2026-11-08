@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   pipeline:
-    uses: LegoHunter/lego-server-configuration/.github/workflows/k8s-service-pipeline.yml@develop
+    uses: LegoHunter/lego-server-configuration/.github/workflows/k8s-service-pipeline.yml@feature/HOMELAB-29-prod-release-controls
     with:
       app: lego-data-ingress
       java-version: '21'
