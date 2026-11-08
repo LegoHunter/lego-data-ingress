@@ -37,6 +37,16 @@ class SpringProfileEnvironmentTest {
             "file:${import-path}/bricklink-client-api-keys.yml",
             "file:${import-path}/shipstation-configuration.yml");
 
+    /** Lower environments: the same files, but ShipStation is optional because it is PROD-only (HOMELAB-57/59). */
+    private static final List<String> NON_PROD_CREDENTIAL_IMPORTS = List.of(
+            "file:${import-path}/database-configuration.yml",
+            "file:${import-path}/kafka-configuration.yml",
+            "file:${import-path}/s3-configuration.yml",
+            "file:${import-path}/flickr-configuration.yml",
+            "file:${import-path}/bitly-configuration.yml",
+            "file:${import-path}/bricklink-client-api-keys.yml",
+            "optional:file:${import-path}/shipstation-configuration.yml");
+
     @ParameterizedTest
     @ValueSource(strings = {"sandbox", "dev", "prod"})
     void podRunsItsDatabaseSessionsInUtc(String env) {
@@ -58,7 +68,26 @@ class SpringProfileEnvironmentTest {
         Properties effective = podConfiguration(env);
 
         assertThat(effective.getProperty("import-path")).isEqualTo("/etc/.credentials");
-        assertThat(imports(effective)).containsExactlyElementsOf(CREDENTIAL_IMPORTS);
+        assertThat(imports(effective)).containsExactlyElementsOf("prod".equals(env) ? CREDENTIAL_IMPORTS : NON_PROD_CREDENTIAL_IMPORTS);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev"})
+    void lowerEnvironmentsNeverCallShipStation(String env) {
+        // ShipStation is PROD-only (HOMELAB-57/59): the fulfillment sync (its only caller) is off, and
+        // no ShipStation credentials are configured, so the ShipStation client is never created.
+        Properties effective = podConfiguration(env);
+
+        assertThat(String.valueOf(effective.get("lego.fulfillment.sync.scheduled.enabled"))).isEqualTo("false");
+        assertThat(effective.stringPropertyNames()).noneMatch(name -> name.startsWith("shipstation.rest.api-"));
+    }
+
+    @Test
+    void prodKeepsShipStationFulfillment() {
+        Properties effective = podConfiguration("prod");
+
+        assertThat(String.valueOf(effective.get("lego.fulfillment.sync.scheduled.enabled"))).isEqualTo("true");
+        assertThat(String.valueOf(effective.get("lego.fulfillment.sync.scheduled.apply"))).isEqualTo("true");
     }
 
     @ParameterizedTest

@@ -58,13 +58,15 @@ class BricklinkOrderAndFulfillmentSchedulingProfileTest {
 
     @Test
     void sandboxAndDevProfilesResolveToFiveMinutesForBothJobs() {
-        assertCadence(effectiveSchedule("sandbox", "kubernetes"), 300_000L);
-        assertCadence(effectiveSchedule("dev", "kubernetes"), 300_000L);
+        // ShipStation is PROD-only (HOMELAB-57/59): the fulfillment job is off outside PROD, but its
+        // cadence stays configured.
+        assertCadence(effectiveSchedule("sandbox", "kubernetes"), 300_000L, false);
+        assertCadence(effectiveSchedule("dev", "kubernetes"), 300_000L, false);
     }
 
     @Test
     void productionProfileResolvesToOneHourForBothJobs() {
-        assertCadence(effectiveSchedule("prod", "kubernetes"), 3_600_000L);
+        assertCadence(effectiveSchedule("prod", "kubernetes"), 3_600_000L, true);
     }
 
     @Test
@@ -79,11 +81,15 @@ class BricklinkOrderAndFulfillmentSchedulingProfileTest {
     }
 
     private void assertCadence(EffectiveSchedule schedule, long expectedDelayMs) {
+        assertCadence(schedule, expectedDelayMs, true);
+    }
+
+    private void assertCadence(EffectiveSchedule schedule, long expectedDelayMs, boolean fulfillmentEnabled) {
         assertThat(schedule.orderFixedDelayMs()).isEqualTo(expectedDelayMs);
         assertThat(schedule.fulfillmentFixedDelayMs()).isEqualTo(expectedDelayMs);
         assertThat(schedule.orderEnabled()).isTrue();
         assertThat(schedule.orderApply()).isTrue();
-        assertThat(schedule.fulfillmentEnabled()).isTrue();
+        assertThat(schedule.fulfillmentEnabled()).isEqualTo(fulfillmentEnabled);
     }
 
     private void assertNonProductionOrderWrites(EffectiveSchedule schedule) {
