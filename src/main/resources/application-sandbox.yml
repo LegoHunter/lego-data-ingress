@@ -29,8 +29,8 @@ lego:
   environment:
     code: sandbox
   s3:
-    # minio-dev serves SANDBOX and DEV until silo-dev replaces it.
-    url: http://minio.minio-dev.svc.cluster.local
+    # silo-dev serves SANDBOX and DEV (HOMELAB-54); each environment has its own S3 user and buckets.
+    url: http://silo-dev.silo-dev.svc.cluster.local:9000
     buckets:
       final-photo: lego-photos-sandbox
   bricklink:

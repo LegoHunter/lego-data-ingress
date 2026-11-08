@@ -21,7 +21,7 @@ lego:
   environment:
     code: local
   s3:
-    url: https://api.minio.dev.internal.legohunter.io
+    url: https://api.silo.dev.internal.legohunter.io
   bricklink:
     orders:
       sync:
