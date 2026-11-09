@@ -6,7 +6,9 @@ spring:
       - classpath:/dev/config/flickr-configuration.yml
       - classpath:/dev/config/kafka-configuration.yml
       - classpath:/dev/config/s3-configuration.yml
-      - classpath:/dev/config/shipstation-configuration.yml
+      # LegoDataIngressWithoutShipStationTests points this at a missing file to prove ingress starts
+      # without ShipStation, as SANDBOX and DEV do (HOMELAB-57).
+      - optional:classpath:/dev/config/${test.shipstation-configuration-file:shipstation-configuration.yml}
   datasource:
     database-key-name: test
 
