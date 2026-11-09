@@ -245,7 +245,7 @@ to buyers. Lower environments (local, sandbox, dev) may only read orders.
 
 ### `BricklinkOpenOrderProbeJob`
 
-Class: `io.legohunter.ingress.source.bricklink.orders.BricklinkOpenOrderProbeJob`
+Class: `io.legohunter.ingress.orders.BricklinkOpenOrderProbeJob`
 
 Condition:
 
@@ -301,7 +301,7 @@ Important logs:
 
 ### `BricklinkWantListSyncJob`
 
-Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkWantListSyncJob` (HOMELAB-32)
+Class: `io.legohunter.ingress.pricing.BricklinkWantListSyncJob` (HOMELAB-32)
 
 Runs in **every** environment that prices listings (SANDBOX and DEV today). It tells the shared crawler what this environment is selling by keeping its own rows in `marketplace_pricing.want_list_item`.
 
@@ -321,7 +321,7 @@ Each run selects the environment's priceable BrickLink listings (recognised New/
 
 ### `BricklinkPricingCrawlJob`: the shared BrickLink crawler
 
-Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingCrawlJob` (HOMELAB-32)
+Class: `io.legohunter.ingress.pricing.BricklinkPricingCrawlJob` (HOMELAB-32)
 
 **Exactly one deployment runs it.** It crawls BrickLink once for every environment and writes to the shared `marketplace_pricing` schema; each environment reads that schema for its own decisions. Until PROD exists the SANDBOX deployment is the crawler. Every other profile sets `crawl.enabled: false` (DEV and PROD explicitly; `local` too).
 
@@ -477,7 +477,7 @@ Important review rule:
 
 ### `BricklinkPricingDecisionJob`
 
-Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingDecisionJob`
+Class: `io.legohunter.ingress.pricing.BricklinkPricingDecisionJob`
 
 Condition:
 
@@ -663,7 +663,7 @@ Important logs:
 
 ### `BricklinkPricingApplyReadinessJob`
 
-Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyReadinessJob`
+Class: `io.legohunter.ingress.pricing.BricklinkPricingApplyReadinessJob`
 
 Condition:
 
@@ -739,7 +739,7 @@ Important logs:
 
 ### BrickLink Pricing Maintenance Report
 
-Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingMaintenanceReportController`
+Class: `io.legohunter.ingress.pricing.BricklinkPricingMaintenanceReportController`
 
 Endpoint:
 
@@ -751,7 +751,7 @@ This is a dry-run diagnostic report. It does not delete, requeue, archive, or ot
 
 ### BrickLink Pricing Data-Quality Report
 
-Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingMaintenanceReportController`
+Class: `io.legohunter.ingress.pricing.BricklinkPricingMaintenanceReportController`
 
 Endpoint:
 
@@ -792,7 +792,7 @@ Every series is registered at start-up and reports 0 until the first refresh; a 
 
 ### BrickLink Pricing Apply Preview Reports
 
-Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingMaintenanceReportController`
+Class: `io.legohunter.ingress.pricing.BricklinkPricingMaintenanceReportController`
 
 Endpoints:
 
@@ -810,7 +810,7 @@ The requested `limit` is bounded to the range `1..500`.
 
 ### `BricklinkPricingApplyJob`
 
-Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyJob`
+Class: `io.legohunter.ingress.pricing.BricklinkPricingApplyJob`
 
 Condition:
 
@@ -860,7 +860,7 @@ Important logs:
 
 ### `BricklinkMarketplaceSyncJob`
 
-Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncJob`
+Class: `io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncJob`
 
 Condition:
 

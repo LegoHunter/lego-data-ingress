@@ -1,8 +1,8 @@
 package io.legohunter.ingress.scheduling.config;
 
 import io.legohunter.egress.fulfillment.FulfillmentSyncProperties;
+import io.legohunter.ingress.orders.BricklinkOrderSyncProperties;
 import io.legohunter.lego.data.environment.LegoEnvironmentProperties;
-import io.legohunter.ingress.source.bricklink.orders.BricklinkOrderSyncProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.core.io.FileSystemResource;

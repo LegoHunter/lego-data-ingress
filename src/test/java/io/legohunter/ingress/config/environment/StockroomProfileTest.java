@@ -1,9 +1,9 @@
 package io.legohunter.ingress.config.environment;
 
 import io.legohunter.data.environment.EnvironmentDatabasePolicy;
-import io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncEnvironmentValidator;
-import io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncProperties;
-import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyProperties;
+import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncEnvironmentValidator;
+import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncProperties;
+import io.legohunter.ingress.pricing.BricklinkPricingApplyProperties;
 import io.legohunter.lego.data.environment.LegoEnvironmentProperties;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
