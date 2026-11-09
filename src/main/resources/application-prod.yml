@@ -44,6 +44,12 @@ lego:
           enabled: true
           apply: true
           fixed-delay-ms: 3600000
+    pricing:
+      # Off until lego_prod exists (HOMELAB-56). Then decide where the one shared crawler runs (HOMELAB-32).
+      want-list:
+        enabled: false
+      crawl:
+        enabled: false
   fulfillment:
     sync:
       scheduled:

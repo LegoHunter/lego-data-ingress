@@ -7,18 +7,18 @@ import com.bricklink.api.ajax.model.v1.ItemForSale;
 import com.bricklink.api.ajax.support.CatalogItemsForSaleResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.legohunter.data.dao.ExternalCatalogItemDao;
-import io.legohunter.data.dao.ItemInventoryDao;
-import io.legohunter.data.dao.MarketplaceListingDao;
-import io.legohunter.data.dao.PricingCrawlWorkItemDao;
-import io.legohunter.data.dao.PricingSnapshotDao;
-import io.legohunter.data.dao.PricingSnapshotListingDao;
-import io.legohunter.data.dto.ExternalCatalogItem;
-import io.legohunter.data.dto.ItemInventory;
-import io.legohunter.data.dto.MarketplaceListing;
-import io.legohunter.data.dto.PricingCrawlWorkItem;
-import io.legohunter.data.dto.PricingSnapshot;
-import io.legohunter.data.dto.PricingSnapshotListing;
+import io.legohunter.data.dao.CanonicalItemDao;
+import io.legohunter.data.dao.CrawlAttemptDao;
+import io.legohunter.data.dao.CrawlTargetDao;
+import io.legohunter.data.dao.MarketListingDao;
+import io.legohunter.data.dao.MarketSnapshotDao;
+import io.legohunter.data.dao.MarketplaceItemDao;
+import io.legohunter.data.dto.CanonicalItem;
+import io.legohunter.data.dto.CrawlAttempt;
+import io.legohunter.data.dto.CrawlTarget;
+import io.legohunter.data.dto.MarketListing;
+import io.legohunter.data.dto.MarketSnapshot;
+import io.legohunter.data.dto.MarketplaceItem;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -34,448 +34,430 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
-import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+/**
+ * The shared BrickLink market crawler (HOMELAB-32). One instance crawls for every environment and writes to the
+ * shared {@code marketplace_pricing} schema; every other deployment keeps {@code lego.bricklink.pricing.crawl.enabled}
+ * off.
+ *
+ * <p>Each run:
+ * <ol>
+ *   <li>keeps the queue in step with the combined want list: a target for every wanted item + New/Used pair (new ones
+ *       spread over the schedule window), DISABLED when nobody wants it, due again when it is wanted again;</li>
+ *   <li>outside the blackout window, claims due targets and fetches each once. One fetch returns every sub-condition;
+ *       pricing filters the lots afterwards. A success adds a market snapshot (the price history) and moves the
+ *       target a full cadence ahead; a failure is logged in crawl_attempt and retried after the backoff, or after a
+ *       full cadence once {@code max-attempts} failures have run together.</li>
+ * </ol>
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 @ConditionalOnProperty(prefix = "lego.bricklink.pricing.crawl", name = "enabled", havingValue = "true")
 public class BricklinkPricingCrawlService {
-    static final String STATUS_PENDING = "PENDING";
-    static final String STATUS_CLAIMED = "CLAIMED";
-    static final String STATUS_SUCCEEDED = "SUCCEEDED";
-    static final String STATUS_SKIPPED_MISSING_ITEM_NUMBER = "SKIPPED_MISSING_ITEM_NUMBER";
-    static final String STATUS_SKIPPED_MISSING_CONDITION = "SKIPPED_MISSING_CONDITION";
-    static final String STATUS_SKIPPED_MISSING_LISTING = "SKIPPED_MISSING_LISTING";
-    static final String STATUS_SKIPPED_MISSING_CATALOG = "SKIPPED_MISSING_CATALOG";
-    static final String STATUS_FAILED_ITEM_ID_LOOKUP_NO_MATCH = "FAILED_ITEM_ID_LOOKUP_NO_MATCH";
-    static final String STATUS_FAILED_ITEM_ID_LOOKUP_AMBIGUOUS = "FAILED_ITEM_ID_LOOKUP_AMBIGUOUS";
-    static final String STATUS_FAILED_ITEM_ID_LOOKUP_HTTP_ERROR = "FAILED_ITEM_ID_LOOKUP_HTTP_ERROR";
-    static final String STATUS_FAILED_PRICING_HTTP_ERROR = "FAILED_PRICING_HTTP_ERROR";
-    static final String STATUS_FAILED_PRICING_PARSE_ERROR = "FAILED_PRICING_PARSE_ERROR";
+    static final String MARKETPLACE_CODE = "BRICKLINK";
+    static final String MATCH_METHOD_CATALOG_ID = "CATALOG_ID";
+    static final String LISTING_FORMAT_FIXED_PRICE = "FIXED_PRICE";
+    static final BigDecimal CATALOG_MATCH_CONFIDENCE = new BigDecimal("1.0000");
 
-    private static final String CATALOG_ITEMS_FOR_SALE_PATH = "/ajax/clone/catalogifs.ajax";
+    static final String OUTCOME_RUNNING = "RUNNING";
+    static final String OUTCOME_SUCCEEDED = "SUCCEEDED";
+    static final String OUTCOME_FAILED_HTTP = "FAILED_HTTP";
+    static final String OUTCOME_FAILED_PARSE = "FAILED_PARSE";
+    static final String OUTCOME_FAILED_RESOLVE_NO_MATCH = "FAILED_RESOLVE_NO_MATCH";
+    static final String OUTCOME_FAILED_RESOLVE_AMBIGUOUS = "FAILED_RESOLVE_AMBIGUOUS";
+    static final String OUTCOME_FAILED_MISSING_ITEM = "FAILED_MISSING_ITEM";
+
+    static final String CATALOG_ITEMS_FOR_SALE_PATH = "/ajax/clone/catalogifs.ajax";
+
+    private static final Set<String> CANONICAL_COMPLETENESS = Set.of("S", "C", "B", "X");
+    /** Same price format BrickLink uses for the display price: "US $1,234.56", "EUR 23.00", "HUF 15,000.00". */
+    private static final Pattern PRICE_PATTERN = Pattern.compile("^([A-Z]{2,3})\\s?([^\\d\\s]?)\\s*([\\d,]+(?:\\.\\d+)?)$");
 
     private final BricklinkAjaxClient bricklinkAjaxClient;
     private final BricklinkPricingCrawlProperties properties;
-    private final MarketplaceListingDao marketplaceListingDao;
-    private final ExternalCatalogItemDao externalCatalogItemDao;
-    private final ItemInventoryDao itemInventoryDao;
-    private final PricingCrawlWorkItemDao pricingCrawlWorkItemDao;
-    private final PricingSnapshotDao pricingSnapshotDao;
-    private final PricingSnapshotListingDao pricingSnapshotListingDao;
+    private final CanonicalItemDao canonicalItemDao;
+    private final MarketplaceItemDao marketplaceItemDao;
+    private final CrawlTargetDao crawlTargetDao;
+    private final CrawlAttemptDao crawlAttemptDao;
+    private final MarketSnapshotDao marketSnapshotDao;
+    private final MarketListingDao marketListingDao;
     private final ObjectMapper objectMapper;
 
     public BricklinkPricingCrawlResult runOnce() {
         long start = System.currentTimeMillis();
         ZonedDateTime runAt = now();
         CrawlCounters counters = new CrawlCounters();
-        counters.staleWorkItemsRequeued = pricingCrawlWorkItemDao.requeueStaleClaimed(
-                STATUS_CLAIMED,
-                STATUS_PENDING,
-                runAt.minus(properties.effectiveClaimStaleAfter()),
-                adjustForBlackout(runAt.plus(properties.effectiveRetryBackoff())),
-                "Recovered stale pricing crawl claim"
-        );
 
-        scheduleWork(runAt, counters);
+        scheduleTargets(runAt, counters);
 
-        Set<PricingCrawlWorkItem> claimedWorkItems = pricingCrawlWorkItemDao.claimDueWorkItems(
-                STATUS_PENDING,
-                STATUS_CLAIMED,
-                runAt,
-                runAt,
-                properties.effectiveWorkerBatchSize()
-        );
-        counters.workItemsClaimed = claimedWorkItems.size();
-
-        for (PricingCrawlWorkItem workItem : claimedWorkItems) {
-            processWorkItem(workItem, counters);
+        if (isInBlackout(runAt)) {
+            String outcome = counters.scheduledAnything() ? "BLACKOUT" : "NO_WORK";
+            return result(outcome, counters, start);
         }
 
-        String outcome = outcome(counters);
-        if ("NO_WORK".equals(outcome)) {
-            return BricklinkPricingCrawlResult.noWork(elapsedMillis(start));
-        }
-        return new BricklinkPricingCrawlResult(
-                outcome,
-                counters.listingsSelected,
-                counters.workItemsScheduled,
-                counters.workItemsClaimed,
-                counters.staleWorkItemsRequeued,
-                counters.snapshotsWritten,
-                counters.zeroComparableSnapshotsWritten,
-                counters.snapshotListingsWritten,
-                counters.hydratedCatalogItems,
-                counters.catalogItemLookupNoMatches,
-                counters.catalogItemLookupAmbiguousMatches,
-                counters.catalogItemLookupFailures,
-                counters.skippedListings,
-                counters.failedListings,
-                elapsedMillis(start)
-        );
-    }
-
-    private void scheduleWork(ZonedDateTime runAt, CrawlCounters counters) {
-        Set<MarketplaceListing> candidates = marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCodes(
-                properties.getBricklinkExternalServiceId(),
-                properties.effectivePriceableListingStatusCodes(),
-                STATUS_PENDING,
-                STATUS_CLAIMED,
-                runAt,
-                properties.effectiveBatchSize()
-        );
-
-        List<MarketplaceListing> listings = candidates.stream()
-                .filter(this::isAllowedListing)
-                .sorted(Comparator.comparing(MarketplaceListing::getMarketplaceListingId))
-                .toList();
-        counters.listingsSelected = listings.size();
-        for (int index = 0; index < listings.size(); index++) {
-            MarketplaceListing listing = listings.get(index);
-            ExternalCatalogItem catalogItem = listing.getExternalCatalogItem();
-            if (catalogItem == null) {
-                counters.skippedListings++;
-                log.warn("bricklink.pricing.crawl.schedule.skipped_missing_catalog marketplaceListingId={}", listing.getMarketplaceListingId());
+        List<CrawlTarget> due = crawlTargetDao.findDue(MARKETPLACE_CODE, runAt, properties.effectiveWorkerBatchSize());
+        for (CrawlTarget target : due) {
+            ZonedDateTime claimedAt = now();
+            if (!crawlTargetDao.claim(target.getCrawlTargetId(), properties.effectiveClaimedBy(), claimedAt,
+                    claimedAt.plus(properties.effectiveClaimStaleAfter()))) {
                 continue;
             }
-            pricingCrawlWorkItemDao.insert(PricingCrawlWorkItem.builder()
-                    .marketplaceListingId(listing.getMarketplaceListingId())
-                    .externalCatalogItemId(catalogItem.getExternalCatalogItemId())
-                    .sourceExternalServiceId(properties.getBricklinkExternalServiceId())
-                    .workStatusCode(STATUS_PENDING)
-                    .attemptCount(0)
-                    .maxAttempts(properties.effectiveMaxAttempts())
-                    .nextAttemptAt(scheduledAttemptAt(runAt, index, listings.size()))
+            counters.targetsClaimed++;
+            crawl(crawlTargetDao.findByCrawlTargetId(target.getCrawlTargetId()).orElse(target), counters);
+        }
+
+        return result(outcome(counters), counters, start);
+    }
+
+    private void scheduleTargets(ZonedDateTime runAt, CrawlCounters counters) {
+        List<CrawlTarget> wanted = crawlTargetDao.findWantedWithoutTarget(MARKETPLACE_CODE);
+        for (int index = 0; index < wanted.size(); index++) {
+            CrawlTarget pair = wanted.get(index);
+            crawlTargetDao.insert(CrawlTarget.builder()
+                    .marketplaceCode(MARKETPLACE_CODE)
+                    .canonicalItemId(pair.getCanonicalItemId())
+                    .queryConditionCode(pair.getQueryConditionCode())
+                    .targetStatusCode(CrawlTargetStatus.IDLE)
+                    .nextDueAt(spreadDueAt(runAt, index, wanted.size()))
+                    .consecutiveFailureCount(0)
                     .build());
-            counters.workItemsScheduled++;
+            counters.targetsCreated++;
         }
+
+        for (CrawlTarget target : crawlTargetDao.findDisabledWanted(MARKETPLACE_CODE)) {
+            // Owner decision: due at max(now, last success + cadence), so coming back never crawls early.
+            ZonedDateTime due = target.getLastSuccessAt() == null
+                    ? runAt
+                    : later(runAt, target.getLastSuccessAt().plus(properties.effectiveCrawlCadence()));
+            target.setTargetStatusCode(CrawlTargetStatus.IDLE);
+            target.setNextDueAt(adjustForBlackout(due));
+            crawlTargetDao.update(target);
+            counters.targetsReenabled++;
+        }
+
+        counters.targetsDisabled = crawlTargetDao.disableUnwanted(MARKETPLACE_CODE);
     }
 
-    private boolean isAllowedListing(MarketplaceListing listing) {
-        Set<Integer> allowlist = properties.effectiveMarketplaceListingAllowlist();
-        return allowlist.isEmpty() || allowlist.contains(listing.getMarketplaceListingId());
-    }
+    private void crawl(CrawlTarget target, CrawlCounters counters) {
+        CrawlAttempt attempt = crawlAttemptDao.insert(CrawlAttempt.builder()
+                .crawlTargetId(target.getCrawlTargetId())
+                .startedAt(now())
+                .outcomeCode(OUTCOME_RUNNING)
+                .build());
 
-    private void processWorkItem(PricingCrawlWorkItem workItem, CrawlCounters counters) {
-        Optional<MarketplaceListing> foundListing = marketplaceListingDao.findByMarketplaceListingId(workItem.getMarketplaceListingId());
-        if (foundListing.isEmpty()) {
-            completeWorkItem(workItem, STATUS_SKIPPED_MISSING_LISTING, "Missing marketplace_listing row");
-            counters.skippedListings++;
+        Optional<CanonicalItem> item = canonicalItemDao.findByCanonicalItemId(target.getCanonicalItemId());
+        if (item.isEmpty()) {
+            fail(target, attempt, OUTCOME_FAILED_MISSING_ITEM, "No canonical_item row for the crawl target", counters);
             return;
         }
 
-        MarketplaceListing listing = foundListing.get();
-        ExternalCatalogItem catalogItem = listing.getExternalCatalogItem();
-        if (catalogItem == null) {
-            completeWorkItem(workItem, STATUS_SKIPPED_MISSING_CATALOG, "Missing external_catalog_item row");
-            counters.skippedListings++;
-            log.warn("bricklink.pricing.crawl.skipped_missing_catalog marketplaceListingId={}", workItem.getMarketplaceListingId());
+        MarketplaceItem marketplaceItem = marketplaceItem(item.get());
+        Optional<Integer> idItem = resolveIdItem(item.get(), marketplaceItem, target, attempt, counters);
+        if (idItem.isEmpty()) {
             return;
         }
 
-        ItemInventory inventory = itemInventoryDao.findByItemInventoryId(listing.getItemInventoryId()).orElse(null);
-        String requestedCondition = bricklinkCondition(inventory);
-        if (requestedCondition == null) {
-            completeWorkItem(workItem, STATUS_SKIPPED_MISSING_CONDITION, "Missing item_inventory.new_or_used");
-            counters.skippedListings++;
+        Map<String, Object> requestParameters = new LinkedHashMap<>();
+        requestParameters.put("itemid", idItem.get());
+        requestParameters.put("cond", target.getQueryConditionCode());
+        requestParameters.put("rpp", properties.effectiveResultsPerPage());
+        requestParameters.put("iconly", 0);
+
+        CatalogItemsForSaleResult result;
+        try {
+            result = bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(
+                    idItem.get(), target.getQueryConditionCode(), properties.effectiveResultsPerPage());
+        } catch (RuntimeException e) {
+            // bricklink-ajax returns an empty result when BrickLink has no lots for sale, so an exception is a real
+            // failure: maintenance redirect, block, timeout.
+            fail(target, attempt, OUTCOME_FAILED_HTTP, e.getMessage(), counters);
             return;
-        }
-
-        String itemNumber = clean(catalogItem.getExternalItemKey());
-        if (itemNumber == null) {
-            completeWorkItem(workItem, STATUS_SKIPPED_MISSING_ITEM_NUMBER, "Missing external_catalog_item.external_item_key");
-            counters.skippedListings++;
-            return;
-        }
-
-        Optional<Integer> resolvedItemId = resolveBricklinkInternalItemId(catalogItem, itemNumber, workItem, counters);
-        if (resolvedItemId.isEmpty()) {
-            counters.failedListings++;
-            return;
-        }
-
-        crawlPricing(listing, catalogItem, inventory, workItem, requestedCondition, resolvedItemId.get(), counters);
-    }
-
-    private Optional<Integer> resolveBricklinkInternalItemId(
-            ExternalCatalogItem catalogItem,
-            String itemNumber,
-            PricingCrawlWorkItem workItem,
-            CrawlCounters counters
-    ) {
-        Optional<Integer> existingItemId = parseInternalItemId(catalogItem.getExternalUniqueKey());
-        if (existingItemId.isPresent()) {
-            return existingItemId;
         }
 
         try {
-            Optional<Item> foundItem = bricklinkAjaxClient.findCatalogItem(itemNumber, effectiveCatalogItemType(catalogItem));
-            if (foundItem.isEmpty()) {
-                completeWorkItem(workItem, STATUS_FAILED_ITEM_ID_LOOKUP_NO_MATCH, "No exact BrickLink catalog item match for " + itemNumber);
-                counters.catalogItemLookupNoMatches++;
+            MarketSnapshot snapshot = store(target, item.get(), marketplaceItem, requestParameters, result, counters);
+            succeed(target, attempt, snapshot);
+        } catch (JsonProcessingException e) {
+            fail(target, attempt, OUTCOME_FAILED_PARSE, e.getMessage(), counters);
+        }
+    }
+
+    private MarketplaceItem marketplaceItem(CanonicalItem item) {
+        return marketplaceItemDao.findByMarketplaceCodeAndCanonicalItemId(MARKETPLACE_CODE, item.getCanonicalItemId())
+                .orElseGet(() -> marketplaceItemDao.insert(MarketplaceItem.builder()
+                        .marketplaceCode(MARKETPLACE_CODE)
+                        .canonicalItemId(item.getCanonicalItemId())
+                        .marketplaceItemKey(item.getItemNumber())
+                        .matchMethodCode(MATCH_METHOD_CATALOG_ID)
+                        .build()));
+    }
+
+    /** BrickLink's internal idItem, looked up once and kept on marketplace_item for every later crawl. */
+    private Optional<Integer> resolveIdItem(
+            CanonicalItem item,
+            MarketplaceItem marketplaceItem,
+            CrawlTarget target,
+            CrawlAttempt attempt,
+            CrawlCounters counters
+    ) {
+        Optional<Integer> known = parseInteger(marketplaceItem.getMarketplaceUniqueKey());
+        if (known.isPresent()) {
+            return known;
+        }
+        try {
+            Optional<Item> found = bricklinkAjaxClient.findCatalogItem(item.getItemNumber(), item.getItemTypeCode());
+            if (found.isEmpty() || found.get().getIdItem() == null) {
+                fail(target, attempt, OUTCOME_FAILED_RESOLVE_NO_MATCH,
+                        "No exact BrickLink catalog item match for " + item.getItemTypeCode() + " " + item.getItemNumber(), counters);
                 return Optional.empty();
             }
-
-            Integer itemId = foundItem.get().getIdItem();
-            catalogItem.setExternalUniqueKey(String.valueOf(itemId));
-            externalCatalogItemDao.update(catalogItem);
-            counters.hydratedCatalogItems++;
-            return Optional.of(itemId);
+            marketplaceItem.setMarketplaceUniqueKey(String.valueOf(found.get().getIdItem()));
+            marketplaceItem.setResolvedAt(now());
+            marketplaceItemDao.update(marketplaceItem);
+            counters.idItemsResolved++;
+            return Optional.of(found.get().getIdItem());
         } catch (BricklinkAjaxClientException e) {
-            if (e.getMessage() != null && e.getMessage().contains("Ambiguous")) {
-                completeWorkItem(workItem, STATUS_FAILED_ITEM_ID_LOOKUP_AMBIGUOUS, e.getMessage());
-                counters.catalogItemLookupAmbiguousMatches++;
-            } else {
-                retryOrFail(workItem, STATUS_FAILED_ITEM_ID_LOOKUP_HTTP_ERROR, e.getMessage());
-                counters.catalogItemLookupFailures++;
-            }
+            boolean ambiguous = e.getMessage() != null && e.getMessage().contains("Ambiguous");
+            fail(target, attempt, ambiguous ? OUTCOME_FAILED_RESOLVE_AMBIGUOUS : OUTCOME_FAILED_HTTP, e.getMessage(), counters);
             return Optional.empty();
         } catch (RuntimeException e) {
-            retryOrFail(workItem, STATUS_FAILED_ITEM_ID_LOOKUP_HTTP_ERROR, e.getMessage());
-            counters.catalogItemLookupFailures++;
+            fail(target, attempt, OUTCOME_FAILED_HTTP, e.getMessage(), counters);
             return Optional.empty();
         }
     }
 
-    private void crawlPricing(
-            MarketplaceListing listing,
-            ExternalCatalogItem catalogItem,
-            ItemInventory inventory,
-            PricingCrawlWorkItem workItem,
-            String requestedCondition,
-            Integer itemId,
-            CrawlCounters counters
-    ) {
-        Map<String, Object> requestParameters = Map.of(
-                "itemid", itemId,
-                "cond", requestedCondition,
-                "rpp", properties.effectiveResultsPerPage(),
-                "iconly", 0
-        );
-        workItem.setSourceRequestUrl(CATALOG_ITEMS_FOR_SALE_PATH);
-        workItem.setSourceRequestParameters(writeJson(requestParameters));
-        pricingCrawlWorkItemDao.update(workItem);
-
-        try {
-            CatalogItemsForSaleResult result = bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(
-                    itemId,
-                    requestedCondition,
-                    properties.effectiveResultsPerPage()
-            );
-            persistPricingSnapshot(listing, catalogItem, inventory, workItem, requestedCondition, itemId, requestParameters, result, counters);
-        } catch (JsonProcessingException e) {
-            completeWorkItem(workItem, STATUS_FAILED_PRICING_PARSE_ERROR, e.getMessage());
-            counters.failedListings++;
-        } catch (RuntimeException e) {
-            // bricklink-ajax returns an empty result when BrickLink has no lots for sale, so any exception here is a
-            // real failure.
-            retryOrFail(workItem, STATUS_FAILED_PRICING_HTTP_ERROR, e.getMessage());
-            counters.failedListings++;
-        }
-    }
-
-    private void persistPricingSnapshot(
-            MarketplaceListing listing,
-            ExternalCatalogItem catalogItem,
-            ItemInventory inventory,
-            PricingCrawlWorkItem workItem,
-            String requestedCondition,
-            Integer itemId,
+    private MarketSnapshot store(
+            CrawlTarget target,
+            CanonicalItem item,
+            MarketplaceItem marketplaceItem,
             Map<String, Object> requestParameters,
             CatalogItemsForSaleResult result,
             CrawlCounters counters
     ) throws JsonProcessingException {
-        String rawPayload = writeJson(result);
-        PricingSnapshot snapshot = pricingSnapshotDao.insert(PricingSnapshot.builder()
-                .pricingCrawlWorkItemId(workItem.getPricingCrawlWorkItemId())
-                .marketplaceListingId(listing.getMarketplaceListingId())
-                .externalCatalogItemId(catalogItem.getExternalCatalogItemId())
-                .sourceExternalServiceId(properties.getBricklinkExternalServiceId())
-                .sourceItemKey(catalogItem.getExternalItemKey())
-                .sourceUniqueKey(String.valueOf(itemId))
-                .itemConditionCode(requestedCondition)
-                .completenessCode(inventory == null ? null : BricklinkPricingCodeNormalizer.completeness(inventory.getCompleteness()))
-                .sourceRequestUrl(CATALOG_ITEMS_FOR_SALE_PATH)
-                .sourceRequestParameters(writeJson(requestParameters))
-                .rawPayloadHash(sha256(rawPayload))
-                .comparableCount(result.getList().size())
+        List<ItemForSale> lots = result.getList() == null ? List.of() : result.getList();
+        MarketSnapshot snapshot = marketSnapshotDao.insert(MarketSnapshot.builder()
+                .crawlTargetId(target.getCrawlTargetId())
+                .marketplaceCode(MARKETPLACE_CODE)
+                .canonicalItemId(item.getCanonicalItemId())
+                .queryConditionCode(target.getQueryConditionCode())
+                .marketplaceItemKey(marketplaceItem.getMarketplaceItemKey())
+                .marketplaceUniqueKey(marketplaceItem.getMarketplaceUniqueKey())
+                .requestUrl(CATALOG_ITEMS_FOR_SALE_PATH)
+                .requestParameters(objectMapper.writeValueAsString(requestParameters))
+                .rawPayloadHash(sha256(objectMapper.writeValueAsString(result)))
+                .listingCount(lots.size())
                 .capturedAt(now())
                 .build());
         counters.snapshotsWritten++;
-        if (result.getList().isEmpty()) {
-            counters.zeroComparableSnapshotsWritten++;
+        if (lots.isEmpty()) {
+            counters.emptySnapshots++;
         }
 
-        for (ItemForSale itemForSale : result.getList()) {
-            if (itemForSale.getDisplayCurrencyCode() == null || itemForSale.getSalePrice() == null || itemForSale.getSalePrice() <= 0) {
-                log.warn(
-                        "bricklink.pricing.crawl.unparseable_price pricingSnapshotId={} externalListingId={} displayPrice={}",
-                        snapshot.getPricingSnapshotId(),
-                        itemForSale.getIdInv(),
-                        itemForSale.getMDisplaySalePrice()
-                );
+        for (ItemForSale lot : lots) {
+            if (lot.getDisplayCurrencyCode() == null || lot.getSalePrice() == null || lot.getSalePrice() <= 0) {
+                log.warn("bricklink.pricing.crawl.unparseable_price marketSnapshotId={} externalListingId={} displayPrice={}",
+                        snapshot.getMarketSnapshotId(), lot.getIdInv(), lot.getMDisplaySalePrice());
                 continue;
             }
-            pricingSnapshotListingDao.insert(snapshotListing(snapshot, itemForSale));
-            counters.snapshotListingsWritten++;
+            marketListingDao.insert(marketListing(snapshot, lot));
+            counters.listingsWritten++;
         }
-
-        completeWorkItem(workItem, STATUS_SUCCEEDED, null);
+        return snapshot;
     }
 
-    private PricingSnapshotListing snapshotListing(PricingSnapshot snapshot, ItemForSale itemForSale) throws JsonProcessingException {
-        return PricingSnapshotListing.builder()
-                .pricingSnapshotId(snapshot.getPricingSnapshotId())
-                .externalListingId(itemForSale.getIdInv() == null ? null : String.valueOf(itemForSale.getIdInv()))
-                .sellerName(itemForSale.getStrSellerUsername())
-                .sellerCountryCode(itemForSale.getStrSellerCountryCode())
-                .itemConditionCode(itemForSale.getCodeNew())
-                .completenessCode(itemForSale.getCodeComplete())
-                .quantityAvailable(itemForSale.getN4Qty())
-                .unitPrice(BigDecimal.valueOf(itemForSale.getSalePrice()))
-                .currencyCode(itemForSale.getDisplayCurrencyCode())
-                .description(itemForSale.getStrDesc())
-                .extendedDescription(null)
-                .sourceListingPayload(objectMapper.writeValueAsString(itemForSale))
+    MarketListing marketListing(MarketSnapshot snapshot, ItemForSale lot) throws JsonProcessingException {
+        String currency = lot.getDisplayCurrencyCode();
+        NativePrice nativePrice = nativePrice(lot.getMInvSalePrice()).filter(price -> !price.currencyCode().equals(currency)).orElse(null);
+        String completeness = BricklinkPricingCodeNormalizer.completeness(lot.getCodeComplete());
+        return MarketListing.builder()
+                .marketSnapshotId(snapshot.getMarketSnapshotId())
+                .externalListingId(lot.getIdInv() == null ? null : String.valueOf(lot.getIdInv()))
+                .sellerKey(lot.getStrSellerUsername())
+                .sellerName(lot.getStrStorename())
+                .sellerCountryCode(lot.getStrSellerCountryCode())
+                .sellerFeedbackScore(lot.getN4SellerFeedbackScore())
+                .rawConditionCode(lot.getCodeNew())
+                .rawCompletenessCode(lot.getCodeComplete())
+                .conditionCode(BricklinkPricingCodeNormalizer.condition(lot.getCodeNew()))
+                .completenessCode(completeness != null && CANONICAL_COMPLETENESS.contains(completeness) ? completeness : null)
+                .matchConfidence(CATALOG_MATCH_CONFIDENCE)
+                .listingFormatCode(LISTING_FORMAT_FIXED_PRICE)
+                .quantityAvailable(lot.getN4Qty())
+                .itemPrice(BigDecimal.valueOf(lot.getSalePrice()))
+                .currencyCode(currency)
+                .nativePrice(nativePrice == null ? null : nativePrice.amount())
+                .nativeCurrencyCode(nativePrice == null ? null : nativePrice.currencyCode())
+                .description(lot.getStrDesc())
+                .sourceListingPayload(objectMapper.writeValueAsString(lot))
                 .build();
     }
 
-    private void completeWorkItem(PricingCrawlWorkItem workItem, String statusCode, String errorMessage) {
-        workItem.setWorkStatusCode(statusCode);
-        workItem.setCompletedAt(now());
-        workItem.setClaimedAt(null);
-        workItem.setNextAttemptAt(nextCrawlAttemptAt());
-        workItem.setLastErrorMessage(errorMessage);
-        pricingCrawlWorkItemDao.update(workItem);
+    private void succeed(CrawlTarget target, CrawlAttempt attempt, MarketSnapshot snapshot) {
+        ZonedDateTime finishedAt = now();
+        attempt.setFinishedAt(finishedAt);
+        attempt.setOutcomeCode(OUTCOME_SUCCEEDED);
+        attempt.setMarketSnapshotId(snapshot.getMarketSnapshotId());
+        crawlAttemptDao.finish(attempt);
+
+        release(target, finishedAt);
+        target.setLastSuccessAt(snapshot.getCapturedAt());
+        target.setLastMarketSnapshotId(snapshot.getMarketSnapshotId());
+        target.setConsecutiveFailureCount(0);
+        target.setLastErrorMessage(null);
+        target.setNextDueAt(adjustForBlackout(finishedAt.plus(properties.effectiveCrawlCadence())));
+        crawlTargetDao.update(target);
     }
 
-    private void retryOrFail(PricingCrawlWorkItem workItem, String failureStatusCode, String errorMessage) {
-        if (canRetry(workItem)) {
-            workItem.setWorkStatusCode(STATUS_PENDING);
-            workItem.setClaimedAt(null);
-            workItem.setCompletedAt(null);
-            workItem.setNextAttemptAt(adjustForBlackout(now().plus(properties.effectiveRetryBackoff())));
-            workItem.setLastErrorMessage(errorMessage);
-            pricingCrawlWorkItemDao.update(workItem);
-            return;
-        }
-        completeWorkItem(workItem, failureStatusCode, errorMessage);
+    private void fail(CrawlTarget target, CrawlAttempt attempt, String outcomeCode, String message, CrawlCounters counters) {
+        ZonedDateTime finishedAt = now();
+        attempt.setFinishedAt(finishedAt);
+        attempt.setOutcomeCode(outcomeCode);
+        attempt.setErrorMessage(message);
+        crawlAttemptDao.finish(attempt);
+
+        int failures = (target.getConsecutiveFailureCount() == null ? 0 : target.getConsecutiveFailureCount()) + 1;
+        release(target, finishedAt);
+        target.setConsecutiveFailureCount(failures);
+        target.setLastErrorMessage(message);
+        // After max-attempts failures in a row, wait a full cadence instead of hammering an item BrickLink keeps refusing.
+        Duration wait = failures >= properties.effectiveMaxAttempts() ? properties.effectiveCrawlCadence() : properties.effectiveRetryBackoff();
+        target.setNextDueAt(adjustForBlackout(finishedAt.plus(wait)));
+        crawlTargetDao.update(target);
+
+        counters.failedFetches++;
+        log.warn("bricklink.pricing.crawl.failed crawlTargetId={} canonicalItemId={} condition={} outcome={} consecutiveFailures={} message={}",
+                target.getCrawlTargetId(), target.getCanonicalItemId(), target.getQueryConditionCode(), outcomeCode, failures, message);
     }
 
-    private boolean canRetry(PricingCrawlWorkItem workItem) {
-        int attemptCount = workItem.getAttemptCount() == null ? 0 : workItem.getAttemptCount();
-        int maxAttempts = workItem.getMaxAttempts() == null ? properties.effectiveMaxAttempts() : workItem.getMaxAttempts();
-        return attemptCount < maxAttempts;
+    private void release(CrawlTarget target, ZonedDateTime attemptAt) {
+        target.setTargetStatusCode(CrawlTargetStatus.IDLE);
+        target.setClaimedAt(null);
+        target.setClaimExpiresAt(null);
+        target.setClaimedBy(null);
+        target.setLastAttemptAt(attemptAt);
     }
 
-    private ZonedDateTime scheduledAttemptAt(ZonedDateTime runAt, int index, int listingCount) {
-        Duration spreadWindow = properties.effectiveScheduleSpreadWindow();
-        long spreadMillis = spreadWindow.toMillis();
-        long spreadOffsetMillis = listingCount <= 1 ? 0 : (spreadMillis * index) / listingCount;
-        long jitterMillis = randomJitterMillis();
-        return adjustForBlackout(runAt.plus(Duration.ofMillis(spreadOffsetMillis + jitterMillis)));
-    }
-
-    private long randomJitterMillis() {
+    private ZonedDateTime spreadDueAt(ZonedDateTime runAt, int index, int count) {
+        long spreadMillis = properties.effectiveScheduleSpreadWindow().toMillis();
+        long offsetMillis = count <= 1 ? 0 : (spreadMillis * index) / count;
         long jitterMillis = properties.effectiveScheduleJitter().toMillis();
-        if (jitterMillis <= 0) {
-            return 0;
-        }
-        return ThreadLocalRandom.current().nextLong(jitterMillis + 1);
+        long jitter = jitterMillis <= 0 ? 0 : ThreadLocalRandom.current().nextLong(jitterMillis + 1);
+        return adjustForBlackout(runAt.plus(Duration.ofMillis(offsetMillis + jitter)));
     }
 
-    private ZonedDateTime nextCrawlAttemptAt() {
-        return adjustForBlackout(now().plus(properties.effectiveCrawlCadence()));
-    }
-
-    private ZonedDateTime adjustForBlackout(ZonedDateTime attemptAt) {
+    ZonedDateTime adjustForBlackout(ZonedDateTime attemptAt) {
         BricklinkPricingCrawlProperties.Blackout blackout = properties.getBlackout();
-        if (blackout == null || !blackout.isEnabled()) {
+        if (blackout == null || !blackout.isEnabled() || !isInBlackout(attemptAt)) {
             return attemptAt;
         }
-
         ZoneId zone = ZoneId.of(blackout.getZoneId());
-        ZonedDateTime localAttempt = attemptAt.withZoneSameInstant(zone);
-        if (blackout.isWeekdaysOnly() && isWeekend(localAttempt.getDayOfWeek())) {
-            return attemptAt;
-        }
-        if (!isInBlackout(localAttempt, blackout)) {
-            return attemptAt;
-        }
-
-        LocalDate nextAllowedDate = localAttempt.toLocalDate();
-        if (!localAttempt.toLocalTime().isBefore(blackout.getEnd())) {
+        ZonedDateTime local = attemptAt.withZoneSameInstant(zone);
+        LocalDate nextAllowedDate = local.toLocalDate();
+        if (!local.toLocalTime().isBefore(blackout.getEnd())) {
             nextAllowedDate = nextAllowedDate.plusDays(1);
         }
-        ZonedDateTime nextAllowed = ZonedDateTime.of(nextAllowedDate, blackout.getEnd(), zone);
-        return nextAllowed.withZoneSameInstant(ZoneOffset.UTC);
+        return ZonedDateTime.of(nextAllowedDate, blackout.getEnd(), zone).withZoneSameInstant(ZoneOffset.UTC);
     }
 
-    private boolean isInBlackout(ZonedDateTime localAttempt, BricklinkPricingCrawlProperties.Blackout blackout) {
-        if (blackout.getStart().isBefore(blackout.getEnd())) {
-            return !localAttempt.toLocalTime().isBefore(blackout.getStart())
-                    && localAttempt.toLocalTime().isBefore(blackout.getEnd());
+    boolean isInBlackout(ZonedDateTime at) {
+        BricklinkPricingCrawlProperties.Blackout blackout = properties.getBlackout();
+        if (blackout == null || !blackout.isEnabled()) {
+            return false;
         }
-        return !localAttempt.toLocalTime().isBefore(blackout.getStart())
-                || localAttempt.toLocalTime().isBefore(blackout.getEnd());
+        ZonedDateTime local = at.withZoneSameInstant(ZoneId.of(blackout.getZoneId()));
+        if (blackout.isWeekdaysOnly() && isWeekend(local.getDayOfWeek())) {
+            return false;
+        }
+        if (blackout.getStart().isBefore(blackout.getEnd())) {
+            return !local.toLocalTime().isBefore(blackout.getStart()) && local.toLocalTime().isBefore(blackout.getEnd());
+        }
+        return !local.toLocalTime().isBefore(blackout.getStart()) || local.toLocalTime().isBefore(blackout.getEnd());
     }
 
-    private boolean isWeekend(DayOfWeek dayOfWeek) {
+    private static boolean isWeekend(DayOfWeek dayOfWeek) {
         return dayOfWeek == DayOfWeek.SATURDAY || dayOfWeek == DayOfWeek.SUNDAY;
     }
 
-    private String outcome(CrawlCounters counters) {
-        if (counters.failedListings > 0) {
-            return "PARTIAL_SUCCESS";
+    /** The seller's own-currency price ("EUR 315.00", "CA $412.50"), or empty when it cannot be read. */
+    static Optional<NativePrice> nativePrice(String price) {
+        if (price == null) {
+            return Optional.empty();
         }
-        if (counters.workItemsClaimed > 0) {
-            return "SUCCESS";
+        Matcher matcher = PRICE_PATTERN.matcher(price.trim());
+        if (!matcher.matches()) {
+            return Optional.empty();
         }
-        if (counters.workItemsScheduled > 0 || counters.staleWorkItemsRequeued > 0) {
-            return "SCHEDULED";
+        String prefix = matcher.group(1);
+        String code = prefix.length() == 3 ? prefix : "$".equals(matcher.group(2)) ? prefix + "D" : null;
+        if (code == null) {
+            return Optional.empty();
         }
-        return "NO_WORK";
-    }
-
-    private String bricklinkCondition(ItemInventory inventory) {
-        if (inventory == null || inventory.getNewOrUsed() == null) {
-            return null;
-        }
-        return BricklinkPricingCodeNormalizer.condition(inventory.getNewOrUsed());
-    }
-
-    private String effectiveCatalogItemType(ExternalCatalogItem catalogItem) {
-        String itemTypeCode = clean(catalogItem.getItemTypeCode());
-        if (itemTypeCode == null) {
-            return properties.effectiveCatalogItemType();
-        }
-        return itemTypeCode.toUpperCase();
-    }
-
-    private Optional<Integer> parseInternalItemId(String externalUniqueKey) {
         try {
-            return Optional.ofNullable(clean(externalUniqueKey)).map(Integer::valueOf);
+            return Optional.of(new NativePrice(new BigDecimal(matcher.group(3).replace(",", "")), code));
         } catch (NumberFormatException e) {
             return Optional.empty();
         }
     }
 
-    private String writeJson(Object value) {
+    record NativePrice(BigDecimal amount, String currencyCode) {
+    }
+
+    private String outcome(CrawlCounters counters) {
+        if (counters.failedFetches > 0) {
+            return "PARTIAL_SUCCESS";
+        }
+        if (counters.targetsClaimed > 0) {
+            return "SUCCESS";
+        }
+        return counters.scheduledAnything() ? "SCHEDULED" : "NO_WORK";
+    }
+
+    private BricklinkPricingCrawlResult result(String outcome, CrawlCounters counters, long start) {
+        long elapsed = System.currentTimeMillis() - start;
+        if ("NO_WORK".equals(outcome)) {
+            return BricklinkPricingCrawlResult.noWork(elapsed);
+        }
+        return new BricklinkPricingCrawlResult(
+                outcome,
+                counters.targetsCreated,
+                counters.targetsReenabled,
+                counters.targetsDisabled,
+                counters.targetsClaimed,
+                counters.snapshotsWritten,
+                counters.emptySnapshots,
+                counters.listingsWritten,
+                counters.idItemsResolved,
+                counters.failedFetches,
+                elapsed
+        );
+    }
+
+    private static ZonedDateTime later(ZonedDateTime a, ZonedDateTime b) {
+        return a.isAfter(b) ? a : b;
+    }
+
+    private static Optional<Integer> parseInteger(String value) {
+        if (value == null || value.isBlank()) {
+            return Optional.empty();
+        }
         try {
-            return objectMapper.writeValueAsString(value);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Unable to serialize pricing crawl value", e);
+            return Optional.of(Integer.valueOf(value.trim()));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
         }
     }
 
-    private String sha256(String value) {
+    private static String sha256(String value) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
@@ -484,34 +466,32 @@ public class BricklinkPricingCrawlService {
         }
     }
 
-    private String clean(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return value.trim();
-    }
-
-    private ZonedDateTime now() {
+    ZonedDateTime now() {
         return ZonedDateTime.now(ZoneOffset.UTC);
     }
 
-    private long elapsedMillis(long start) {
-        return System.currentTimeMillis() - start;
+    /** Crawl target statuses, as stored in crawl_target.target_status_code. */
+    static final class CrawlTargetStatus {
+        static final String IDLE = "IDLE";
+        static final String DISABLED = "DISABLED";
+
+        private CrawlTargetStatus() {
+        }
     }
 
     private static final class CrawlCounters {
-        private int listingsSelected;
-        private int workItemsScheduled;
-        private int workItemsClaimed;
-        private int staleWorkItemsRequeued;
+        private int targetsCreated;
+        private int targetsReenabled;
+        private int targetsDisabled;
+        private int targetsClaimed;
         private int snapshotsWritten;
-        private int zeroComparableSnapshotsWritten;
-        private int snapshotListingsWritten;
-        private int hydratedCatalogItems;
-        private int catalogItemLookupNoMatches;
-        private int catalogItemLookupAmbiguousMatches;
-        private int catalogItemLookupFailures;
-        private int skippedListings;
-        private int failedListings;
+        private int emptySnapshots;
+        private int listingsWritten;
+        private int idItemsResolved;
+        private int failedFetches;
+
+        boolean scheduledAnything() {
+            return targetsCreated > 0 || targetsReenabled > 0 || targetsDisabled > 0;
+        }
     }
 }

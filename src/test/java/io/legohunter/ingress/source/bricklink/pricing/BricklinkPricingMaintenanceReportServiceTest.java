@@ -1,16 +1,15 @@
 package io.legohunter.ingress.source.bricklink.pricing;
 
+import io.legohunter.data.dao.CrawlAttemptDao;
+import io.legohunter.data.dao.CrawlTargetDao;
 import io.legohunter.data.dao.MarketplaceListingDao;
-import io.legohunter.data.dao.PricingCrawlWorkItemDao;
-import io.legohunter.data.dto.PricingCrawlWorkItemDuplicate;
-import io.legohunter.data.dto.PricingCrawlWorkItemFailure;
-import io.legohunter.data.dto.PricingCrawlWorkItemMaintenanceSummary;
+import io.legohunter.data.dto.CrawlAttempt;
 import io.legohunter.data.dto.PricingDataQualityGap;
 import io.legohunter.data.dto.PricingDataQualitySummary;
-import io.legohunter.data.dto.PricingHydrationGap;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -22,57 +21,30 @@ import static org.mockito.Mockito.when;
 
 class BricklinkPricingMaintenanceReportServiceTest {
     @Test
-    void buildReportReturnsDryRunQueueAndHydrationDiagnostics() {
-        PricingCrawlWorkItemDao workItemDao = mock(PricingCrawlWorkItemDao.class);
-        MarketplaceListingDao marketplaceListingDao = mock(MarketplaceListingDao.class);
-        BricklinkPricingCrawlProperties properties = new BricklinkPricingCrawlProperties();
-        properties.setBricklinkExternalServiceId(7);
-        properties.setActiveListingStatusCode("active");
-        properties.setClaimStaleAfter(Duration.ofHours(3));
-
-        PricingCrawlWorkItemMaintenanceSummary summary = PricingCrawlWorkItemMaintenanceSummary.builder()
-                .workItemCount(10L)
-                .duplicatePendingWorkItemCount(1L)
-                .build();
-        PricingCrawlWorkItemDuplicate duplicate = PricingCrawlWorkItemDuplicate.builder()
-                .marketplaceListingId(100)
-                .workItemCount(2)
-                .pendingCount(1)
-                .build();
-        PricingCrawlWorkItemFailure failure = PricingCrawlWorkItemFailure.builder()
-                .pricingCrawlWorkItemId(300L)
-                .lastErrorMessage("returned []")
-                .build();
-        PricingHydrationGap hydrationGap = PricingHydrationGap.builder()
-                .marketplaceListingId(200)
-                .externalItemKey("6390-1")
-                .build();
-
-        when(workItemDao.summarizeMaintenance(eq("PENDING"), eq("CLAIMED"), eq("SUCCEEDED"), any(), any()))
-                .thenReturn(summary);
-        when(workItemDao.findDuplicateMarketplaceListingWorkItems("PENDING", "CLAIMED", 1)).thenReturn(Set.of(duplicate));
-        when(workItemDao.findRecentFailures(1)).thenReturn(Set.of(failure));
-        when(marketplaceListingDao.findPricingHydrationGapsByListingExternalServiceIdAndListingStatusCode(7, "ACTIVE", 1))
-                .thenReturn(Set.of(hydrationGap));
+    void buildReportSummarisesTheSharedCrawlQueueAndRecentFailures() {
+        CrawlTargetDao crawlTargetDao = mock(CrawlTargetDao.class);
+        CrawlAttemptDao crawlAttemptDao = mock(CrawlAttemptDao.class);
+        when(crawlTargetDao.countByTargetStatusCode("BRICKLINK", "IDLE")).thenReturn(10L);
+        when(crawlTargetDao.countByTargetStatusCode("BRICKLINK", "CLAIMED")).thenReturn(1L);
+        when(crawlTargetDao.countByTargetStatusCode("BRICKLINK", "DISABLED")).thenReturn(2L);
+        when(crawlTargetDao.countDue(eq("BRICKLINK"), any())).thenReturn(3L);
+        when(crawlTargetDao.countFailing("BRICKLINK")).thenReturn(4L);
+        CrawlAttempt failure = CrawlAttempt.builder().crawlAttemptId(300L).outcomeCode("FAILED_HTTP").errorMessage("maintenance").build();
+        when(crawlAttemptDao.findRecentFailures("BRICKLINK", 1)).thenReturn(List.of(failure));
 
         BricklinkPricingMaintenanceReportService service = new BricklinkPricingMaintenanceReportService(
-                workItemDao,
-                marketplaceListingDao,
-                properties
+                crawlTargetDao,
+                crawlAttemptDao,
+                mock(MarketplaceListingDao.class),
+                new BricklinkPricingCrawlProperties()
         );
 
         BricklinkPricingMaintenanceReport report = service.buildReport(0);
 
         assertThat(report.dryRun()).isTrue();
         assertThat(report.generatedAt()).isNotNull();
-        assertThat(report.workItemSummary()).isSameAs(summary);
-        assertThat(report.duplicateWorkItems()).containsExactly(duplicate);
+        assertThat(report.crawlTargets()).isEqualTo(new BricklinkPricingMaintenanceReport.CrawlTargetSummary(10, 1, 2, 3, 4));
         assertThat(report.recentFailures()).containsExactly(failure);
-        assertThat(report.hydrationGaps()).containsExactly(hydrationGap);
-        verify(workItemDao).summarizeMaintenance(eq("PENDING"), eq("CLAIMED"), eq("SUCCEEDED"), any(), any());
-        verify(workItemDao).findDuplicateMarketplaceListingWorkItems("PENDING", "CLAIMED", 1);
-        verify(workItemDao).findRecentFailures(1);
-        verify(marketplaceListingDao).findPricingHydrationGapsByListingExternalServiceIdAndListingStatusCode(7, "ACTIVE", 1);
     }
 
     @Test
@@ -101,7 +73,8 @@ class BricklinkPricingMaintenanceReportServiceTest {
         )).thenReturn(Set.of(gap));
 
         BricklinkPricingMaintenanceReportService service = new BricklinkPricingMaintenanceReportService(
-                mock(PricingCrawlWorkItemDao.class),
+                mock(CrawlTargetDao.class),
+                mock(CrawlAttemptDao.class),
                 marketplaceListingDao,
                 properties
         );
@@ -117,35 +90,18 @@ class BricklinkPricingMaintenanceReportServiceTest {
 
     @Test
     void buildReportCapsLargeLimits() {
-        PricingCrawlWorkItemDao workItemDao = mock(PricingCrawlWorkItemDao.class);
-        MarketplaceListingDao marketplaceListingDao = mock(MarketplaceListingDao.class);
-        BricklinkPricingCrawlProperties properties = new BricklinkPricingCrawlProperties();
-        properties.setBricklinkExternalServiceId(7);
-        properties.setActiveListingStatusCode("ACTIVE");
-
-        when(workItemDao.findDuplicateMarketplaceListingWorkItems("PENDING", "CLAIMED", BricklinkPricingMaintenanceReportService.MAX_REPORT_LIMIT))
-                .thenReturn(Set.of());
-        when(workItemDao.findRecentFailures(BricklinkPricingMaintenanceReportService.MAX_REPORT_LIMIT)).thenReturn(Set.of());
-        when(marketplaceListingDao.findPricingHydrationGapsByListingExternalServiceIdAndListingStatusCode(
-                7,
-                "ACTIVE",
-                BricklinkPricingMaintenanceReportService.MAX_REPORT_LIMIT
-        )).thenReturn(Set.of());
-
+        CrawlAttemptDao crawlAttemptDao = mock(CrawlAttemptDao.class);
+        when(crawlAttemptDao.findRecentFailures("BRICKLINK", BricklinkPricingMaintenanceReportService.MAX_REPORT_LIMIT))
+                .thenReturn(List.of());
         BricklinkPricingMaintenanceReportService service = new BricklinkPricingMaintenanceReportService(
-                workItemDao,
-                marketplaceListingDao,
-                properties
+                mock(CrawlTargetDao.class),
+                crawlAttemptDao,
+                mock(MarketplaceListingDao.class),
+                new BricklinkPricingCrawlProperties()
         );
 
         service.buildReport(10_000);
 
-        verify(workItemDao).findDuplicateMarketplaceListingWorkItems("PENDING", "CLAIMED", BricklinkPricingMaintenanceReportService.MAX_REPORT_LIMIT);
-        verify(workItemDao).findRecentFailures(BricklinkPricingMaintenanceReportService.MAX_REPORT_LIMIT);
-        verify(marketplaceListingDao).findPricingHydrationGapsByListingExternalServiceIdAndListingStatusCode(
-                7,
-                "ACTIVE",
-                BricklinkPricingMaintenanceReportService.MAX_REPORT_LIMIT
-        );
+        verify(crawlAttemptDao).findRecentFailures("BRICKLINK", BricklinkPricingMaintenanceReportService.MAX_REPORT_LIMIT);
     }
 }

@@ -174,6 +174,8 @@ public class BricklinkPricingApplyReadinessService {
                 .marketplaceListingId(review.getMarketplaceListingId())
                 .pricingDecisionId(review.getPricingDecisionId())
                 .pricingSnapshotId(review.getPricingSnapshotId())
+                .marketSnapshotId(review.getMarketSnapshotId())
+                .marketSnapshotCapturedAt(review.getSnapshotCapturedAt())
                 .readinessStatusCode(evaluation.status().readinessStatusCode())
                 .blockReasonCode(evaluation.status().blockReasonCode())
                 .currentPrice(money(review.getCurrentUnitPrice()))

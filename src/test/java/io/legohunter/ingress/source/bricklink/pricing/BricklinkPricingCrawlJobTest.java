@@ -12,21 +12,7 @@ class BricklinkPricingCrawlJobTest {
     void runOnceDelegatesToCrawlService() {
         BricklinkPricingCrawlService crawlService = mock(BricklinkPricingCrawlService.class);
         BricklinkPricingCrawlResult expected = new BricklinkPricingCrawlResult(
-                "SUCCESS",
-                1,
-                1,
-                1,
-                0,
-                2,
-                0,
-                1,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                50L
+                "SUCCESS", 1, 0, 0, 1, 1, 0, 2, 0, 0, 50L
         );
         when(crawlService.runOnce()).thenReturn(expected);
 
