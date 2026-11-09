@@ -10,6 +10,10 @@ spring:
       # ShipStation is PROD-only (HOMELAB-57/59): lower environments hold no ShipStation credentials,
       # so the file is optional here and the fulfillment sync below is off.
       - optional:file:${import-path}/shipstation-configuration.yml
+  # The shipstation-rest starter fails at startup without credentials (by design, which keeps PROD
+  # safe), so lower environments switch it off entirely (HOMELAB-57).
+  autoconfigure:
+    exclude: com.shipstation.api.rest.autoconfigure.ShipStationRestAutoConfiguration
   datasource:
     database-key-name: rasppi5-01-lego-sandbox
     hikari:

@@ -80,6 +80,8 @@ class SpringProfileEnvironmentTest {
 
         assertThat(String.valueOf(effective.get("lego.fulfillment.sync.scheduled.enabled"))).isEqualTo("false");
         assertThat(effective.stringPropertyNames()).noneMatch(name -> name.startsWith("shipstation.rest.api-"));
+        assertThat(String.valueOf(effective.get("spring.autoconfigure.exclude")))
+                .isEqualTo("com.shipstation.api.rest.autoconfigure.ShipStationRestAutoConfiguration");
     }
 
     @Test
@@ -88,6 +90,8 @@ class SpringProfileEnvironmentTest {
 
         assertThat(String.valueOf(effective.get("lego.fulfillment.sync.scheduled.enabled"))).isEqualTo("true");
         assertThat(String.valueOf(effective.get("lego.fulfillment.sync.scheduled.apply"))).isEqualTo("true");
+        // PROD keeps the starter, which refuses to start without ShipStation credentials.
+        assertThat(effective.get("spring.autoconfigure.exclude")).isNull();
     }
 
     @ParameterizedTest
