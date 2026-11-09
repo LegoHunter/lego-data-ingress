@@ -30,8 +30,9 @@ The service defaults to the `local,sandbox` profiles unless overridden by `sprin
 | Rebrickable catalog ingestion | Kafka/S3 event driven | Parse Rebrickable gzipped CSV catalog/theme files and upsert external catalog/category tables. |
 | Image-hosting sync | REST and scheduled job | Reconcile item inventory photos and albums to Flickr through `lego-imaging`. |
 | Image-hosting repair | REST | Repair DB links from current remote image-hosting state. |
-| BrickLink pricing crawl | Scheduled job | Crawl configured active and draft BrickLink marketplace listings, hydrate missing BrickLink internal catalog ids, and persist immutable pricing snapshots/listings for later pricing decisions. |
-| BrickLink pricing decision | Scheduled job | Read latest BrickLink pricing snapshots, compute competitive prices for active listings and unpriced drafts, and persist auditable non-applied pricing decisions. |
+| BrickLink want list | Scheduled job (every environment) | Keep this environment's rows in the shared `marketplace_pricing.want_list_item`: what it is pricing, by catalog item, condition and completeness. |
+| BrickLink pricing crawl | Scheduled job (one deployment: SANDBOX) | The shared crawler: crawl the combined want list once for every environment and store market snapshots and lots in `marketplace_pricing`. |
+| BrickLink pricing decision | Scheduled job | Read the latest shared BrickLink market snapshots, compute competitive prices for active listings and unpriced drafts, and persist auditable non-applied pricing decisions. |
 | BrickLink pricing apply readiness | Scheduled job | Dry-run review of latest proposed pricing decisions, including first-price decisions for unpriced drafts; writes no listing prices and triggers no marketplace sync. |
 | BrickLink order sync | Scheduled job | Poll BrickLink open orders and, when apply mode is enabled, sync marketplace order staging tables. |
 | Fulfillment sync | Scheduled job | Map canonically projected, invoiced BrickLink orders to ShipStation drafts, then persist confirmed shipments and reconcile them back to BrickLink when apply mode is enabled. |
@@ -298,146 +299,87 @@ Important logs:
 | `bricklink.order_sync.probe.completed` | Job completed with counts and elapsed time. |
 | `bricklink.order_sync.probe.failed` | Job-level failure. |
 
-### `BricklinkPricingCrawlJob`
+### `BricklinkWantListSyncJob`
 
-Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingCrawlJob`
+Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkWantListSyncJob` (HOMELAB-32)
 
-Condition:
+Runs in **every** environment that prices listings (SANDBOX and DEV today). It tells the shared crawler what this environment is selling by keeping its own rows in `marketplace_pricing.want_list_item`.
 
 ```yaml
-lego.bricklink.pricing.crawl.enabled: true
+lego.bricklink.pricing.want-list.enabled: true
+lego.bricklink.pricing.want-list.scheduled.enabled: true
+```
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `lego.bricklink.pricing.want-list.environment-code` | `${lego.environment.code}` | The environment code its rows carry. It only ever writes and prunes rows with this code. |
+| `lego.bricklink.pricing.want-list.priceable-listing-status-codes` | `ACTIVE,DRAFT` | Listings in these statuses are wanted. Same selection as the decision. |
+| `lego.bricklink.pricing.want-list.prune-after` | `2d` | Rows this environment has not confirmed for this long are deleted: it no longer sells the item. |
+| `lego.bricklink.pricing.want-list.scheduled.fixed-delay-ms` | `3600000` | Hourly. |
+
+Each run selects the environment's priceable BrickLink listings (recognised New/Used condition, a completeness, a catalog item with type and number), groups them by catalog item + canonical condition (`N`/`U`) + canonical completeness (`S`/`C`/`B`/`X`), creates the shared `canonical_item` (BrickLink type + number) if this environment is the first to want it, upserts the `want_list_item` row, and prunes stale rows. Logs `bricklink.pricing.want_list.job.completed` with confirmed / added / skipped / pruned counts; metric `bricklink_pricing_want_list_item_total{result}`.
+
+### `BricklinkPricingCrawlJob`: the shared BrickLink crawler
+
+Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingCrawlJob` (HOMELAB-32)
+
+**Exactly one deployment runs it.** It crawls BrickLink once for every environment and writes to the shared `marketplace_pricing` schema; each environment reads that schema for its own decisions. Until PROD exists the SANDBOX deployment is the crawler. Every other profile sets `crawl.enabled: false` (DEV and PROD explicitly; `local` too).
+
+```yaml
+lego.bricklink.pricing.crawl.enabled: true          # SANDBOX only
 lego.bricklink.pricing.crawl.scheduled.enabled: true
 ```
 
-`lego.bricklink.pricing.crawl.enabled=true` creates the crawl service. The scheduled job bean is created only when both `enabled` and `scheduled.enabled` are true.
+To test crawler changes from a feature branch, never point them at the real schema: set `lego.marketplace-pricing.schema=marketplace_pricing_scratch`, enable the crawl, and use a long `scheduled.fixed-delay-ms` so only a handful of items are fetched.
 
-Schedule and selection settings:
-
-| Setting | Default | Valid values | Description |
-| --- | --- | --- | --- |
-| `lego.bricklink.pricing.crawl.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between scheduler/worker runs. Keep conservative for live BrickLink calls. |
-| `lego.bricklink.pricing.crawl.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Delay after startup before first run. |
-| `lego.bricklink.pricing.crawl.scheduled.lock-at-most-for` | `30m` | ShedLock duration | Maximum distributed lock duration. |
-| `lego.bricklink.pricing.crawl.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
-| `lego.bricklink.pricing.crawl.batch-size` | `25` | Integer; effective value is at least `1` | Maximum eligible marketplace listings considered for scheduling per run. |
-| `lego.bricklink.pricing.crawl.worker-batch-size` | `1` | Integer; effective value is at least `1` | Maximum due `pricing_crawl_work_item` rows claimed and processed per run. Keep small for live BrickLink calls. |
-| `lego.bricklink.pricing.crawl.results-per-page` | `500` | Integer; effective value is at least `1` | BrickLink `catalogifs.ajax` `rpp` parameter. Current default asks for up to 500 comparables per item/condition. |
-| `lego.bricklink.pricing.crawl.max-attempts` | `3` | Integer; effective value is at least `1` | Stored on each work item. Retryable lookup/pricing failures are requeued until this count is reached. |
-| `lego.bricklink.pricing.crawl.crawl-cadence` | `7d` | Spring `Duration`, positive | Cooling period before the same listing is eligible to be scheduled again after success, skip, or terminal failure. |
-| `lego.bricklink.pricing.crawl.schedule-spread-window` | `72h` | Spring `Duration`, zero or positive | Window used to spread newly scheduled work item `next_attempt_at` values across time. |
-| `lego.bricklink.pricing.crawl.schedule-jitter` | `0s` | Spring `Duration`, zero or positive | Optional random positive jitter added to newly scheduled work item due times. |
-| `lego.bricklink.pricing.crawl.retry-backoff` | `6h` | Spring `Duration`, positive | Delay before retrying a retryable failed work item. |
-| `lego.bricklink.pricing.crawl.claim-stale-after` | `2h` | Spring `Duration`, positive | Age after which abandoned `CLAIMED` work is requeued to `PENDING`. |
-| `lego.bricklink.pricing.crawl.priceable-listing-status-codes` | `ACTIVE,DRAFT` | Set of listing status codes | Listing statuses eligible for pricing crawl onboarding. This allows newly created local drafts to get crawl work before marketplace sync. If blank/empty, the legacy `active-listing-status-code` fallback is used. |
-| `lego.bricklink.pricing.crawl.marketplace-listing-allowlist` | empty | Set of integer `marketplace_listing_id` values | Optional sandbox guard. When populated, only those listings are scheduled. |
-| `lego.bricklink.pricing.crawl.blackout.enabled` | `false` | `true`, `false` | When true, scheduled due times and retry due times are moved out of the configured local blackout period. |
-| `lego.bricklink.pricing.crawl.blackout.zone-id` | `America/New_York` | Java time zone id | Time zone used to evaluate blackout windows. |
-| `lego.bricklink.pricing.crawl.blackout.start` | `21:30` | `HH:mm` local time | Start of the blackout window. |
-| `lego.bricklink.pricing.crawl.blackout.end` | `08:30` | `HH:mm` local time | End of the blackout window. |
-| `lego.bricklink.pricing.crawl.blackout.weekdays-only` | `true` | `true`, `false` | When true, blackout adjustment is applied only on Monday through Friday local dates. |
-
-Candidate selection:
-
-| Requirement | Detail |
-| --- | --- |
-| Marketplace listing service | `marketplace_listing.listing_external_service_id` must equal `lego.bricklink.pricing.crawl.bricklink-external-service-id`. |
-| Marketplace listing status | `marketplace_listing.listing_status_code` must be in `lego.bricklink.pricing.crawl.priceable-listing-status-codes`, defaulting to `ACTIVE` and `DRAFT`. |
-| Catalog link | `marketplace_listing.external_catalog_item_id` must be populated. |
-| Priceable condition | `item_inventory.new_or_used` must be `N`, `NEW`, `U` or `USED` (any case, trimmed) and `item_inventory.completeness` must be non-blank. This is the same predicate the decision candidate query uses, so a listing is crawled only when a decision could use the snapshot. Listings that fail it are not scheduled at all; find them with the [data-quality report](#bricklink-pricing-data-quality-report). |
-| Already queued work | Listings with `PENDING` or `CLAIMED` work are not scheduled again. |
-| Cooling period | Listings with any work item whose `next_attempt_at` is still in the future are not scheduled again. |
-| Batch limit | The scheduling query orders by `marketplace_listing_id` and applies `lego.bricklink.pricing.crawl.batch-size`. |
-| Allowlist | If `marketplace-listing-allowlist` is populated, candidates outside the allowlist are ignored after DB selection. |
-
-Crawler behavior:
-
-| Step | Description |
-| --- | --- |
-| Recover stale claims | Requeues old `CLAIMED` work back to `PENDING` when `claimed_at` is older than `claim-stale-after` and attempts remain. |
-| Schedule work | Inserts `pricing_crawl_work_item` rows with `PENDING`, `attempt_count=0`, and `next_attempt_at` spread across `schedule-spread-window` plus optional jitter/blackout adjustment. |
-| Claim due work | Atomically transitions due `PENDING` rows to `CLAIMED`, increments `attempt_count`, and limits processing to `worker-batch-size`. |
-| Load inventory | Loads `item_inventory` for the listing so condition and completeness can be captured. |
-| Resolve condition | Maps `item_inventory.new_or_used` values `N`/`NEW` to BrickLink `N`, and `U`/`USED` to BrickLink `U`. |
-| Resolve item number | Uses `external_catalog_item.external_item_key`, for example `6390-1`. |
-| Hydrate `idItem` | If `external_catalog_item.external_unique_key` is missing or not parseable as an integer, calls `searchproduct.ajax` through `BricklinkAjaxClient.findCatalogItem(itemNumber, itemType)`. The item type comes from `external_catalog_item.item_type_code` when present, falling back to `lego.bricklink.pricing.crawl.catalog-item-type` only when the catalog row has no type. |
-| Persist `idItem` | Stores the returned BrickLink internal catalog id in `external_catalog_item.external_unique_key` so future runs skip search hydration. |
-| Crawl comparables | Calls `catalogifs.ajax` through `BricklinkAjaxClient.catalogItemsForSaleByInternalItemId(itemId, condition, resultsPerPage)`. |
-| Persist snapshot | Inserts one immutable `pricing_snapshot` per successful listing crawl. |
-| Persist snapshot listings | Inserts one immutable `pricing_snapshot_listing` per comparable listing returned by BrickLink. |
-| Complete work item | Updates the work item to `SUCCEEDED` or a failure/skip status, clears `claimed_at`, and sets `next_attempt_at` using `crawl-cadence`. |
-| Retry work item | Retryable lookup/pricing failures return the work item to `PENDING`, clear `claimed_at`, and set `next_attempt_at` using `retry-backoff`. |
-
-BrickLink AJAX endpoints used:
-
-| Endpoint | Purpose | Parameters |
+| Property | Default | Meaning |
 | --- | --- | --- |
-| `/ajax/clone/search/searchproduct.ajax` | Find BrickLink internal `idItem` for a public item number when `external_unique_key` is missing. | `q=<item number>`, `type=<external_catalog_item.item_type_code or configured fallback>` |
-| `/ajax/clone/catalogifs.ajax` | Fetch active BrickLink listings for one internal item id and condition. | `itemid=<idItem>`, `cond=N|U`, `rpp=<resultsPerPage>`, `iconly=0` |
+| `lego.bricklink.pricing.crawl.worker-batch-size` | `1` | Due targets claimed and fetched per run. Keep small for live BrickLink calls. |
+| `lego.bricklink.pricing.crawl.results-per-page` | `500` | `catalogifs.ajax` `rpp`. |
+| `lego.bricklink.pricing.crawl.crawl-cadence` | `7d` | After a success the target is due again this much later. Also the wait after `max-attempts` failures in a row, and the minimum gap when a disabled target is wanted again. |
+| `lego.bricklink.pricing.crawl.schedule-spread-window` | `72h` | New targets are spread across this window. |
+| `lego.bricklink.pricing.crawl.schedule-jitter` | `0s` | Optional random jitter on new targets. |
+| `lego.bricklink.pricing.crawl.retry-backoff` | `6h` | Wait after a failed fetch. |
+| `lego.bricklink.pricing.crawl.max-attempts` | `3` | After this many failures in a row, wait a full cadence instead of the backoff. |
+| `lego.bricklink.pricing.crawl.claim-stale-after` | `2h` | A claim expires after this long, so a crashed crawler's target is taken over. |
+| `lego.bricklink.pricing.crawl.claimed-by` | pod host name | Stored in `crawl_target.claimed_by`. |
+| `lego.bricklink.pricing.crawl.blackout.*` | weekdays 21:30–08:30 America/New_York (SANDBOX) | No fetches inside the window; due times are moved to its end. |
 
-Condition and completeness semantics:
+Each run:
 
-| Field | Meaning |
+| Step | Behavior |
 | --- | --- |
-| `pricing_snapshot.item_condition_code` | Target condition requested for the crawl, derived from the owned `item_inventory.new_or_used`. |
-| `pricing_snapshot.completeness_code` | Target completeness from the owned `item_inventory.completeness`. |
-| `pricing_snapshot_listing.item_condition_code` | Comparable listing condition returned by BrickLink AJAX. |
-| `pricing_snapshot_listing.completeness_code` | Comparable listing completeness/sub-condition returned by BrickLink AJAX. |
+| New wants | Every item + `N`/`U` pair in any environment's want list without a `BRICKLINK` target gets one `crawl_target` (IDLE), due times spread over the window. One target serves every sub-condition: one fetch returns Sealed, Complete and Incomplete lots. |
+| Wanted again | DISABLED targets someone wants again become IDLE, due at max(now, last success + cadence). |
+| No longer wanted | IDLE targets no environment wants become DISABLED. Their history stays. |
+| Blackout | Inside the blackout window the run stops here (outcome `BLACKOUT`). |
+| Claim | Due targets (IDLE and due, or CLAIMED with an expired claim) are claimed with a conditional update, so two crawlers never fetch the same target. |
+| Resolve `idItem` | Read from `marketplace_item.marketplace_unique_key`; looked up once with `searchproduct.ajax` and stored when missing. |
+| Fetch | `catalogifs.ajax` for the item and condition. An exception (maintenance redirect, block, timeout) is a failure; an empty list is a successful, empty market. |
+| Store | One `market_snapshot` per success (the price history) and one `market_listing` per lot: raw and canonical condition/completeness, display price + currency, the seller's native price, seller key/store/country/feedback, raw payload. |
+| Log | Every attempt is a `crawl_attempt` row (`SUCCEEDED`, `FAILED_HTTP`, `FAILED_PARSE`, `FAILED_RESOLVE_NO_MATCH`, `FAILED_RESOLVE_AMBIGUOUS`, `FAILED_MISSING_ITEM`). |
+| Release | Success: IDLE, failures reset, due after the cadence. Failure: IDLE, `consecutive_failure_count` + 1, due after the backoff (or the cadence after `max-attempts`). |
 
-The BrickLink pricing AJAX request currently filters by condition only. The crawler intentionally persists all returned rows for that condition. Later pricing logic must select exact comparables where comparable condition and comparable completeness match the target snapshot condition and completeness.
+Outcomes: `NO_WORK`, `SCHEDULED` (queue changed, nothing due), `BLACKOUT`, `SUCCESS`, `PARTIAL_SUCCESS` (at least one fetch failed).
 
-Data written:
+Monitoring (a ban or block shows as failures rising while successes stay flat):
 
-| Table | Write behavior |
+| Metric | Meaning |
 | --- | --- |
-| `pricing_crawl_work_item` | Inserted as durable scheduled work. Due rows are claimed before AJAX calls, updated with request metadata, completion/retry status, next due time, and last error. |
-| `external_catalog_item` | Updated only when missing BrickLink internal `idItem` is successfully hydrated into `external_unique_key`. |
-| `pricing_snapshot` | Inserted once for each successful pricing crawl. Captures source item number, internal `idItem`, requested condition, inventory completeness, request metadata, payload hash, comparable count, and capture time. |
-| `pricing_snapshot_listing` | Inserted once per comparable listing returned by BrickLink. Captures external listing id, seller, country, condition, completeness, quantity, unit price, currency, description, and raw comparable payload. |
+| `bricklink_pricing_crawl_job_total{outcome}` | Runs by outcome. |
+| `bricklink_pricing_crawl_fetch_total{result}` | `succeeded`, `empty`, `failed` fetches. |
+| `bricklink_pricing_crawl_target_total{result}` | `created`, `reenabled`, `disabled`, `claimed` targets. |
+| `bricklink_pricing_crawl_listing_total{result="written"}` | Lots stored. |
+| `bricklink_pricing_crawl_target_current{state}` | Queue now: `idle`, `claimed`, `disabled`, `due`, `failing`. Shared, so every deployment reports the same numbers. |
 
-Work item statuses:
+Logs: `bricklink.pricing.crawl.job.completed` (the run result), `bricklink.pricing.crawl.failed` (one per failed fetch, with the target, outcome, failure count and message). The maintenance report (`GET /internal/bricklink/pricing/maintenance-report`) shows the queue by state and the latest failed attempts.
 
-| Status | Meaning |
-| --- | --- |
-| `PENDING` | Work is scheduled and eligible to be claimed when `next_attempt_at <= now` and attempts remain. |
-| `CLAIMED` | Worker claimed the row for processing. `attempt_count` has already been incremented. |
-| `SUCCEEDED` | Pricing snapshot and returned comparable rows were persisted. |
-| `SKIPPED_MISSING_LISTING` | The queued `marketplace_listing` row no longer exists. |
-| `SKIPPED_MISSING_CATALOG` | The queued listing no longer has a linked catalog item. |
-| `SKIPPED_MISSING_CONDITION` | `item_inventory.new_or_used` was absent or not recognized as New/Used when the work item was processed. Scheduling already excludes such listings, so this now appears only when the inventory changed between scheduling and processing. No AJAX calls are made. |
-| `SKIPPED_MISSING_ITEM_NUMBER` | `external_catalog_item.external_item_key` was absent. No pricing AJAX call is made. |
-| `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | `searchproduct.ajax` found no exact catalog item match. |
-| `FAILED_ITEM_ID_LOOKUP_AMBIGUOUS` | `searchproduct.ajax` found multiple possible catalog items. |
-| `FAILED_ITEM_ID_LOOKUP_HTTP_ERROR` | Item id lookup failed due to client/runtime error. |
-| `FAILED_PRICING_HTTP_ERROR` | Pricing AJAX call failed due to client/runtime error. |
-| `FAILED_PRICING_PARSE_ERROR` | Pricing payload serialization/parsing failed during persistence. |
-
-BrickLink can return an empty JSON array from `catalogifs.ajax` when the catalog item has no current for-sale comparables. The crawler treats that as a successful source observation, not as an HTTP failure: it writes a `pricing_snapshot` with `comparable_count=0`, writes no `pricing_snapshot_listing` rows, increments the `zero_comparable_snapshot` metric, and marks the work item `SUCCEEDED`.
-
-Outcomes:
-
-| Outcome | Meaning |
-| --- | --- |
-| `NO_WORK` | No work was scheduled, claimed, processed, or requeued. |
-| `SCHEDULED` | Work items were scheduled or stale claims were requeued, but no due work was claimed in this run. |
-| `SUCCESS` | At least one due work item was claimed and no listing failed. Skipped listings do not currently make the run outcome partial. |
-| `PARTIAL_SUCCESS` | At least one claimed work item failed. |
-
-Important logs:
-
-| Event | Meaning |
-| --- | --- |
-| `bricklink.pricing.crawl.schedule.skipped_missing_catalog` | Scheduling candidate had no attached `ExternalCatalogItem`; no work item is created for that listing. |
-| `bricklink.pricing.crawl.skipped_missing_catalog` | Claimed work item pointed to a listing with no attached `ExternalCatalogItem`; work item is skipped. |
-| `bricklink.pricing.crawl.job.completed` | Scheduled run completed and logs `BricklinkPricingCrawlResult` with selected, scheduled, claimed, stale requeue, snapshot, listing, hydration, skip, failure, and elapsed counters. |
-
-Operational boundaries:
+Boundaries:
 
 | Boundary | Detail |
 | --- | --- |
-| Crawl only captures source data | The crawl job only persists pricing history. Competitive price calculation is handled by `BricklinkPricingDecisionJob`; neither job updates listing prices or triggers marketplace sync in Phase 4. |
-| Immutable history | `pricing_snapshot` and `pricing_snapshot_listing` are append-only observations for each crawl. The same BrickLink listing can appear in many snapshots over time. |
-| No latest competitor table yet | Current market views should query the latest relevant snapshot and its listings. A mutable latest competitor table is intentionally deferred. |
-| Durable queue | The scheduler creates `PENDING` work and the worker processes only due rows it can claim. This is not strict FIFO, but due rows are selected by `next_attempt_at` then work item id. |
+| Crawl only captures source data | Prices are computed by `BricklinkPricingDecisionJob` in each environment; the crawler never changes a listing. |
+| Shared, append-only history | `market_snapshot` and `market_listing` are never updated. SANDBOX's earlier `pricing_snapshot*` history was copied in once (HOMELAB-31). The old `pricing_crawl_work_item` / `pricing_snapshot*` tables are no longer written; dropping them is a later cleanup. |
 | AJAX rate limit protection | Outbound AJAX calls are protected by `bricklink-ajax` rate limiting. Keep it enabled for live runs. |
 
 ### Pricing Plane Table And Timing Mental Model
@@ -453,77 +395,70 @@ Table responsibilities:
 
 | Table | Mental model | Primary question it answers |
 | --- | --- | --- |
-| `pricing_crawl_work_item` | Durable crawl queue. One row means "crawl BrickLink pricing for this marketplace listing at or after `next_attempt_at`." | What needs to be crawled, when can it run, and what happened last time? |
-| `pricing_snapshot` | Immutable crawl header. One row means "at this time, BrickLink pricing data was captured for this listing/item/condition/completeness target." | What was the latest successful source-data capture for this listing and target condition? |
-| `pricing_snapshot_listing` | Immutable comparable rows inside a snapshot. One row is one competitor listing returned by BrickLink. | Which competitor listings and prices were available in that captured source data? |
+| `marketplace_pricing.crawl_target` | Shared crawl queue (HOMELAB-32). One stable row per marketplace, item and New/Used condition, updated in place. | What needs to be crawled, when can it run, and what happened last time? |
+| `marketplace_pricing.market_snapshot` | Immutable crawl header. One row means "at this time, BrickLink lots were captured for this item and condition", for every environment. | What was the latest successful capture for this item and condition? |
+| `marketplace_pricing.market_listing` | Immutable lots inside a snapshot, every sub-condition. The decision keeps those matching the listing's condition and completeness. | Which competitor lots and prices were available in that capture? |
 | `pricing_decision` | Historical pricing calculation output. One row means "at this time, the algorithm evaluated this listing and wrote a proposed, skipped, or failed decision." | What did the pricing algorithm decide, and why? |
 
-The normal flow:
+The normal flow (HOMELAB-32):
 
 ```text
-active marketplace_listing
+each environment: priceable marketplace_listing rows
         |
+        | BricklinkWantListSyncJob (every environment)
         v
-pricing_crawl_work_item
+marketplace_pricing.want_list_item   (environment + canonical item + N/U + completeness)
         |
-        | when PENDING and next_attempt_at <= now
+        | BricklinkPricingCrawlJob (the one shared crawler, SANDBOX)
         v
-BrickLink AJAX crawl
+marketplace_pricing.crawl_target     (one per item + N/U, due by next_due_at)
         |
+        | BrickLink AJAX crawl, logged in crawl_attempt
         v
-pricing_snapshot
+marketplace_pricing.market_snapshot  -> market_listing rows (every sub-condition)
         |
+        | BricklinkPricingDecisionJob (each environment, its own listings)
         v
-pricing_snapshot_listing rows
-        |
-        v
-pricing_decision
+pricing_decision                     (market_snapshot_id + market_snapshot_captured_at)
 ```
 
-`pricing_crawl_work_item` controls pacing. A large batch size does not mean all listings are crawled immediately. The worker only processes due rows:
-
-```sql
-work_status_code = 'PENDING'
-and next_attempt_at <= current_timestamp
-```
-
-The scheduler may spread newly created work across `schedule-spread-window`, add `schedule-jitter`, and move due times out of the configured blackout window. The `bricklink-ajax` client still enforces the process-local minimum delay between AJAX request starts.
+`crawl_target` controls pacing. The crawler only fetches targets that are due (`IDLE` and `next_due_at <= now`, or `CLAIMED` with an expired claim), at most `worker-batch-size` per run, never inside the blackout window. New targets are spread across `schedule-spread-window`. The `bricklink-ajax` client still enforces the process-local minimum delay between AJAX request starts.
 
 Current snapshot:
 
 | Term | Meaning |
 | --- | --- |
-| Current snapshot | The newest `pricing_snapshot` for the marketplace listing whose `item_condition_code` and `completeness_code` match the listing's normalized `item_inventory.new_or_used` and `item_inventory.completeness`. |
-| Not available | No matching `pricing_snapshot` exists yet. The listing can be valid and priceable, but the crawler has not stored matching source data yet. |
-| Zero-comparable snapshot | A matching `pricing_snapshot` exists and proves BrickLink returned no current for-sale comparable rows for that crawl. This is different from no snapshot. |
-| Historical snapshot | Any older `pricing_snapshot` for the same listing. Historical rows are retained for audit and trend analysis. |
+| Current snapshot | The newest `market_snapshot` (`BRICKLINK`) for the listing's canonical item (catalog item type + number) and normalized New/Used condition. The decision then keeps only the lots whose canonical condition and completeness match the listing's. |
+| Not available | No snapshot exists yet for that item and condition: nobody has wanted it long enough for the crawler to reach it. |
+| Zero-comparable snapshot | A snapshot exists with `listing_count = 0`: BrickLink had no lots for sale in that condition. Different from no snapshot. |
+| Historical snapshot | Any older `market_snapshot` for the same item and condition. Kept: it is the price history. |
 
-There is no separate mutable "current snapshot" table. "Current" is a query-time concept: select the latest matching snapshot by `captured_at` and `pricing_snapshot_id`.
+There is no mutable "current snapshot" table. "Current" is a query-time concept: the latest snapshot by `captured_at` and `market_snapshot_id`.
 
 Example:
 
-| Owned listing state | Matching snapshot needed by decision job |
+| Owned listing state | Snapshot and lots the decision uses |
 | --- | --- |
-| `item_inventory.new_or_used = U`, `item_inventory.completeness = C` | latest `pricing_snapshot` where `item_condition_code = 'U'` and `completeness_code = 'C'` for the same `marketplace_listing_id` |
-| `item_inventory.new_or_used = N`, `item_inventory.completeness = S` | latest `pricing_snapshot` where `item_condition_code = 'N'` and `completeness_code = 'S'` for the same `marketplace_listing_id` |
+| `new_or_used = U`, `completeness = C`, catalog item `S 6390-1` | latest `BRICKLINK` snapshot for canonical item `S 6390-1` and `U`; lots with `condition_code = 'U'` and `completeness_code = 'C'` |
+| `new_or_used = N`, `completeness = S`, catalog item `S 6390-1` | latest snapshot for `S 6390-1` and `N`; lots with `N` / `S`. The same snapshot also serves an `N` / `C` listing. |
 
 Why a snapshot may not be available:
 
 | Cause | What to check |
 | --- | --- |
-| Crawl work is waiting | `pricing_crawl_work_item.work_status_code = 'PENDING'` and `next_attempt_at > current_timestamp`. |
-| Crawl worker has not run long enough | The worker processes only due rows and respects `worker-batch-size` plus the AJAX rate limiter. |
-| Missing BrickLink internal `idItem` still needs hydration | `external_catalog_item.external_unique_key` is null. The crawler must call `searchproduct.ajax` before `catalogifs.ajax`. |
-| Crawl failed or is waiting for retry | Check `pricing_crawl_work_item.work_status_code`, `attempt_count`, `next_attempt_at`, and `last_error_message`. |
-| Snapshot exists for another target | Check `pricing_snapshot.item_condition_code` and `pricing_snapshot.completeness_code`; a `N/S` snapshot does not satisfy a `U/C` listing. |
+| Not on a want list yet | `marketplace_pricing.want_list_item` for this environment and canonical item. The want list job runs hourly. |
+| Crawl target is waiting | `crawl_target.target_status_code = 'IDLE'` and `next_due_at > now`, or the blackout window. |
+| The crawler has not run long enough | It fetches only due targets, `worker-batch-size` per run, behind the AJAX rate limiter. |
+| BrickLink `idItem` not resolved | `marketplace_item.marketplace_unique_key` is null; the crawler looks it up before the first fetch. |
+| Crawl failed or is waiting for retry | `crawl_target.consecutive_failure_count`, `last_error_message`, `next_due_at`, and the `crawl_attempt` rows for the target. |
 
 Decision outcomes that commonly indicate timing or source-data state:
 
 | Decision reason | Meaning | Next action |
 | --- | --- | --- |
-| `NO_CURRENT_SNAPSHOT` | No latest matching snapshot exists for the listing condition/completeness. | Let the crawl scheduler/worker run, or inspect pending crawl work. |
-| `NO_CURRENT_COMPARABLES` | A latest matching snapshot exists, but BrickLink returned zero current comparable listings in that snapshot. | No crawl timing problem exists; review manually, wait for market listings, or use a later fallback strategy. |
-| `NO_EXACT_COMPARABLES` | A matching snapshot exists, but after exact condition/completeness filtering and own-listing exclusion there are no usable competitor rows. | Inspect `pricing_snapshot_listing` rows for that snapshot and confirm BrickLink has comparable listings. |
+| `NO_CURRENT_SNAPSHOT` | No market snapshot exists for the listing's item and condition. | Check the want list and the crawl target as above. |
+| `NO_CURRENT_COMPARABLES` | The latest snapshot has no lots at all. | No crawl timing problem exists; review manually or wait for market listings. |
+| `NO_EXACT_COMPARABLES` | The snapshot has lots, but none in the listing's sub-condition after own-listing and own-store exclusion. | Inspect the snapshot's `market_listing` rows and their `condition_code` / `completeness_code`. |
 | `FIXED_PRICE_OVERRIDE` | Listing is marked fixed price, so no snapshot is needed and the current price remains authoritative. | No action unless the fixed-price flag should change. |
 | `PROPOSED` reason codes | A snapshot and exact comparables were available and the algorithm produced a recommendation. | Review latest decision rows before any future apply phase. |
 
@@ -577,7 +512,7 @@ Candidate selection:
 | Catalog mapping | `marketplace_listing.external_catalog_item_id` must be populated. |
 | Fixed-price eligibility | `marketplace_listing.fixed_price=true` listings are candidates even when condition/completeness are missing because fixed price is authoritative. |
 | Non-fixed eligibility | Non-fixed listings must have `item_inventory.new_or_used` of `N`, `NEW`, `U` or `USED` (any case, trimmed) and non-blank `item_inventory.completeness`. Crawl scheduling uses the same predicate. |
-| Optional snapshot gate | When `require-current-snapshot=true`, non-fixed listings must also have an existing `pricing_snapshot` matching normalized condition/completeness. Use this after crawl data is flowing to avoid filling review batches with `NO_CURRENT_SNAPSHOT` decisions. |
+| Optional snapshot gate | When `require-current-snapshot=true`, non-fixed listings must also have a shared `market_snapshot` for their catalog item and normalized condition. Use this after crawl data is flowing to avoid filling review batches with `NO_CURRENT_SNAPSHOT` decisions. |
 | Batch limit | The selection query filters to eligible candidates, orders by `marketplace_listing_id`, and applies `lego.bricklink.pricing.decision.batch-size`. |
 
 Decision behavior:
@@ -587,9 +522,9 @@ Decision behavior:
 | Fixed price override | If `marketplace_listing.fixed_price=true`, writes a `SKIPPED` decision with reason `FIXED_PRICE_OVERRIDE`, preserves current listing price as `final_price`, and does not read snapshots. |
 | Load inventory | Loads `item_inventory` for condition, completeness, box condition, and instructions condition. |
 | Normalize codes | Maps `N`/`NEW` to `N`, `U`/`USED` to `U`, `SEALED`/`S` to `S`, `COMPLETE`/`C` to `C`, and `INCOMPLETE`/`I`/`X` to `X`. |
-| Select latest snapshot | Reads the latest `pricing_snapshot` for the marketplace listing, normalized condition, and normalized completeness. |
-| Select exact comparables | Reads `pricing_snapshot_listing` rows whose condition and completeness match the target snapshot. |
-| Exclude own listing | Removes the owned marketplace listing by matching `pricing_snapshot_listing.external_listing_id` to `marketplace_listing.external_listing_id`. |
+| Select latest snapshot | Reads the latest shared `market_snapshot` (`BRICKLINK`) for the listing's canonical item (catalog item type + number) and normalized New/Used condition. |
+| Select exact comparables | Reads that snapshot's `market_listing` rows whose canonical `condition_code` and `completeness_code` match the listing's (one snapshot holds every sub-condition). |
+| Exclude own listing | Removes the owned marketplace listing by matching `market_listing.external_listing_id` to `marketplace_listing.external_listing_id`, and every lot whose `seller_key` is in `own-seller-names`. |
 | Compute price | Runs the market-position formula ("Pricing formula and its levers" below) and writes a `PROPOSED` decision. |
 | Persist metadata | Stores algorithm version, strategy, reason code, computed price, final price, previous price, currency, exact comparable count, confidence, source summary JSON, and notes. |
 | No apply | Phase 3 writes decisions only. It does not update `marketplace_listing.unit_price` and does not trigger marketplace sync. |
@@ -793,7 +728,7 @@ Readiness behavior:
 | `skippedBelowMinimumComparableCount` | Decision comparable count is lower than `minimum-comparable-count`. |
 | `skippedAboveMaximumAbsoluteDelta` | Absolute proposed price movement is greater than `maximum-absolute-delta`. |
 | `skippedAboveMaximumPercentDelta` | Relative proposed price movement is greater than `maximum-percent-delta`. |
-| `skippedStaleDecision` | A newer `pricing_snapshot` exists for the listing than the snapshot used by the latest proposed decision. Persisted rows use readiness status `BLOCKED_STALE_DECISION` and block reason `STALE_DECISION`. |
+| `skippedStaleDecision` | A newer shared `market_snapshot` exists for the listing's item and condition than the one the latest proposed decision used (compared by `captured_at`). Persisted rows use readiness status `BLOCKED_STALE_DECISION` and block reason `STALE_DECISION`. |
 
 Important logs:
 
@@ -1457,19 +1392,19 @@ Backed by `BricklinkPricingCrawlProperties`.
 | --- | --- | --- | --- |
 | `lego.bricklink.pricing.crawl.enabled` | `false` | `true`, `false` | Creates the BrickLink pricing crawl service bean when true. |
 | `lego.bricklink.pricing.crawl.bricklink-external-service-id` | `2` | Integer external service id | External service id for BrickLink rows in `external_service`, `marketplace_listing`, and `external_catalog_item`. |
-| `lego.bricklink.pricing.crawl.active-listing-status-code` | `ACTIVE` | Non-blank listing status string; code trims and uppercases | Marketplace listing status selected for pricing crawl. |
-| `lego.bricklink.pricing.crawl.catalog-item-type` | `S` | BrickLink catalog item type; code trims and uppercases | Fallback type sent to `searchproduct.ajax` only when `external_catalog_item.item_type_code` is blank. Normal hydration uses the catalog row type, for example `S` for sets, `G` for gear, or `B` for books. |
-| `lego.bricklink.pricing.crawl.batch-size` | `25` | Integer; effective value at least `1` | Maximum eligible BrickLink marketplace listings considered for work scheduling per run. |
-| `lego.bricklink.pricing.crawl.worker-batch-size` | `1` | Integer; effective value at least `1` | Maximum due work items claimed and processed per run. |
+| `lego.bricklink.pricing.crawl.active-listing-status-code` | `ACTIVE` | Non-blank listing status string; code trims and uppercases | Listing status used by the maintenance and data-quality reports. The shared crawler itself crawls the want list, not listings. |
+| `lego.bricklink.pricing.crawl.catalog-item-type` | `S` | BrickLink catalog item type | Unused by the shared crawler: `searchproduct.ajax` gets the canonical item's own type (`S`, `G`, `B`). |
+| `lego.bricklink.pricing.crawl.batch-size` | `25` | Integer; effective value at least `1` | Unused by the shared crawler (every wanted pair gets a target). |
+| `lego.bricklink.pricing.crawl.worker-batch-size` | `1` | Integer; effective value at least `1` | Maximum due crawl targets claimed and fetched per run. |
 | `lego.bricklink.pricing.crawl.results-per-page` | `500` | Integer; effective value at least `1` | `rpp` sent to `catalogifs.ajax`. |
-| `lego.bricklink.pricing.crawl.max-attempts` | `3` | Integer; effective value at least `1` | Stored on `pricing_crawl_work_item.max_attempts`; retryable failures requeue until attempts are exhausted. |
-| `lego.bricklink.pricing.crawl.crawl-cadence` | `7d` | Spring `Duration`, positive | Cooling period before the same listing becomes eligible to schedule again. |
-| `lego.bricklink.pricing.crawl.schedule-spread-window` | `72h` | Spring `Duration`, zero or positive | Window used to spread newly created work item due times. |
-| `lego.bricklink.pricing.crawl.schedule-jitter` | `0s` | Spring `Duration`, zero or positive | Optional random positive jitter added to new work item due times. |
-| `lego.bricklink.pricing.crawl.retry-backoff` | `6h` | Spring `Duration`, positive | Delay before a retryable failed work item becomes due again. |
-| `lego.bricklink.pricing.crawl.claim-stale-after` | `2h` | Spring `Duration`, positive | Requeue age for abandoned `CLAIMED` work. |
-| `lego.bricklink.pricing.crawl.marketplace-listing-allowlist` | empty | Set of integer ids | Optional sandbox guard limiting scheduling to specific `marketplace_listing_id` values. |
-| `lego.bricklink.pricing.crawl.blackout.enabled` | `false` | `true`, `false` | Enables blackout adjustment for scheduled and retry due times. |
+| `lego.bricklink.pricing.crawl.max-attempts` | `3` | Integer; effective value at least `1` | After this many failed fetches in a row (`crawl_target.consecutive_failure_count`), the target waits a full `crawl-cadence` instead of `retry-backoff`. |
+| `lego.bricklink.pricing.crawl.crawl-cadence` | `7d` | Spring `Duration`, positive | After a success the target is due again this much later; also the wait after `max-attempts` failures, and the minimum gap when a target is wanted again. |
+| `lego.bricklink.pricing.crawl.schedule-spread-window` | `72h` | Spring `Duration`, zero or positive | Window used to spread new crawl targets' due times. |
+| `lego.bricklink.pricing.crawl.schedule-jitter` | `0s` | Spring `Duration`, zero or positive | Optional random positive jitter added to new targets' due times. |
+| `lego.bricklink.pricing.crawl.retry-backoff` | `6h` | Spring `Duration`, positive | Delay before a target whose fetch failed is due again. |
+| `lego.bricklink.pricing.crawl.claim-stale-after` | `2h` | Spring `Duration`, positive | A claim expires after this long, so a crashed crawler's target is taken over. |
+| `lego.bricklink.pricing.crawl.claimed-by` | pod host name | String | Stored in `crawl_target.claimed_by`. |
+| `lego.bricklink.pricing.crawl.blackout.enabled` | `false` | `true`, `false` | No fetches inside the window; new and retry due times are moved to its end. |
 | `lego.bricklink.pricing.crawl.blackout.zone-id` | `America/New_York` | Java time zone id | Time zone used for blackout evaluation. |
 | `lego.bricklink.pricing.crawl.blackout.start` | `21:30` | `HH:mm` local time | Blackout start time. |
 | `lego.bricklink.pricing.crawl.blackout.end` | `08:30` | `HH:mm` local time | Blackout end time. |
@@ -1522,7 +1457,7 @@ Backed by `BricklinkPricingDecisionProperties`.
 | `lego.bricklink.pricing.decision.bricklink-external-service-id` | `2` | Integer external service id | External service id for BrickLink marketplace listings selected for pricing decisions. |
 | `lego.bricklink.pricing.decision.active-listing-status-code` | `ACTIVE` | Non-blank listing status string; code trims and uppercases | Marketplace listing status selected for pricing decisions. |
 | `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value at least `1` | Maximum pricing decision candidates selected per run after eligibility filtering. |
-| `lego.bricklink.pricing.decision.require-current-snapshot` | `false` | `true`, `false` | When true, non-fixed candidates must already have a matching `pricing_snapshot`; this suppresses `NO_CURRENT_SNAPSHOT` review rows and keeps batches focused on calculable or fixed-price listings. |
+| `lego.bricklink.pricing.decision.require-current-snapshot` | `false` | `true`, `false` | When true, non-fixed candidates must already have a shared `market_snapshot` for their item and condition; this suppresses `NO_CURRENT_SNAPSHOT` review rows and keeps batches focused on calculable or fixed-price listings. |
 | `lego.bricklink.pricing.decision.aggression` | `BALANCED` | `QUICK`, `BALANCED`, `PATIENT` | Preset that sets each market's target percentile. Stored on `pricing_decision.strategy_code`. |
 | `lego.bricklink.pricing.decision.target-percentiles` | empty | Map of `condition-completeness[-packaging]` to `0`..`1`, keys bracketed (`"[U-C-BI]": 0.70`) | Overrides of the preset; the most specific key wins. |
 | `lego.bricklink.pricing.decision.own-seller-names` | empty | Set of BrickLink usernames | Comparables sold by these sellers (your own store) are ignored. |
@@ -1561,7 +1496,7 @@ lego:
           enabled: false
 ```
 
-Run pricing decisions after a successful crawl has populated `pricing_snapshot` and `pricing_snapshot_listing`. The decision job selects fixed-price overrides and non-fixed listings with populated condition/completeness data; legacy listings missing those fields do not consume the configured decision batch. Phase 3 decisions are non-applying; review `pricing_decision` rows before any future apply/sync phase.
+Run pricing decisions after the shared crawler has populated `marketplace_pricing.market_snapshot` and `market_listing` for the environment's wanted items. The decision job selects fixed-price overrides and non-fixed listings with populated condition/completeness data; legacy listings missing those fields do not consume the configured decision batch. Phase 3 decisions are non-applying; review `pricing_decision` rows before any future apply/sync phase.
 
 ### `lego.bricklink.pricing.apply-readiness.*`
 
@@ -1921,22 +1856,25 @@ Prometheus uses Micrometer naming conventions. For example, counter `image_hosti
 
 ### BrickLink Pricing Crawl Metrics
 
+Recorded by the one shared crawler (SANDBOX). The queue gauges read `marketplace_pricing`, so every deployment reports the same values.
+
 | Meter | Type | Tags | Description |
 | --- | --- | --- | --- |
-| `bricklink_pricing_crawl_job` | Counter | `outcome` | One count per crawl job run. Outcomes are lowercased result values such as `success`, `scheduled`, `partial_success`, or `no_work`. |
-| `bricklink_pricing_crawl_job_duration` | Timer | `outcome` | Crawl job run duration. Prometheus exposes this as `_seconds_count`, `_seconds_sum`, and `_seconds_max`. |
-| `bricklink_pricing_crawl_listing` | Counter | `result` | Listing counts by `selected`, `skipped`, and `failed`. |
-| `bricklink_pricing_crawl_work_item` | Counter | `result` | Work item counts by `scheduled`, `claimed`, and `stale_requeued`. |
-| `bricklink_pricing_crawl_snapshot` | Counter | `result` | Snapshot write counts by `snapshot`, `zero_comparable_snapshot`, and `snapshot_listing`. |
-| `bricklink_pricing_crawl_catalog_item` | Counter | `result` | Catalog hydration counts by `hydrated`, `no_match`, `ambiguous_match`, and `failed_request`. |
-| `bricklink_pricing_crawl_work_item_current` | Gauge | `state` | Current work item counts based on the latest `pricing_crawl_work_item` per marketplace listing. Historical failed/skipped rows that were superseded by a newer successful crawl do not count as current failures. States are `pending`, `due`, `retryable`, `claimed`, `stale_claimed`, `succeeded`, `failed`, and `skipped`. |
+| `bricklink_pricing_crawl_job` | Counter | `outcome` | One count per crawl run: `no_work`, `scheduled`, `blackout`, `success`, `partial_success`. |
+| `bricklink_pricing_crawl_job_duration` | Timer | `outcome` | Crawl run duration. Prometheus exposes `_seconds_count`, `_seconds_sum`, `_seconds_max`. |
+| `bricklink_pricing_crawl_fetch` | Counter | `result` | Fetches: `succeeded`, `empty` (success with no lots), `failed`. A ban or block shows as `failed` rising while `succeeded` stays flat. |
+| `bricklink_pricing_crawl_target` | Counter | `result` | Queue changes: `created`, `reenabled`, `disabled`, `claimed`. |
+| `bricklink_pricing_crawl_listing` | Counter | `result` | `written`: lots stored. |
+| `bricklink_pricing_crawl_item` | Counter | `result` | `id_item_resolved`: BrickLink idItems looked up and stored. |
+| `bricklink_pricing_crawl_target_current` | Gauge | `state` | Shared queue now: `idle`, `claimed`, `disabled`, `due`, `failing` (latest attempt failed). |
+| `bricklink_pricing_want_list_item` | Counter | `result` | This environment's want list sync: `confirmed`, `canonical_item_added`, `skipped`, `pruned`. |
 
 Prometheus examples:
 
 ```promql
 sum by (outcome) (increase(bricklink_pricing_crawl_job_total{namespace="$namespace",service="$service"}[$__range]))
-sum by (result) (increase(bricklink_pricing_crawl_snapshot_total{namespace="$namespace",service="$service"}[$__range]))
-sum by (state) (bricklink_pricing_crawl_work_item_current{namespace="$namespace",service="$service"})
+sum by (result) (increase(bricklink_pricing_crawl_fetch_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (state) (bricklink_pricing_crawl_target_current{namespace="$namespace",service="$service"})
 sum by (outcome) (rate(bricklink_pricing_crawl_job_duration_seconds_sum{namespace="$namespace",service="$service"}[5m]))
 /
 sum by (outcome) (rate(bricklink_pricing_crawl_job_duration_seconds_count{namespace="$namespace",service="$service"}[5m]))
@@ -2112,27 +2050,23 @@ Primary events:
 | Event | Purpose |
 | --- | --- |
 | `bricklink.pricing.crawl.schedule.skipped_missing_catalog` | One scheduling candidate had no linked external catalog item; the scheduler skips creating a work item. |
-| `bricklink.pricing.crawl.skipped_missing_catalog` | One claimed work item referenced a listing without a linked external catalog item; the worker marks the item skipped. |
+| `bricklink.pricing.crawl.failed` | One fetch failed: target, item, condition, outcome, consecutive failures and message. |
 | `bricklink.pricing.crawl.job.completed` | Scheduled run completed and logs `BricklinkPricingCrawlResult`. |
 
 `BricklinkPricingCrawlResult` fields:
 
 | Field | Meaning |
 | --- | --- |
-| `outcome` | `NO_WORK`, `SCHEDULED`, `SUCCESS`, or `PARTIAL_SUCCESS`. |
-| `listingsSelected` | Number of active BrickLink marketplace listings selected as scheduling candidates after allowlist filtering. |
-| `workItemsScheduled` | Number of new `PENDING` `pricing_crawl_work_item` rows inserted. |
-| `workItemsClaimed` | Number of due work items transitioned from `PENDING` to `CLAIMED` and processed. |
-| `staleWorkItemsRequeued` | Number of abandoned `CLAIMED` work items returned to `PENDING`. |
-| `snapshotsWritten` | Number of `pricing_snapshot` rows inserted. |
-| `zeroComparableSnapshotsWritten` | Number of `pricing_snapshot` rows inserted after BrickLink returned no comparable listing rows. |
-| `snapshotListingsWritten` | Number of `pricing_snapshot_listing` rows inserted. |
-| `hydratedCatalogItems` | Number of missing BrickLink internal `idItem` values populated into `external_catalog_item.external_unique_key`. |
-| `catalogItemLookupNoMatches` | Number of BrickLink internal id lookups with no exact match. |
-| `catalogItemLookupAmbiguousMatches` | Number of BrickLink internal id lookups with multiple matches. |
-| `catalogItemLookupFailures` | Number of BrickLink internal id lookup client/runtime failures. |
-| `skippedListings` | Number of listings skipped for missing/unusable local data. |
-| `failedListings` | Number of listings that failed due to lookup, HTTP/client, or parsing errors. |
+| `outcome` | `NO_WORK`, `SCHEDULED`, `BLACKOUT`, `SUCCESS`, or `PARTIAL_SUCCESS`. |
+| `targetsCreated` | New `crawl_target` rows for item + condition pairs some environment started wanting. |
+| `targetsReenabled` | DISABLED targets wanted again. |
+| `targetsDisabled` | IDLE targets no environment wants any more. |
+| `targetsClaimed` | Due targets this run claimed and fetched. |
+| `snapshotsWritten` | `market_snapshot` rows inserted (successful fetches). |
+| `emptySnapshots` | Snapshots with no lots for sale. |
+| `listingsWritten` | `market_listing` rows inserted. |
+| `idItemsResolved` | BrickLink idItems looked up and stored on `marketplace_item`. |
+| `failedFetches` | Fetches that failed; each has a `crawl_attempt` row with its outcome and error. |
 | `elapsedMillis` | Run duration in milliseconds. |
 
 ### BrickLink Pricing Decision Logs
@@ -2249,21 +2183,15 @@ Primary events:
 
 ### Safe BrickLink Pricing Crawl Rollout
 
-1. Confirm the Pricing Plane tables exist in the target database: `pricing_crawl_work_item`, `pricing_snapshot`, `pricing_snapshot_listing`, `pricing_decision`, and `pricing_apply_readiness`.
-2. Confirm active BrickLink marketplace listings exist with `marketplace_listing.listing_external_service_id=2`, `listing_status_code='ACTIVE'`, and a populated `external_catalog_item_id`.
-3. Confirm `external_catalog_item.external_item_key` contains the public BrickLink item number, for example `6390-1`.
-4. Set `bricklink.ajax.uri=https://www.bricklink.com`.
-5. Keep `bricklink.ajax.rate-limit.enabled=true`.
-6. Keep `bricklink.ajax.rate-limit.minimum-delay-ms` at `2000` or higher for live BrickLink calls.
-7. Start with `lego.bricklink.pricing.crawl.enabled=true` and `lego.bricklink.pricing.crawl.scheduled.enabled=false`.
-8. For the first scheduled validation, use `lego.bricklink.pricing.crawl.marketplace-listing-allowlist` or a small `batch-size` to limit scheduled work.
-9. Keep `lego.bricklink.pricing.crawl.worker-batch-size=1` for first live AJAX validation.
-10. Enable `lego.bricklink.pricing.crawl.scheduled.enabled=true` only during a controlled local/sandbox run.
-11. Watch `bricklink.pricing.crawl.job.completed` for selected, scheduled, claimed, stale requeue, hydrated, snapshot, listing, skipped, and failed counters.
-12. Confirm new work items are spread across `schedule-spread-window` and not placed inside blackout periods when blackout is enabled.
-13. Confirm due work is processed one claimed row at a time according to `worker-batch-size`.
-14. Run the pricing SQL checks below to confirm work items, snapshots, snapshot listings, and `external_unique_key` hydration.
-15. Disable scheduling again after validation unless the configured schedule window, fixed delay, and worker batch size are intentionally safe for the current listing count.
+The crawler is shared (HOMELAB-32): exactly one deployment enables it. Validate changes against the scratch schema first.
+
+1. Confirm `marketplace_pricing` exists and the deployment's database user can read it (and write it, for the crawler). See `00-workspace/ops/marketplace-pricing/`.
+2. Confirm the want list is filling: `select environment_code, count(*) from marketplace_pricing.want_list_item group by 1`.
+3. Set `bricklink.ajax.uri=https://www.bricklink.com`, keep `bricklink.ajax.rate-limit.enabled=true` and `minimum-delay-ms` at `2000` or higher.
+4. For a trial, set `lego.marketplace-pricing.schema=marketplace_pricing_scratch`, `lego.bricklink.pricing.crawl.worker-batch-size=1` and a long `scheduled.fixed-delay-ms`.
+5. Enable `lego.bricklink.pricing.crawl.enabled=true` and `scheduled.enabled=true` in **one** deployment only. Every other profile keeps `crawl.enabled: false`.
+6. Watch `bricklink.pricing.crawl.job.completed` and `bricklink_pricing_crawl_fetch_total{result="failed"}`.
+7. Run the SQL checks below: targets by state, recent attempts, latest snapshots.
 
 Rollback:
 
@@ -2276,12 +2204,12 @@ lego:
           enabled: false
 ```
 
-Set `lego.bricklink.pricing.crawl.enabled=false` if the service bean should be disabled entirely. If BrickLink starts failing or throttling AJAX requests, stop the job first; do not repeatedly retry at a high cadence.
+Set `lego.bricklink.pricing.crawl.enabled=false` if the service bean should be disabled entirely. If BrickLink starts failing or throttling AJAX requests, stop the job first; the queue keeps its state, and each failing target already backs off (`retry-backoff`, then a full cadence after `max-attempts`).
 
 ### Safe BrickLink Pricing Decision Rollout
 
-1. Confirm the Pricing Plane tables exist in the target database: `pricing_crawl_work_item`, `pricing_snapshot`, `pricing_snapshot_listing`, `pricing_decision`, and `pricing_apply_readiness`.
-2. Run the BrickLink pricing crawl first and verify recent `pricing_snapshot` and `pricing_snapshot_listing` rows exist.
+1. Confirm `pricing_decision` and `pricing_apply_readiness` exist in the environment database and `marketplace_pricing` is readable.
+2. Confirm the shared crawler has produced recent `market_snapshot` rows for this environment's wanted items.
 3. Confirm active BrickLink marketplace listings have `marketplace_listing.unit_price`, `currency_code`, `fixed_price`, `external_listing_id`, and a linked `item_inventory`.
 4. Confirm `item_inventory.new_or_used` and `item_inventory.completeness` are populated. Supported values normalize to `N`/`U` and `S`/`C`/`X`.
 5. Start with `lego.bricklink.pricing.decision.enabled=true` and `lego.bricklink.pricing.decision.scheduled.enabled=false`.
@@ -2307,7 +2235,7 @@ Set `lego.bricklink.pricing.decision.enabled=false` if the service bean should b
 
 ### Safe BrickLink Pricing Apply Readiness Rollout
 
-1. Confirm the BrickLink pricing crawl has produced recent `pricing_snapshot` and `pricing_snapshot_listing` rows.
+1. Confirm the shared crawler has produced recent `market_snapshot` and `market_listing` rows for this environment's wanted items.
 2. Confirm the BrickLink pricing decision job has produced recent latest `PROPOSED` decisions.
 3. Start with `lego.bricklink.pricing.apply-readiness.enabled=true` and `lego.bricklink.pricing.apply-readiness.scheduled.enabled=false`.
 4. Use a small `lego.bricklink.pricing.apply-readiness.batch-size` for first validation, for example `1` to `5`.
@@ -2441,262 +2369,123 @@ POST /internal/image-hosting/item-inventories/{itemInventoryId}/sync?dryRun=fals
 
 ### BrickLink Pricing Crawl SQL Checks
 
-Confirm active BrickLink listings eligible for crawl:
+The crawl data is in the shared `marketplace_pricing` schema (HOMELAB-32); the queries below work from any environment connection.
+
+What each environment wants:
 
 ```sql
-select ml.marketplace_listing_id,
-       ml.item_inventory_id,
-       ml.listing_external_service_id,
-       ml.external_catalog_item_id,
-       ml.external_listing_id,
-       ml.listing_status_code,
-       ii.uuid,
-       ii.new_or_used,
-       ii.completeness,
-       eci.external_item_key,
-       eci.external_unique_key
-from marketplace_listing ml
-join item_inventory ii
-  on ii.item_inventory_id = ml.item_inventory_id
-join external_catalog_item eci
-  on eci.external_catalog_item_id = ml.external_catalog_item_id
-where ml.listing_external_service_id = 2
-  and ml.listing_status_code = 'ACTIVE'
-order by ml.marketplace_listing_id
+select environment_code,
+       count(*) as wanted_rows,
+       max(last_confirmed_at) as last_confirmed
+from marketplace_pricing.want_list_item
+group by environment_code;
+```
+
+The crawl queue by state:
+
+```sql
+select target_status_code,
+       count(*) as targets,
+       sum(next_due_at <= utc_timestamp()) as due_now,
+       sum(consecutive_failure_count > 0) as failing,
+       min(next_due_at) as next_due
+from marketplace_pricing.crawl_target
+where marketplace_code = 'BRICKLINK'
+group by target_status_code;
+```
+
+Failing targets with their latest error:
+
+```sql
+select ct.crawl_target_id,
+       ci.item_type_code,
+       ci.item_number,
+       ct.query_condition_code,
+       ct.consecutive_failure_count,
+       ct.last_attempt_at,
+       ct.next_due_at,
+       left(ct.last_error_message, 200) as last_error
+from marketplace_pricing.crawl_target ct
+join marketplace_pricing.canonical_item ci
+  on ci.canonical_item_id = ct.canonical_item_id
+where ct.marketplace_code = 'BRICKLINK'
+  and ct.consecutive_failure_count > 0
+order by ct.consecutive_failure_count desc, ct.last_attempt_at desc
 limit 50;
 ```
 
-Check recent work item outcomes:
+Recent attempts (a ban or maintenance shows as a run of `FAILED_HTTP`):
 
 ```sql
-select work_status_code,
-       count(*) as row_count,
-       min(created_at) as first_created,
-       max(updated_at) as last_updated
-from pricing_crawl_work_item
-group by work_status_code
-order by row_count desc;
-```
-
-Check current work item outcomes using only the latest work item per marketplace listing. This mirrors `bricklink_pricing_crawl_work_item_current` and avoids counting historical failures that were later superseded:
-
-```sql
-select pcwi.work_status_code,
-       count(*) as latest_listing_count,
-       min(pcwi.updated_at) as oldest_latest_update,
-       max(pcwi.updated_at) as newest_latest_update
-from pricing_crawl_work_item pcwi
-join (
-    select marketplace_listing_id,
-           max(pricing_crawl_work_item_id) as pricing_crawl_work_item_id
-    from pricing_crawl_work_item
-    group by marketplace_listing_id
-) latest
-  on latest.pricing_crawl_work_item_id = pcwi.pricing_crawl_work_item_id
-group by pcwi.work_status_code
-order by latest_listing_count desc,
-         pcwi.work_status_code;
-```
-
-Check due pending work in the crawl queue:
-
-```sql
-select pricing_crawl_work_item_id,
-       marketplace_listing_id,
-       attempt_count,
-       max_attempts,
-       next_attempt_at,
-       created_at,
-       updated_at
-from pricing_crawl_work_item
-where work_status_code = 'PENDING'
-  and next_attempt_at <= current_timestamp
-  and coalesce(attempt_count, 0) < coalesce(max_attempts, 3)
-order by next_attempt_at, pricing_crawl_work_item_id
+select ca.started_at,
+       ca.outcome_code,
+       ci.item_number,
+       ct.query_condition_code,
+       ca.market_snapshot_id,
+       left(ca.error_message, 120) as error
+from marketplace_pricing.crawl_attempt ca
+join marketplace_pricing.crawl_target ct
+  on ct.crawl_target_id = ca.crawl_target_id
+join marketplace_pricing.canonical_item ci
+  on ci.canonical_item_id = ct.canonical_item_id
+order by ca.started_at desc
 limit 50;
 ```
 
-Check stale claimed work that should be recovered by a later run:
+Latest snapshots and their lots per sub-condition:
 
 ```sql
-select pricing_crawl_work_item_id,
-       marketplace_listing_id,
-       attempt_count,
-       max_attempts,
-       claimed_at,
-       last_error_message
-from pricing_crawl_work_item
-where work_status_code = 'CLAIMED'
-order by claimed_at, pricing_crawl_work_item_id
-limit 50;
-```
-
-Review recent work items with request parameters and errors:
-
-```sql
-select pcwi.pricing_crawl_work_item_id,
-       pcwi.marketplace_listing_id,
-       pcwi.external_catalog_item_id,
-       eci.external_item_key,
-       eci.external_unique_key,
-       pcwi.work_status_code,
-       pcwi.attempt_count,
-       pcwi.max_attempts,
-       pcwi.next_attempt_at,
-       pcwi.claimed_at,
-       pcwi.completed_at,
-       pcwi.source_request_url,
-       pcwi.source_request_parameters,
-       pcwi.last_error_message,
-       pcwi.created_at
-from pricing_crawl_work_item pcwi
-left join external_catalog_item eci
-  on eci.external_catalog_item_id = pcwi.external_catalog_item_id
-order by pcwi.pricing_crawl_work_item_id desc
-limit 50;
-```
-
-Check recent snapshots and persisted comparable counts:
-
-```sql
-select ps.pricing_snapshot_id,
-       ps.marketplace_listing_id,
-       ps.source_item_key,
-       ps.source_unique_key,
-       ps.item_condition_code,
-       ps.completeness_code,
-       ps.comparable_count,
-       count(psl.pricing_snapshot_listing_id) as persisted_listing_count,
-       min(psl.unit_price) as min_unit_price,
-       avg(psl.unit_price) as avg_unit_price,
-       max(psl.unit_price) as max_unit_price,
-       ps.captured_at
-from pricing_snapshot ps
-left join pricing_snapshot_listing psl
-  on psl.pricing_snapshot_id = ps.pricing_snapshot_id
-group by ps.pricing_snapshot_id,
-         ps.marketplace_listing_id,
-         ps.source_item_key,
-         ps.source_unique_key,
-         ps.item_condition_code,
-         ps.completeness_code,
-         ps.comparable_count,
-         ps.captured_at
-order by ps.pricing_snapshot_id desc
-limit 25;
-```
-
-Review latest zero-comparable snapshots. These indicate BrickLink returned no current comparable listings for the crawl target; they are successful observations and can produce `NO_CURRENT_COMPARABLES` decisions:
-
-```sql
-select ps.pricing_snapshot_id,
-       ps.marketplace_listing_id,
-       ml.external_listing_id,
-       eci.external_item_key,
-       ps.source_unique_key,
-       ps.item_condition_code,
-       ps.completeness_code,
-       ps.comparable_count,
-       ps.source_request_url,
-       ps.source_request_parameters,
-       ps.captured_at
-from pricing_snapshot ps
-join marketplace_listing ml
-  on ml.marketplace_listing_id = ps.marketplace_listing_id
-left join external_catalog_item eci
-  on eci.external_catalog_item_id = ps.external_catalog_item_id
-where ps.comparable_count = 0
-order by ps.captured_at desc,
-         ps.pricing_snapshot_id desc
-limit 50;
-```
-
-Query latest exact comparables for one marketplace listing. This is the shape Phase 3 pricing should use by default:
-
-```sql
-select psl.external_listing_id,
-       psl.seller_name,
-       psl.seller_country_code,
-       psl.item_condition_code,
-       psl.completeness_code,
-       psl.quantity_available,
-       psl.unit_price,
-       psl.currency_code,
-       psl.description
-from pricing_snapshot ps
-join pricing_snapshot_listing psl
-  on psl.pricing_snapshot_id = ps.pricing_snapshot_id
-where ps.pricing_snapshot_id = (
-    select ps2.pricing_snapshot_id
-    from pricing_snapshot ps2
-    where ps2.marketplace_listing_id = 24
-      and ps2.item_condition_code = 'N'
-      and ps2.completeness_code = 'S'
-    order by ps2.captured_at desc, ps2.pricing_snapshot_id desc
-    limit 1
-)
-  and psl.item_condition_code = ps.item_condition_code
-  and (
-        psl.completeness_code = ps.completeness_code
-        or (psl.completeness_code is null and ps.completeness_code is null)
-      )
-order by psl.unit_price, psl.pricing_snapshot_listing_id;
-```
-
-Check whether missing BrickLink internal ids were hydrated:
-
-```sql
-select eci.external_catalog_item_id,
-       eci.external_item_key,
-       eci.external_unique_key,
-       eci.item_name
-from external_catalog_item eci
-where eci.external_service_id = 2
-  and eci.external_catalog_item_id in (
-      select distinct external_catalog_item_id
-      from pricing_snapshot
-  )
-order by eci.external_item_key;
-```
-
-Review active BrickLink listings that still need BrickLink internal id hydration:
-
-```sql
-select ml.marketplace_listing_id,
-       ml.external_listing_id,
-       eci.external_catalog_item_id,
-       eci.external_item_key,
-       eci.external_unique_key,
-       ii.item_inventory_id,
-       ii.uuid,
-       ii.new_or_used,
-       ii.completeness
-from marketplace_listing ml
-join item_inventory ii
-  on ii.item_inventory_id = ml.item_inventory_id
-join external_catalog_item eci
-  on eci.external_catalog_item_id = ml.external_catalog_item_id
-where ml.listing_external_service_id = 2
-  and ml.listing_status_code = 'ACTIVE'
-  and (eci.external_unique_key is null or trim(eci.external_unique_key) = '')
-order by ml.marketplace_listing_id
+select ms.market_snapshot_id,
+       ci.item_number,
+       ms.query_condition_code,
+       ms.captured_at,
+       ms.listing_count,
+       ml.condition_code,
+       ml.completeness_code,
+       count(ml.market_listing_id) as lots,
+       min(ml.item_price) as lowest_price
+from marketplace_pricing.market_snapshot ms
+join marketplace_pricing.canonical_item ci
+  on ci.canonical_item_id = ms.canonical_item_id
+left join marketplace_pricing.market_listing ml
+  on ml.market_snapshot_id = ms.market_snapshot_id
+where ms.captured_at >= utc_timestamp() - interval 1 day
+group by ms.market_snapshot_id, ci.item_number, ms.query_condition_code, ms.captured_at, ms.listing_count,
+         ml.condition_code, ml.completeness_code
+order by ms.captured_at desc
 limit 100;
 ```
 
-Review duplicate crawl work items per marketplace listing. This should normally be empty or explainable by historical runs:
+Price history of one item (every crawl is kept):
 
 ```sql
-select marketplace_listing_id,
-       count(*) as work_item_count,
-       sum(case when work_status_code = 'PENDING' then 1 else 0 end) as pending_count,
-       group_concat(distinct work_status_code order by work_status_code separator ',') as work_status_codes,
-       group_concat(pricing_crawl_work_item_id order by pricing_crawl_work_item_id separator ',') as pricing_crawl_work_item_ids
-from pricing_crawl_work_item
-group by marketplace_listing_id
-having count(*) > 1
-order by pending_count desc,
-         work_item_count desc,
-         marketplace_listing_id
+select ms.captured_at,
+       min(ml.item_price) as lowest,
+       count(*) as lots
+from marketplace_pricing.market_snapshot ms
+join marketplace_pricing.canonical_item ci
+  on ci.canonical_item_id = ms.canonical_item_id
+join marketplace_pricing.market_listing ml
+  on ml.market_snapshot_id = ms.market_snapshot_id
+where ci.item_type_code = 'S'
+  and ci.item_number = '6390-1'
+  and ms.query_condition_code = 'U'
+  and ml.condition_code = 'U'
+  and ml.completeness_code = 'C'
+group by ms.market_snapshot_id, ms.captured_at
+order by ms.captured_at;
+```
+
+Items whose BrickLink idItem is not resolved yet:
+
+```sql
+select ci.item_type_code, ci.item_number, mi.marketplace_unique_key, mi.resolved_at
+from marketplace_pricing.canonical_item ci
+left join marketplace_pricing.marketplace_item mi
+  on mi.canonical_item_id = ci.canonical_item_id
+ and mi.marketplace_code = 'BRICKLINK'
+where mi.marketplace_unique_key is null
+order by ci.item_number
 limit 100;
 ```
 
@@ -2769,7 +2558,7 @@ select ml.marketplace_listing_id,
        pd.confidence,
        pd.created_at as decision_created_at,
        ps.captured_at as snapshot_captured_at,
-       ps.comparable_count as snapshot_comparable_count
+       ps.listing_count as snapshot_listing_count
 from marketplace_listing ml
 join item_inventory ii
   on ii.item_inventory_id = ml.item_inventory_id
@@ -2787,8 +2576,8 @@ left join (
       on latest.pricing_decision_id = pd.pricing_decision_id
 ) pd
   on pd.marketplace_listing_id = ml.marketplace_listing_id
-left join pricing_snapshot ps
-  on ps.pricing_snapshot_id = pd.pricing_snapshot_id
+left join marketplace_pricing.market_snapshot ps
+  on ps.market_snapshot_id = pd.market_snapshot_id
 where ml.listing_external_service_id = 2
   and ml.listing_status_code = 'ACTIVE'
 order by ml.marketplace_listing_id
@@ -3228,18 +3017,18 @@ order by ai.sort_order;
 | BrickLink responses are `302` to error page | Wrong BrickLink base URI | Use `https://api.bricklink.com/api/store/v1`. |
 | BrickLink sync discovers orders but writes nothing | `lego.bricklink.orders.sync.scheduled.apply=false` | This is probe mode. Set apply true only after DB tables exist and probe output is reviewed. |
 | Pricing crawl job does not start | `lego.bricklink.pricing.crawl.enabled=false` or `lego.bricklink.pricing.crawl.scheduled.enabled=false` | Set both properties true for scheduled runs. |
-| Pricing crawl schedules work but makes no AJAX calls | Newly created work has `next_attempt_at` in the future or no pending work is currently due | Check `pricing_crawl_work_item.next_attempt_at`, `schedule-spread-window`, blackout settings, and `worker-batch-size`. |
-| Pricing crawl repeatedly re-crawls the same listings | `crawl-cadence` is too short or terminal work rows have past `next_attempt_at` values | Increase `crawl-cadence` and check recent `pricing_crawl_work_item` rows for the listing. |
+| Pricing crawl schedules work but makes no AJAX calls | New targets have `next_due_at` in the future, the run is inside the blackout window (`BLACKOUT`), or nothing is due | Check `marketplace_pricing.crawl_target.next_due_at`, `schedule-spread-window`, blackout settings, and `worker-batch-size`. |
+| Pricing crawl repeatedly re-crawls the same item | `crawl-cadence` is too short, or the fetch keeps failing and retries after `retry-backoff` | Check `crawl_target.consecutive_failure_count` and the target's `crawl_attempt` rows. |
 | Pricing crawl leaves rows in `CLAIMED` | JVM stopped or failed after claim and before completion | Rows older than `claim-stale-after` are requeued on a later run if attempts remain. |
 | A listing never gets a pricing crawl | Its inventory has no recognised condition or no completeness, or it has no catalog item | Run `GET /internal/bricklink/pricing/data-quality-report` and fix the flagged fields. |
 | Pricing crawl writes `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | BrickLink `searchproduct.ajax` could not match `external_catalog_item.external_item_key` for the selected item type | Verify `external_catalog_item.external_item_key`, `external_catalog_item.item_type_code`, and the configured fallback `catalog-item-type` for rows missing an item type. |
-| Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. This can be valid sparse-market behavior. |
-| Pricing crawl sees `catalogifs.ajax ... returned []` as an HTTP failure | BrickLink answers "no lots for sale" with an HTTP 4xx whose body is empty or `[]` | `bricklink-ajax` (2.0.0-SNAPSHOT from HOMELAB-25 on) returns an empty result for that answer, so the crawler writes a successful zero-comparable snapshot. A `FAILED_PRICING_HTTP_ERROR` with that text means an older `bricklink-ajax` is on the classpath, or the status was 429 or 5xx (never treated as "no lots"). Review `zeroComparableSnapshotsWritten` and the latest `pricing_snapshot.comparable_count=0` rows. |
+| Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition | Check `market_snapshot.listing_count`, request parameters, and BrickLink site manually if needed. This can be valid sparse-market behavior. |
+| Pricing crawl sees `catalogifs.ajax ... returned []` as an HTTP failure | BrickLink answers "no lots for sale" with an HTTP 4xx whose body is empty or `[]` | `bricklink-ajax` (2.0.0-SNAPSHOT from HOMELAB-25 on) returns an empty result for that answer, so the crawler writes a successful empty snapshot. A `FAILED_HTTP` attempt with that text means an older `bricklink-ajax` is on the classpath, or the status was 429 or 5xx (never treated as "no lots"). Review `emptySnapshots` and the latest `market_snapshot.listing_count=0` rows. |
 | Log `bricklink.pricing.crawl.unparseable_price` | A competitor lot's display price wasn't in a known BrickLink format (`US $1.00`, `AU $1.00`, `EUR 1.00`) or was not positive | The lot is skipped; the rest of the snapshot is written. Check the logged `displayPrice`. |
 | Pricing crawl returns New/Complete rows for a New/Sealed inventory item | BrickLink pricing AJAX filters by condition only, not completeness | This is expected. Phase 3 pricing should query exact comparables by matching snapshot/listing condition and completeness. |
 | Pricing decision job does not start | `lego.bricklink.pricing.decision.enabled=false` or `lego.bricklink.pricing.decision.scheduled.enabled=false` | Set both properties true for scheduled runs. |
 | Pricing decision job reports `NO_WORK` even though active BrickLink listings exist | No active listings currently meet decision-candidate eligibility | Check for missing `external_catalog_item_id`, missing inventory condition/completeness, or non-fixed legacy listings excluded by the candidate query. |
-| Pricing decisions are `FAILED` with `NO_CURRENT_SNAPSHOT` | No crawl snapshot exists for that listing and exact condition/completeness | Run the pricing crawl first and confirm normalized `pricing_snapshot.item_condition_code` and `completeness_code`. |
+| Pricing decisions are `FAILED` with `NO_CURRENT_SNAPSHOT` | No shared snapshot exists yet for the listing's item and New/Used condition | Check the environment's `want_list_item` row and the item's `crawl_target` (due time, failures). |
 | Pricing decisions are `FAILED` with `NO_CURRENT_COMPARABLES` | Latest matching crawl snapshot exists and has `comparable_count=0` | This is not a crawl timing issue. Review manually, wait for future comparables, or add a later fallback strategy. |
 | Pricing decisions are `FAILED` with `NO_EXACT_COMPARABLES` | Snapshot exists, but no returned rows match condition/completeness after excluding your own listing | Check latest exact comparable SQL; this can be valid sparse-market behavior. |
 | Pricing decisions are `SKIPPED` with `FIXED_PRICE_OVERRIDE` | `marketplace_listing.fixed_price=true` | Expected when the listing price is intentionally fixed. |
@@ -3299,9 +3088,9 @@ POST .../sync-requests
 Ingress is responsible for:
 
 ```text
-pricing_crawl_work_item
-    -> BrickLink AJAX lookup/hydration
-    -> pricing_snapshot + pricing_snapshot_listing
+want_list_item (this environment)
+    -> shared crawler (SANDBOX): crawl_target, BrickLink AJAX lookup/fetch
+    -> marketplace_pricing.market_snapshot + market_listing
     -> pricing_decision
     -> pricing_apply_readiness
     -> local unit_price apply
@@ -3335,7 +3124,7 @@ pricing_decision.status_code = PROPOSED
         +--> marketplace sync creates and verifies BrickLink inventory
 ```
 
-`pricing_crawl_work_item.work_status_code=SUCCEEDED` proves only that source market
+A `SUCCEEDED` `crawl_attempt` proves only that source market
 data was captured. It does not prove that a pricing decision exists, that the decision
 passed readiness, that local price apply ran, or that BrickLink was called. Always
 inspect the latest row in each stage when a listing still shows an old manual price.
@@ -3344,10 +3133,10 @@ inspect the latest row in each stage when a listing still shows an old manual pr
 
 The catalog mapping contains both the user-facing BrickLink item number
 (`external_item_key`) and BrickLink's internal `idItem` (`external_unique_key`). When
-the internal key is null, the pricing crawler can call BrickLink
-`searchproduct.ajax`, using the catalog item number and the catalog row's item type,
-then persist the resolved key. The catalog row's type is preferred; the configured
-`catalog-item-type` is only a fallback when the row type is blank.
+the shared crawler has no resolved key in `marketplace_pricing.marketplace_item`, it calls
+BrickLink `searchproduct.ajax` with the canonical item number and type and stores the key
+there once, for every environment (HOMELAB-32). It no longer writes
+`external_catalog_item.external_unique_key`.
 
 Use the following query before diagnosing a crawl:
 
@@ -3367,8 +3156,9 @@ order by iieci.item_inventory_id, iieci.is_primary desc;
 ```
 
 A null internal key is a recoverable hydration state, not permission to invent an ID.
-If hydration fails, use the work-item status/error (`NO_MATCH`, `AMBIGUOUS`, HTTP
-error, or parse error) and the item type to determine the next action.
+If hydration fails, use the target's latest `crawl_attempt` outcome
+(`FAILED_RESOLVE_NO_MATCH`, `FAILED_RESOLVE_AMBIGUOUS`, `FAILED_HTTP`) and the item type to
+determine the next action.
 
 ### Database preflight for unpriced drafts
 

@@ -20,9 +20,7 @@ class BricklinkPricingMaintenanceReportControllerTest {
                 ZonedDateTime.parse("2026-06-27T12:00:00Z"),
                 true,
                 null,
-                Set.of(),
-                Set.of(),
-                Set.of()
+                java.util.List.of()
         );
         when(service.buildReport(25)).thenReturn(expected);
 

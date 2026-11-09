@@ -29,7 +29,11 @@ public class BricklinkPricingCrawlProperties {
     private Duration retryBackoff = Duration.ofHours(6);
     private Duration claimStaleAfter = Duration.ofHours(2);
     private Duration scheduleJitter = Duration.ZERO;
-    private Set<Integer> marketplaceListingAllowlist = Set.of();
+    /**
+     * Who holds a crawl claim, for operational review in crawl_target.claimed_by. Defaults to the pod's
+     * host name.
+     */
+    private String claimedBy;
     private Blackout blackout = new Blackout();
     private Scheduled scheduled = new Scheduled();
 
@@ -94,8 +98,12 @@ public class BricklinkPricingCrawlProperties {
         return nonNegativeOrDefault(scheduleJitter, Duration.ZERO);
     }
 
-    public Set<Integer> effectiveMarketplaceListingAllowlist() {
-        return marketplaceListingAllowlist == null ? Set.of() : marketplaceListingAllowlist;
+    public String effectiveClaimedBy() {
+        if (claimedBy != null && !claimedBy.isBlank()) {
+            return claimedBy.trim();
+        }
+        String host = System.getenv("HOSTNAME");
+        return host == null || host.isBlank() ? "lego-data-ingress" : host.trim();
     }
 
     private Duration positiveOrDefault(Duration value, Duration defaultValue) {

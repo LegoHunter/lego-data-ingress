@@ -5,14 +5,17 @@ import io.legohunter.data.dao.ConditionDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dao.PricingDecisionDao;
-import io.legohunter.data.dao.PricingSnapshotDao;
-import io.legohunter.data.dao.PricingSnapshotListingDao;
+import io.legohunter.data.dao.CanonicalItemDao;
+import io.legohunter.data.dao.MarketListingDao;
+import io.legohunter.data.dao.MarketSnapshotDao;
 import io.legohunter.data.dto.Condition;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.PricingDecision;
-import io.legohunter.data.dto.PricingSnapshot;
-import io.legohunter.data.dto.PricingSnapshotListing;
+import io.legohunter.data.dto.CanonicalItem;
+import io.legohunter.data.dto.ExternalCatalogItem;
+import io.legohunter.data.dto.MarketListing;
+import io.legohunter.data.dto.MarketSnapshot;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -27,6 +30,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -37,8 +41,9 @@ class BricklinkPricingDecisionServiceTest {
     private MarketplaceListingDao marketplaceListingDao;
     private ItemInventoryDao itemInventoryDao;
     private ConditionDao conditionDao;
-    private PricingSnapshotDao pricingSnapshotDao;
-    private PricingSnapshotListingDao pricingSnapshotListingDao;
+    private CanonicalItemDao canonicalItemDao;
+    private MarketSnapshotDao marketSnapshotDao;
+    private MarketListingDao marketListingDao;
     private PricingDecisionDao pricingDecisionDao;
     private BricklinkPricingDecisionProperties properties;
     private BricklinkPricingDecisionService service;
@@ -48,8 +53,11 @@ class BricklinkPricingDecisionServiceTest {
         marketplaceListingDao = mock(MarketplaceListingDao.class);
         itemInventoryDao = mock(ItemInventoryDao.class);
         conditionDao = mock(ConditionDao.class);
-        pricingSnapshotDao = mock(PricingSnapshotDao.class);
-        pricingSnapshotListingDao = mock(PricingSnapshotListingDao.class);
+        canonicalItemDao = mock(CanonicalItemDao.class);
+        marketSnapshotDao = mock(MarketSnapshotDao.class);
+        marketListingDao = mock(MarketListingDao.class);
+        when(canonicalItemDao.findByItemTypeCodeAndItemNumber("S", "6390-1"))
+                .thenReturn(Optional.of(CanonicalItem.builder().canonicalItemId(700).itemTypeCode("S").itemNumber("6390-1").build()));
         pricingDecisionDao = mock(PricingDecisionDao.class);
         properties = new BricklinkPricingDecisionProperties();
         properties.setEnabled(true);
@@ -66,8 +74,9 @@ class BricklinkPricingDecisionServiceTest {
                 marketplaceListingDao,
                 itemInventoryDao,
                 conditionDao,
-                pricingSnapshotDao,
-                pricingSnapshotListingDao,
+                canonicalItemDao,
+                marketSnapshotDao,
+                marketListingDao,
                 pricingDecisionDao,
                 new ObjectMapper()
         );
@@ -91,7 +100,7 @@ class BricklinkPricingDecisionServiceTest {
         assertThat(decision.getComputedPrice()).isNull();
         assertThat(decision.getComparableCount()).isZero();
         verify(itemInventoryDao, never()).findByItemInventoryId(any());
-        verify(pricingSnapshotDao, never()).findLatestByMarketplaceListingIdAndConditionAndCompleteness(any(), any(), any());
+        verify(marketSnapshotDao, never()).findLatestByMarketplaceCodeAndCanonicalItemIdAndQueryConditionCode(any(), any(), any());
     }
 
     @Test
@@ -111,7 +120,7 @@ class BricklinkPricingDecisionServiceTest {
     void runOnceUsesSingleComparableAfterOwnListingExclusion() {
         MarketplaceListing listing = listing(false, "225.00");
         arrangeListingWithSnapshot(listing, inventory("USED", "COMPLETE"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(
                         comparable("BL-INV-10", "US", "200.00"),
                         comparable("BL-INV-20", "US", "220.00")
@@ -138,7 +147,7 @@ class BricklinkPricingDecisionServiceTest {
         arrangeListingWithSnapshot(listing, inventory, snapshot("U", "C"));
         when(conditionDao.findConditionById(1)).thenReturn(Optional.of(condition("SL")));
         when(conditionDao.findConditionById(2)).thenReturn(Optional.of(condition("M")));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(
                         comparable("BL-INV-20", "US", "100.00"),
                         comparable("BL-INV-30", "US", "200.00")
@@ -159,7 +168,7 @@ class BricklinkPricingDecisionServiceTest {
     void runOncePricesAUsedSetWithBoxAndInstructionsHighInTheMarket() {
         MarketplaceListing listing = listing(false, "130.00");
         arrangeListingWithSnapshot(listing, withPackaging(inventory("U", "C"), "E", "E"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(
                         comparable("BL-INV-20", "US", "100.00"),
                         comparable("BL-INV-30", "US", "120.00"),
@@ -188,7 +197,7 @@ class BricklinkPricingDecisionServiceTest {
     void runOncePricesSealedAtTheSealedTargetPercentileWhateverTheSellerCountry() {
         MarketplaceListing listing = listing(false, "110.00");
         arrangeListingWithSnapshot(listing, inventory("NEW", "SEALED"), snapshot("N", "S"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(
                         comparable("BL-INV-20", "CA", "80.00"),
                         comparable("BL-INV-30", "US", "100.00"),
@@ -209,7 +218,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.setMinimumPrice(new BigDecimal("100.00"));
         MarketplaceListing listing = listing(false, "110.00");
         arrangeListingWithSnapshot(listing, inventory("N", "S"), snapshot("N", "S"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(comparable("BL-INV-20", "US", "90.00")));
 
         service.runOnce();
@@ -225,7 +234,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.setMaximumPrice(new BigDecimal("120.00"));
         MarketplaceListing listing = listing(false, "110.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(
                         comparable("BL-INV-20", "US", "100.00"),
                         comparable("BL-INV-30", "US", "200.00")
@@ -243,7 +252,7 @@ class BricklinkPricingDecisionServiceTest {
     void runOnceIgnoresComparablesPricedFarAboveTheMedian() {
         MarketplaceListing listing = listing(false, "130.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(
                         comparable("BL-INV-20", "US", "100.00"),
                         comparable("BL-INV-30", "US", "120.00"),
@@ -267,7 +276,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.setOutlierMaxRatioToMedian(null);
         MarketplaceListing listing = listing(false, "130.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "400.00"));
 
         service.runOnce();
@@ -284,7 +293,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.setAggression(BricklinkPricingDecisionProperties.Aggression.QUICK);
         MarketplaceListing listing = listing(false, "130.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -300,7 +309,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.setTargetPercentiles(Map.of("u-c", new BigDecimal("0.50"), "N-S", new BigDecimal("0.90")));
         MarketplaceListing listing = listing(false, "130.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -314,7 +323,7 @@ class BricklinkPricingDecisionServiceTest {
     void runOnceLimitsHowFarOneRunMovesTheCurrentPrice() {
         MarketplaceListing listing = listing(false, "200.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -332,7 +341,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.setMaximumAbsoluteChangePerRun(new BigDecimal("50.00"));
         MarketplaceListing listing = listing(false, "400.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("200.00", "240.00", "280.00"));
 
         service.runOnce();
@@ -348,7 +357,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.setMaximumChangePerRun(null);
         MarketplaceListing listing = listing(false, "200.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -364,7 +373,7 @@ class BricklinkPricingDecisionServiceTest {
         inventory.setBoxConditionId(1);
         inventory.setInstructionsConditionId(2);
         arrangeListingWithSnapshot(listing, inventory, snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(
                         comparable("BL-INV-20", "US", "100.00"),
                         comparable("BL-INV-30", "US", "200.00")
@@ -379,7 +388,7 @@ class BricklinkPricingDecisionServiceTest {
     void runOncePricesAUsedSetWithOnlyInstructionsInTheMiddleOfTheMarket() {
         MarketplaceListing listing = listing(false, "130.00");
         arrangeListingWithSnapshot(listing, withPackaging(inventory("U", "C"), "MS", "VG"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -394,7 +403,7 @@ class BricklinkPricingDecisionServiceTest {
     void runOnceTreatsMissingAndNotApplicableAsNotHavingIt() {
         MarketplaceListing listing = listing(false, "130.00");
         arrangeListingWithSnapshot(listing, withPackaging(inventory("U", "C"), "NA", "MS"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -409,7 +418,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.setTargetPercentiles(Map.of("U-C", new BigDecimal("0.50"), "U-C-BI", new BigDecimal("0.90")));
         MarketplaceListing listing = listing(false, "130.00");
         arrangeListingWithSnapshot(listing, withPackaging(inventory("U", "C"), "E", "E"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -423,7 +432,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.getStepDown().setEnabled(true);
         MarketplaceListing listing = publishedWeeksAgo(listing(false, "110.00"), 12);
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -442,7 +451,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.getStepDown().setEnabled(true);
         MarketplaceListing listing = publishedWeeksAgo(listing(false, "110.00"), 7);
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -455,7 +464,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.getStepDown().setEnabled(true);
         MarketplaceListing listing = publishedWeeksAgo(listing(false, "110.00"), 60);
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -470,7 +479,7 @@ class BricklinkPricingDecisionServiceTest {
         properties.getStepDown().setFloorPercentile(null);
         MarketplaceListing listing = publishedWeeksAgo(listing(false, "110.00"), 60);
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -485,7 +494,7 @@ class BricklinkPricingDecisionServiceTest {
     void runOnceNeverStepsDownWhenTheStepDownIsOffOrTheListingIsADraft() {
         MarketplaceListing listing = publishedWeeksAgo(listing(false, "110.00"), 60);
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(threeUsedComparables("100.00", "120.00", "140.00"));
 
         service.runOnce();
@@ -505,9 +514,9 @@ class BricklinkPricingDecisionServiceTest {
         properties.setOwnSellerNames(Set.of("My-Store"));
         MarketplaceListing listing = listing(false, "130.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        PricingSnapshotListing ownOtherLot = comparable("BL-INV-99", "US", "60.00");
-        ownOtherLot.setSellerName("my-store");
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        MarketListing ownOtherLot = comparable("BL-INV-99", "US", "60.00");
+        ownOtherLot.setSellerKey("my-store");
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(
                         ownOtherLot,
                         comparable("BL-INV-20", "US", "100.00"),
@@ -527,10 +536,10 @@ class BricklinkPricingDecisionServiceTest {
     void runOnceIgnoresComparablesWithoutAPositivePriceInTheListingsCurrency() {
         MarketplaceListing listing = listing(false, "130.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        PricingSnapshotListing zeroPrice = comparable("BL-INV-50", "US", "0.00");
-        PricingSnapshotListing euroPrice = comparable("BL-INV-60", "DE", "20.00");
+        MarketListing zeroPrice = comparable("BL-INV-50", "US", "0.00");
+        MarketListing euroPrice = comparable("BL-INV-60", "DE", "20.00");
         euroPrice.setCurrencyCode("EUR");
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(
                         zeroPrice,
                         euroPrice,
@@ -562,7 +571,7 @@ class BricklinkPricingDecisionServiceTest {
         when(marketplaceListingDao.findPricingDecisionCandidatesByListingExternalServiceIdAndListingStatusCodes(2, Set.of("ACTIVE", "DRAFT"), 10, false))
                 .thenReturn(Set.of(listing));
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("USED", "COMPLETE")));
-        when(pricingSnapshotDao.findLatestByMarketplaceListingIdAndConditionAndCompleteness(10, "U", "C"))
+        when(marketSnapshotDao.findLatestByMarketplaceCodeAndCanonicalItemIdAndQueryConditionCode("BRICKLINK", 700, "U"))
                 .thenReturn(Optional.empty());
 
         BricklinkPricingDecisionResult result = service.runOnce();
@@ -579,7 +588,7 @@ class BricklinkPricingDecisionServiceTest {
     void runOnceWritesFailedDecisionWhenNoExactComparableRemains() {
         MarketplaceListing listing = listing(false, "150.00");
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot("U", "C"));
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of(comparable("BL-INV-10", "US", "150.00")));
 
         BricklinkPricingDecisionResult result = service.runOnce();
@@ -593,10 +602,10 @@ class BricklinkPricingDecisionServiceTest {
     @Test
     void runOnceWritesNoCurrentComparablesWhenLatestSnapshotHasZeroRows() {
         MarketplaceListing listing = listing(false, "150.00");
-        PricingSnapshot snapshot = snapshot("U", "C");
-        snapshot.setComparableCount(0);
+        MarketSnapshot snapshot = snapshot("U", "C");
+        snapshot.setListingCount(0);
         arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot);
-        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+        when(marketListingDao.findComparablesByMarketSnapshotId(eq(500L), any(), any()))
                 .thenReturn(List.of());
 
         BricklinkPricingDecisionResult result = service.runOnce();
@@ -605,7 +614,9 @@ class BricklinkPricingDecisionServiceTest {
         PricingDecision decision = capturedDecision();
         assertThat(decision.getDecisionStatusCode()).isEqualTo(BricklinkPricingDecisionService.STATUS_FAILED);
         assertThat(decision.getReasonCode()).isEqualTo(BricklinkPricingDecisionService.REASON_NO_CURRENT_COMPARABLES);
-        assertThat(decision.getPricingSnapshotId()).isEqualTo(500L);
+        assertThat(decision.getMarketSnapshotId()).isEqualTo(500L);
+        assertThat(decision.getMarketSnapshotCapturedAt()).isEqualTo(snapshot.getCapturedAt());
+        assertThat(decision.getPricingSnapshotId()).isNull();
     }
 
     private ItemInventory withPackaging(ItemInventory inventory, String boxCode, String instructionsCode) {
@@ -621,7 +632,7 @@ class BricklinkPricingDecisionServiceTest {
         return listing;
     }
 
-    private List<PricingSnapshotListing> threeUsedComparables(String low, String middle, String high) {
+    private List<MarketListing> threeUsedComparables(String low, String middle, String high) {
         return List.of(
                 comparable("BL-INV-20", "US", low),
                 comparable("BL-INV-30", "DE", middle),
@@ -629,14 +640,12 @@ class BricklinkPricingDecisionServiceTest {
         );
     }
 
-    private void arrangeListingWithSnapshot(MarketplaceListing listing, ItemInventory inventory, PricingSnapshot snapshot) {
+    private void arrangeListingWithSnapshot(MarketplaceListing listing, ItemInventory inventory, MarketSnapshot snapshot) {
         when(marketplaceListingDao.findPricingDecisionCandidatesByListingExternalServiceIdAndListingStatusCodes(2, Set.of("ACTIVE", "DRAFT"), 10, false))
                 .thenReturn(Set.of(listing));
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory));
-        when(pricingSnapshotDao.findLatestByMarketplaceListingIdAndConditionAndCompleteness(
-                listing.getMarketplaceListingId(),
-                snapshot.getItemConditionCode(),
-                snapshot.getCompletenessCode()
+        when(marketSnapshotDao.findLatestByMarketplaceCodeAndCanonicalItemIdAndQueryConditionCode(
+                "BRICKLINK", 700, snapshot.getQueryConditionCode()
         )).thenReturn(Optional.of(snapshot));
     }
 
@@ -657,6 +666,11 @@ class BricklinkPricingDecisionServiceTest {
                 .unitPrice(new BigDecimal(price))
                 .currencyCode("USD")
                 .fixedPrice(fixedPrice)
+                .externalCatalogItem(ExternalCatalogItem.builder()
+                        .externalCatalogItemId(30)
+                        .itemTypeCode("S")
+                        .externalItemKey("6390-1")
+                        .build())
                 .build();
     }
 
@@ -668,28 +682,30 @@ class BricklinkPricingDecisionServiceTest {
         return inventory;
     }
 
-    private PricingSnapshot snapshot(String condition, String completeness) {
-        return PricingSnapshot.builder()
-                .pricingSnapshotId(500L)
-                .marketplaceListingId(10)
-                .externalCatalogItemId(30)
-                .sourceItemKey("6390-1")
-                .sourceUniqueKey("4997")
-                .itemConditionCode(condition)
-                .completenessCode(completeness)
+    /** The shared snapshot for item 6390-1 and a New/Used condition; {@code completeness} is the listing's. */
+    private MarketSnapshot snapshot(String condition, String completeness) {
+        return MarketSnapshot.builder()
+                .marketSnapshotId(500L)
+                .marketplaceCode("BRICKLINK")
+                .canonicalItemId(700)
+                .queryConditionCode(condition)
+                .marketplaceItemKey("6390-1")
+                .marketplaceUniqueKey("4997")
+                .listingCount(5)
+                .capturedAt(ZonedDateTime.parse("2026-11-09T12:00:00Z"))
                 .build();
     }
 
-    private PricingSnapshotListing comparable(String externalListingId, String countryCode, String price) {
-        return PricingSnapshotListing.builder()
-                .pricingSnapshotId(500L)
+    private MarketListing comparable(String externalListingId, String countryCode, String price) {
+        return MarketListing.builder()
+                .marketSnapshotId(500L)
                 .externalListingId(externalListingId)
-                .sellerName("seller-" + externalListingId)
+                .sellerKey("seller-" + externalListingId)
                 .sellerCountryCode(countryCode)
-                .itemConditionCode("U")
+                .conditionCode("U")
                 .completenessCode("C")
                 .quantityAvailable(1)
-                .unitPrice(new BigDecimal(price))
+                .itemPrice(new BigDecimal(price))
                 .currencyCode("USD")
                 .build();
     }

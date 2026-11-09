@@ -1,19 +1,21 @@
 package io.legohunter.ingress.source.bricklink.pricing;
 
-import io.legohunter.data.dto.PricingCrawlWorkItemDuplicate;
-import io.legohunter.data.dto.PricingCrawlWorkItemFailure;
-import io.legohunter.data.dto.PricingCrawlWorkItemMaintenanceSummary;
-import io.legohunter.data.dto.PricingHydrationGap;
+import io.legohunter.data.dto.CrawlAttempt;
 
 import java.time.ZonedDateTime;
-import java.util.Set;
+import java.util.List;
 
+/**
+ * Dry-run maintenance view of the shared BrickLink crawl (HOMELAB-32): the crawl_target queue by state and the
+ * latest failed attempts from crawl_attempt.
+ */
 public record BricklinkPricingMaintenanceReport(
         ZonedDateTime generatedAt,
         boolean dryRun,
-        PricingCrawlWorkItemMaintenanceSummary workItemSummary,
-        Set<PricingCrawlWorkItemDuplicate> duplicateWorkItems,
-        Set<PricingCrawlWorkItemFailure> recentFailures,
-        Set<PricingHydrationGap> hydrationGaps
+        CrawlTargetSummary crawlTargets,
+        List<CrawlAttempt> recentFailures
 ) {
+    /** Crawl targets by state. {@code failing} counts non-disabled targets whose latest attempt failed. */
+    public record CrawlTargetSummary(long idle, long claimed, long disabled, long due, long failing) {
+    }
 }

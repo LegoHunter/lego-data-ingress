@@ -6,14 +6,16 @@ import io.legohunter.data.dao.ConditionDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dao.PricingDecisionDao;
-import io.legohunter.data.dao.PricingSnapshotDao;
-import io.legohunter.data.dao.PricingSnapshotListingDao;
+import io.legohunter.data.dao.CanonicalItemDao;
+import io.legohunter.data.dao.MarketListingDao;
+import io.legohunter.data.dao.MarketSnapshotDao;
 import io.legohunter.data.dto.Condition;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.PricingDecision;
-import io.legohunter.data.dto.PricingSnapshot;
-import io.legohunter.data.dto.PricingSnapshotListing;
+import io.legohunter.data.dto.ExternalCatalogItem;
+import io.legohunter.data.dto.MarketListing;
+import io.legohunter.data.dto.MarketSnapshot;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -79,8 +81,9 @@ public class BricklinkPricingDecisionService {
     private final MarketplaceListingDao marketplaceListingDao;
     private final ItemInventoryDao itemInventoryDao;
     private final ConditionDao conditionDao;
-    private final PricingSnapshotDao pricingSnapshotDao;
-    private final PricingSnapshotListingDao pricingSnapshotListingDao;
+    private final CanonicalItemDao canonicalItemDao;
+    private final MarketSnapshotDao marketSnapshotDao;
+    private final MarketListingDao marketListingDao;
     private final PricingDecisionDao pricingDecisionDao;
     private final ObjectMapper objectMapper;
 
@@ -147,33 +150,31 @@ public class BricklinkPricingDecisionService {
             return failed(listing, null, REASON_MISSING_COMPLETENESS, "Missing item_inventory.completeness.");
         }
 
-        Optional<PricingSnapshot> snapshot = pricingSnapshotDao.findLatestByMarketplaceListingIdAndConditionAndCompleteness(
-                listing.getMarketplaceListingId(),
-                conditionCode,
-                completenessCode
-        );
+        Optional<MarketSnapshot> snapshot = latestMarketSnapshot(listing, conditionCode);
         if (snapshot.isEmpty()) {
-            return failed(listing, null, REASON_NO_CURRENT_SNAPSHOT, "No pricing snapshot exists for listing condition and completeness.");
+            return failed(listing, null, REASON_NO_CURRENT_SNAPSHOT, "No market snapshot exists for the listing's item and condition.");
         }
 
-        List<PricingSnapshotListing> candidates = pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(snapshot.get().getPricingSnapshotId())
+        // One snapshot holds every sub-condition: keep the lots of this listing's market only (HOMELAB-32).
+        List<MarketListing> candidates = marketListingDao.findComparablesByMarketSnapshotId(
+                        snapshot.get().getMarketSnapshotId(), conditionCode, completenessCode)
                 .stream()
-                .filter(comparable -> comparable.getUnitPrice() != null && comparable.getUnitPrice().signum() > 0)
+                .filter(comparable -> comparable.getItemPrice() != null && comparable.getItemPrice().signum() > 0)
                 .filter(comparable -> currencyCode(listing).equalsIgnoreCase(clean(comparable.getCurrencyCode()) == null ? "" : comparable.getCurrencyCode().trim()))
                 .filter(comparable -> !isOwnListing(listing, comparable))
-                .filter(comparable -> !properties.isOwnSeller(comparable.getSellerName()))
-                .sorted(Comparator.comparing(PricingSnapshotListing::getUnitPrice))
+                .filter(comparable -> !properties.isOwnSeller(comparable.getSellerKey()))
+                .sorted(Comparator.comparing(MarketListing::getItemPrice))
                 .toList();
-        List<PricingSnapshotListing> exactComparables = withoutOutliers(candidates);
+        List<MarketListing> exactComparables = withoutOutliers(candidates);
         int outliersDropped = candidates.size() - exactComparables.size();
 
         if (exactComparables.isEmpty()) {
-            if (Integer.valueOf(0).equals(snapshot.get().getComparableCount())) {
+            if (Integer.valueOf(0).equals(snapshot.get().getListingCount())) {
                 return failed(
                         listing,
                         snapshot.get(),
                         REASON_NO_CURRENT_COMPARABLES,
-                        "Current pricing snapshot contains no BrickLink comparable listing rows."
+                        "Current market snapshot contains no BrickLink lots."
                 );
             }
             return failed(
@@ -185,7 +186,7 @@ public class BricklinkPricingDecisionService {
         }
 
         ItemPackaging item = itemPackaging(conditionCode, inventory.get());
-        List<BigDecimal> prices = exactComparables.stream().map(PricingSnapshotListing::getUnitPrice).toList();
+        List<BigDecimal> prices = exactComparables.stream().map(MarketListing::getItemPrice).toList();
         Calculation calculation = calculate(conditionCode, completenessCode, item, prices);
         StepDown stepDown = stepDown(listing, calculation.price(), prices);
         BigDecimal limitedPrice = limitChange(stepDown.price(), listing.getUnitPrice());
@@ -208,12 +209,26 @@ public class BricklinkPricingDecisionService {
                 clamp.price(),
                 exactComparables.size(),
                 confidence(exactComparables.size()),
-                sourceSummary(snapshot.get(), exactComparables, calculation.reasonCode(), reasonCode, details),
+                sourceSummary(snapshot.get(), conditionCode, completenessCode, exactComparables, calculation.reasonCode(), reasonCode, details),
                 null
         );
     }
 
-    private PricingDecision failed(MarketplaceListing listing, PricingSnapshot snapshot, String reasonCode, String notes) {
+    /**
+     * The latest shared BrickLink snapshot for the listing's catalog item (canonical item = BrickLink type +
+     * number) and New/Used condition.
+     */
+    private Optional<MarketSnapshot> latestMarketSnapshot(MarketplaceListing listing, String conditionCode) {
+        ExternalCatalogItem catalogItem = listing.getExternalCatalogItem();
+        if (catalogItem == null || clean(catalogItem.getExternalItemKey()) == null || clean(catalogItem.getItemTypeCode()) == null) {
+            return Optional.empty();
+        }
+        return canonicalItemDao.findByItemTypeCodeAndItemNumber(catalogItem.getItemTypeCode().trim(), catalogItem.getExternalItemKey().trim())
+                .flatMap(item -> marketSnapshotDao.findLatestByMarketplaceCodeAndCanonicalItemIdAndQueryConditionCode(
+                        BricklinkPricingCrawlService.MARKETPLACE_CODE, item.getCanonicalItemId(), conditionCode));
+    }
+
+    private PricingDecision failed(MarketplaceListing listing, MarketSnapshot snapshot, String reasonCode, String notes) {
         return decision(
                 listing,
                 snapshot,
@@ -223,14 +238,14 @@ public class BricklinkPricingDecisionService {
                 null,
                 0,
                 bd("0.00"),
-                snapshot == null ? null : sourceSummary(snapshot, List.of(), reasonCode, reasonCode, Map.of()),
+                snapshot == null ? null : sourceSummary(snapshot, null, null, List.of(), reasonCode, reasonCode, Map.of()),
                 notes
         );
     }
 
     private PricingDecision decision(
             MarketplaceListing listing,
-            PricingSnapshot snapshot,
+            MarketSnapshot snapshot,
             String statusCode,
             String reasonCode,
             BigDecimal computedPrice,
@@ -242,7 +257,8 @@ public class BricklinkPricingDecisionService {
     ) {
         return PricingDecision.builder()
                 .marketplaceListingId(listing.getMarketplaceListingId())
-                .pricingSnapshotId(snapshot == null ? null : snapshot.getPricingSnapshotId())
+                .marketSnapshotId(snapshot == null ? null : snapshot.getMarketSnapshotId())
+                .marketSnapshotCapturedAt(snapshot == null ? null : snapshot.getCapturedAt())
                 .algorithmVersion(ALGORITHM_VERSION)
                 .decisionStatusCode(statusCode)
                 .reasonCode(reasonCode)
@@ -338,14 +354,14 @@ public class BricklinkPricingDecisionService {
     }
 
     /** Drops lots priced above the configured multiple of the median (absurd asks would otherwise skew the market). */
-    private List<PricingSnapshotListing> withoutOutliers(List<PricingSnapshotListing> sortedComparables) {
+    private List<MarketListing> withoutOutliers(List<MarketListing> sortedComparables) {
         BigDecimal maxRatio = properties.effectiveOutlierMaxRatioToMedian();
         if (maxRatio == null || sortedComparables.size() < 3) {
             return sortedComparables;
         }
-        List<BigDecimal> prices = sortedComparables.stream().map(PricingSnapshotListing::getUnitPrice).toList();
+        List<BigDecimal> prices = sortedComparables.stream().map(MarketListing::getItemPrice).toList();
         BigDecimal limit = percentile(prices, bd("0.5")).multiply(maxRatio);
-        return sortedComparables.stream().filter(comparable -> comparable.getUnitPrice().compareTo(limit) <= 0).toList();
+        return sortedComparables.stream().filter(comparable -> comparable.getItemPrice().compareTo(limit) <= 0).toList();
     }
 
     /**
@@ -434,20 +450,23 @@ public class BricklinkPricingDecisionService {
     }
 
     private String sourceSummary(
-            PricingSnapshot snapshot,
-            List<PricingSnapshotListing> comparables,
+            MarketSnapshot snapshot,
+            String conditionCode,
+            String completenessCode,
+            List<MarketListing> comparables,
             String baseReasonCode,
             String finalReasonCode,
             Map<String, Object> details
     ) {
-        BigDecimal lowestPrice = comparables.isEmpty() ? null : money(comparables.getFirst().getUnitPrice());
-        BigDecimal highestPrice = comparables.isEmpty() ? null : money(comparables.getLast().getUnitPrice());
+        BigDecimal lowestPrice = comparables.isEmpty() ? null : money(comparables.getFirst().getItemPrice());
+        BigDecimal highestPrice = comparables.isEmpty() ? null : money(comparables.getLast().getItemPrice());
         Map<String, Object> summary = new LinkedHashMap<>();
-        summary.put("pricingSnapshotId", snapshot.getPricingSnapshotId());
-        summary.put("sourceItemKey", nullToEmpty(snapshot.getSourceItemKey()));
-        summary.put("sourceUniqueKey", nullToEmpty(snapshot.getSourceUniqueKey()));
-        summary.put("targetConditionCode", nullToEmpty(snapshot.getItemConditionCode()));
-        summary.put("targetCompletenessCode", nullToEmpty(snapshot.getCompletenessCode()));
+        summary.put("marketSnapshotId", snapshot.getMarketSnapshotId());
+        summary.put("snapshotCapturedAt", snapshot.getCapturedAt() == null ? "" : snapshot.getCapturedAt().toString());
+        summary.put("sourceItemKey", nullToEmpty(snapshot.getMarketplaceItemKey()));
+        summary.put("sourceUniqueKey", nullToEmpty(snapshot.getMarketplaceUniqueKey()));
+        summary.put("targetConditionCode", nullToEmpty(conditionCode == null ? snapshot.getQueryConditionCode() : conditionCode));
+        summary.put("targetCompletenessCode", nullToEmpty(completenessCode));
         summary.put("exactComparableCount", comparables.size());
         summary.put("lowestComparablePrice", nullToEmpty(lowestPrice));
         summary.put("highestComparablePrice", nullToEmpty(highestPrice));
@@ -470,7 +489,7 @@ public class BricklinkPricingDecisionService {
         return clean(listing.getCurrencyCode()) == null ? "USD" : listing.getCurrencyCode().trim().toUpperCase();
     }
 
-    private boolean isOwnListing(MarketplaceListing listing, PricingSnapshotListing comparable) {
+    private boolean isOwnListing(MarketplaceListing listing, MarketListing comparable) {
         String listingExternalId = clean(listing.getExternalListingId());
         return listingExternalId != null && Objects.equals(listingExternalId, clean(comparable.getExternalListingId()));
     }

@@ -15,8 +15,29 @@ lego:
   environment:
     code: local
     production: false
+  # The shared marketplace_pricing schema on the same MySQL server (HOMELAB-31/32).
+  marketplace-pricing:
+    schema: marketplace_pricing
   bricklink:
     pricing:
+      # What this environment is pricing, kept in marketplace_pricing.want_list_item (HOMELAB-32). Every
+      # environment that prices listings enables it; the shared crawler crawls the union of all want lists.
+      want-list:
+        enabled: false
+        environment-code: ${lego.environment.code}
+        bricklink-external-service-id: 2
+        priceable-listing-status-codes:
+          - ACTIVE
+          - DRAFT
+        prune-after: 2d
+        scheduled:
+          enabled: false
+          fixed-delay-ms: 3600000
+          initial-delay-ms: 60000
+          lock-at-most-for: 10m
+          lock-at-least-for: 0s
+      # The shared BrickLink crawler (HOMELAB-32). Exactly ONE deployment enables it (SANDBOX until PROD
+      # exists); it crawls for every environment into marketplace_pricing. Never enable it anywhere else.
       crawl:
         enabled: false
         bricklink-external-service-id: 2

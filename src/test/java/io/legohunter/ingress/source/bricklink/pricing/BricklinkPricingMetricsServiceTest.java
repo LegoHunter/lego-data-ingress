@@ -2,7 +2,7 @@ package io.legohunter.ingress.source.bricklink.pricing;
 
 import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
 import io.legohunter.data.dao.PricingApplyReadinessDao;
-import io.legohunter.data.dao.PricingCrawlWorkItemDao;
+import io.legohunter.data.dao.CrawlTargetDao;
 import io.legohunter.data.dao.PricingDecisionDao;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -20,63 +20,66 @@ import static org.mockito.Mockito.when;
 
 class BricklinkPricingMetricsServiceTest {
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
-    private final PricingCrawlWorkItemDao pricingCrawlWorkItemDao = mock(PricingCrawlWorkItemDao.class);
+    private final CrawlTargetDao crawlTargetDao = mock(CrawlTargetDao.class);
     private final PricingDecisionDao pricingDecisionDao = mock(PricingDecisionDao.class);
     private final PricingApplyReadinessDao pricingApplyReadinessDao = mock(PricingApplyReadinessDao.class);
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao = mock(MarketplaceListingSyncRequestDao.class);
-    private final BricklinkPricingCrawlProperties crawlProperties = new BricklinkPricingCrawlProperties();
     private final BricklinkPricingMetricsService metricsService = new BricklinkPricingMetricsService(
             meterRegistry,
-            pricingCrawlWorkItemDao,
+            crawlTargetDao,
             pricingDecisionDao,
             pricingApplyReadinessDao,
-            marketplaceListingSyncRequestDao,
-            crawlProperties
+            marketplaceListingSyncRequestDao
     );
 
     @Test
-    void recordsPricingCrawlMetricsAndCurrentWorkItemGauges() {
-        crawlProperties.setClaimStaleAfter(Duration.ofHours(2));
-        when(pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING)).thenReturn(7L);
-        when(pricingCrawlWorkItemDao.countLatestDueByWorkStatusCode(eq(BricklinkPricingCrawlService.STATUS_PENDING), any())).thenReturn(2L);
-        when(pricingCrawlWorkItemDao.countLatestRetryableByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING)).thenReturn(3L);
-        when(pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_CLAIMED)).thenReturn(1L);
-        when(pricingCrawlWorkItemDao.countLatestStaleClaimed(eq(BricklinkPricingCrawlService.STATUS_CLAIMED), any())).thenReturn(1L);
-        when(pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SUCCEEDED)).thenReturn(11L);
-        when(pricingCrawlWorkItemDao.countLatestByWorkStatusPattern("FAILED%")).thenReturn(4L);
-        when(pricingCrawlWorkItemDao.countLatestByWorkStatusPattern("SKIPPED%")).thenReturn(5L);
+    void recordsSharedCrawlMetricsAndCrawlTargetGauges() {
+        when(crawlTargetDao.countByTargetStatusCode("BRICKLINK", "IDLE")).thenReturn(7L);
+        when(crawlTargetDao.countByTargetStatusCode("BRICKLINK", "CLAIMED")).thenReturn(1L);
+        when(crawlTargetDao.countByTargetStatusCode("BRICKLINK", "DISABLED")).thenReturn(5L);
+        when(crawlTargetDao.countDue(eq("BRICKLINK"), any())).thenReturn(2L);
+        when(crawlTargetDao.countFailing("BRICKLINK")).thenReturn(4L);
 
         metricsService.recordCrawl(new BricklinkPricingCrawlResult(
-                "SUCCESS",
-                4,
-                3,
-                1,
-                1,
-                1,
-                1,
-                99,
-                1,
-                1,
-                1,
-                1,
-                2,
-                1,
+                "PARTIAL_SUCCESS",
+                3,   // targets created
+                1,   // re-enabled
+                2,   // disabled
+                4,   // claimed
+                3,   // snapshots
+                1,   // empty
+                99,  // lots
+                1,   // idItems resolved
+                1,   // failed fetches
                 250
         ));
 
-        assertThat(counter("bricklink_pricing_crawl_job", "outcome", "success")).isEqualTo(1.0d);
-        assertThat(timerCount("bricklink_pricing_crawl_job_duration", "outcome", "success")).isOne();
-        assertThat(counter("bricklink_pricing_crawl_listing", "result", "selected")).isEqualTo(4.0d);
-        assertThat(counter("bricklink_pricing_crawl_work_item", "result", "scheduled")).isEqualTo(3.0d);
-        assertThat(counter("bricklink_pricing_crawl_snapshot", "result", "zero_comparable_snapshot")).isEqualTo(1.0d);
-        assertThat(counter("bricklink_pricing_crawl_snapshot", "result", "snapshot_listing")).isEqualTo(99.0d);
-        assertThat(counter("bricklink_pricing_crawl_catalog_item", "result", "no_match")).isEqualTo(1.0d);
-        assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "pending")).isEqualTo(7.0d);
-        assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "due")).isEqualTo(2.0d);
-        assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "retryable")).isEqualTo(3.0d);
-        assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "failed")).isEqualTo(4.0d);
-        assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "skipped")).isEqualTo(5.0d);
-        verify(pricingCrawlWorkItemDao, never()).countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_FAILED_PRICING_HTTP_ERROR);
+        assertThat(counter("bricklink_pricing_crawl_job", "outcome", "partial_success")).isEqualTo(1.0d);
+        assertThat(timerCount("bricklink_pricing_crawl_job_duration", "outcome", "partial_success")).isOne();
+        assertThat(counter("bricklink_pricing_crawl_target", "result", "created")).isEqualTo(3.0d);
+        assertThat(counter("bricklink_pricing_crawl_target", "result", "reenabled")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_pricing_crawl_target", "result", "disabled")).isEqualTo(2.0d);
+        assertThat(counter("bricklink_pricing_crawl_target", "result", "claimed")).isEqualTo(4.0d);
+        assertThat(counter("bricklink_pricing_crawl_fetch", "result", "succeeded")).isEqualTo(3.0d);
+        assertThat(counter("bricklink_pricing_crawl_fetch", "result", "empty")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_pricing_crawl_fetch", "result", "failed")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_pricing_crawl_listing", "result", "written")).isEqualTo(99.0d);
+        assertThat(counter("bricklink_pricing_crawl_item", "result", "id_item_resolved")).isEqualTo(1.0d);
+        assertThat(gauge("bricklink_pricing_crawl_target_current", "state", "idle")).isEqualTo(7.0d);
+        assertThat(gauge("bricklink_pricing_crawl_target_current", "state", "claimed")).isEqualTo(1.0d);
+        assertThat(gauge("bricklink_pricing_crawl_target_current", "state", "disabled")).isEqualTo(5.0d);
+        assertThat(gauge("bricklink_pricing_crawl_target_current", "state", "due")).isEqualTo(2.0d);
+        assertThat(gauge("bricklink_pricing_crawl_target_current", "state", "failing")).isEqualTo(4.0d);
+    }
+
+    @Test
+    void recordsWantListCounters() {
+        metricsService.recordWantList(new BricklinkWantListSyncResult("sandbox", 12, 2, 1, 3, 40));
+
+        assertThat(counter("bricklink_pricing_want_list_item", "result", "confirmed")).isEqualTo(12.0d);
+        assertThat(counter("bricklink_pricing_want_list_item", "result", "canonical_item_added")).isEqualTo(2.0d);
+        assertThat(counter("bricklink_pricing_want_list_item", "result", "skipped")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_pricing_want_list_item", "result", "pruned")).isEqualTo(3.0d);
     }
 
     @Test

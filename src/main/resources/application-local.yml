@@ -31,14 +31,17 @@ lego:
           fixed-delay-ms: 60000
           initial-delay-ms: 5000
     pricing:
+      # local never crawls the real marketplace_pricing (HOMELAB-32): SANDBOX is the one crawler. To test
+      # crawler changes, set lego.marketplace-pricing.schema=marketplace_pricing_scratch and enable the
+      # crawl with a long scheduled.fixed-delay-ms, so it fetches a handful of items at most.
       crawl:
-        enabled: true
+        enabled: false
         priceable-listing-status-codes:
           - ACTIVE
           - DRAFT
         batch-size: 100
         scheduled:
-          enabled: true
+          enabled: false
       decision:
         enabled: true
         priceable-listing-status-codes:

@@ -46,6 +46,14 @@ lego:
           enabled: true
           apply: true
           fixed-delay-ms: 300000
+    pricing:
+      # DEV tells the shared crawler what it sells; it never crawls BrickLink itself (HOMELAB-32).
+      want-list:
+        enabled: true
+        scheduled:
+          enabled: true
+      crawl:
+        enabled: false
     marketplace-sync:
       enabled: true
       mode: APPLY

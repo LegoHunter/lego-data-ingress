@@ -1,7 +1,7 @@
 package io.legohunter.ingress.source.bricklink.pricing;
 
 import io.legohunter.data.dao.PricingApplyReadinessDao;
-import io.legohunter.data.dao.PricingCrawlWorkItemDao;
+import io.legohunter.data.dao.CrawlTargetDao;
 import io.legohunter.data.dao.PricingDecisionDao;
 import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
 import io.micrometer.core.instrument.Counter;
@@ -59,29 +59,36 @@ public class BricklinkPricingMetricsService {
     );
 
     private final MeterRegistry meterRegistry;
-    private final PricingCrawlWorkItemDao pricingCrawlWorkItemDao;
+    private final CrawlTargetDao crawlTargetDao;
     private final PricingDecisionDao pricingDecisionDao;
     private final PricingApplyReadinessDao pricingApplyReadinessDao;
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao;
-    private final BricklinkPricingCrawlProperties crawlProperties;
     private boolean gaugesRegistered;
 
+    /**
+     * Per-run crawl counters (HOMELAB-32). A ban or block shows as {@code bricklink_pricing_crawl_fetch{result="failed"}}
+     * rising while {@code succeeded} stays flat; {@code empty} counts fetches that found no lots for sale.
+     */
     public void recordCrawl(BricklinkPricingCrawlResult result) {
         registerGauges();
         recordJob("bricklink_pricing_crawl_job", "bricklink_pricing_crawl_job_duration", result.outcome(), result.elapsedMillis());
-        increment("bricklink_pricing_crawl_listing", "selected", result.listingsSelected());
-        increment("bricklink_pricing_crawl_listing", "skipped", result.skippedListings());
-        increment("bricklink_pricing_crawl_listing", "failed", result.failedListings());
-        increment("bricklink_pricing_crawl_work_item", "scheduled", result.workItemsScheduled());
-        increment("bricklink_pricing_crawl_work_item", "claimed", result.workItemsClaimed());
-        increment("bricklink_pricing_crawl_work_item", "stale_requeued", result.staleWorkItemsRequeued());
-        increment("bricklink_pricing_crawl_snapshot", "snapshot", result.snapshotsWritten());
-        increment("bricklink_pricing_crawl_snapshot", "zero_comparable_snapshot", result.zeroComparableSnapshotsWritten());
-        increment("bricklink_pricing_crawl_snapshot", "snapshot_listing", result.snapshotListingsWritten());
-        increment("bricklink_pricing_crawl_catalog_item", "hydrated", result.hydratedCatalogItems());
-        increment("bricklink_pricing_crawl_catalog_item", "no_match", result.catalogItemLookupNoMatches());
-        increment("bricklink_pricing_crawl_catalog_item", "ambiguous_match", result.catalogItemLookupAmbiguousMatches());
-        increment("bricklink_pricing_crawl_catalog_item", "failed_request", result.catalogItemLookupFailures());
+        increment("bricklink_pricing_crawl_target", "created", result.targetsCreated());
+        increment("bricklink_pricing_crawl_target", "reenabled", result.targetsReenabled());
+        increment("bricklink_pricing_crawl_target", "disabled", result.targetsDisabled());
+        increment("bricklink_pricing_crawl_target", "claimed", result.targetsClaimed());
+        increment("bricklink_pricing_crawl_fetch", "succeeded", result.snapshotsWritten());
+        increment("bricklink_pricing_crawl_fetch", "empty", result.emptySnapshots());
+        increment("bricklink_pricing_crawl_fetch", "failed", result.failedFetches());
+        increment("bricklink_pricing_crawl_listing", "written", result.listingsWritten());
+        increment("bricklink_pricing_crawl_item", "id_item_resolved", result.idItemsResolved());
+    }
+
+    /** Per-run want list counters for this environment (HOMELAB-32). */
+    public void recordWantList(BricklinkWantListSyncResult result) {
+        increment("bricklink_pricing_want_list_item", "confirmed", result.itemsConfirmed());
+        increment("bricklink_pricing_want_list_item", "canonical_item_added", result.canonicalItemsAdded());
+        increment("bricklink_pricing_want_list_item", "skipped", result.itemsSkipped());
+        increment("bricklink_pricing_want_list_item", "pruned", result.itemsPruned());
     }
 
     public void recordDecision(BricklinkPricingDecisionResult result) {
@@ -147,17 +154,12 @@ public class BricklinkPricingMetricsService {
         if (gaugesRegistered) {
             return;
         }
-        registerCrawlGauge("pending", () -> pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING));
-        registerCrawlGauge("due", () -> pricingCrawlWorkItemDao.countLatestDueByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING, now()));
-        registerCrawlGauge("retryable", () -> pricingCrawlWorkItemDao.countLatestRetryableByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING));
-        registerCrawlGauge("claimed", () -> pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_CLAIMED));
-        registerCrawlGauge("stale_claimed", () -> pricingCrawlWorkItemDao.countLatestStaleClaimed(
-                BricklinkPricingCrawlService.STATUS_CLAIMED,
-                now().minus(crawlProperties.effectiveClaimStaleAfter())
-        ));
-        registerCrawlGauge("succeeded", () -> pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SUCCEEDED));
-        registerCrawlGauge("failed", () -> pricingCrawlWorkItemDao.countLatestByWorkStatusPattern("FAILED%"));
-        registerCrawlGauge("skipped", () -> pricingCrawlWorkItemDao.countLatestByWorkStatusPattern("SKIPPED%"));
+        String marketplace = BricklinkPricingCrawlService.MARKETPLACE_CODE;
+        registerCrawlGauge("idle", () -> crawlTargetDao.countByTargetStatusCode(marketplace, "IDLE"));
+        registerCrawlGauge("claimed", () -> crawlTargetDao.countByTargetStatusCode(marketplace, "CLAIMED"));
+        registerCrawlGauge("disabled", () -> crawlTargetDao.countByTargetStatusCode(marketplace, "DISABLED"));
+        registerCrawlGauge("due", () -> crawlTargetDao.countDue(marketplace, now()));
+        registerCrawlGauge("failing", () -> crawlTargetDao.countFailing(marketplace));
 
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_PROPOSED, false);
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_FAILED, false);
@@ -175,8 +177,8 @@ public class BricklinkPricingMetricsService {
     }
 
     private void registerCrawlGauge(String state, CountSupplier supplier) {
-        Gauge.builder("bricklink_pricing_crawl_work_item_current", this, ignored -> supplier.count())
-                .description("Current BrickLink pricing crawl work item count by operational state.")
+        Gauge.builder("bricklink_pricing_crawl_target_current", this, ignored -> supplier.count())
+                .description("Current shared BrickLink crawl target count by state (marketplace_pricing.crawl_target).")
                 .tag(STATE_TAG, state)
                 .strongReference(true)
                 .register(meterRegistry);
