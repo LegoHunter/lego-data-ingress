@@ -35,8 +35,8 @@
 
     <scm>
         <url>${github.repo.url}</url>
-        <connection>scm:git:${github.repo.url</connection>
-        <developerConnection>scm:git:${github.repo.url</developerConnection>
+        <connection>scm:git:${github.repo.url}</connection>
+        <developerConnection>scm:git:${github.repo.url}</developerConnection>
     </scm>
 
     <repositories>
