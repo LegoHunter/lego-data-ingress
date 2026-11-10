@@ -96,6 +96,28 @@ class SpringProfileEnvironmentTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"sandbox", "dev", "prod"})
+    void repriceNeverRunsAlongsideTheJobsItReplaces(String env) {
+        // RepriceConfigurationValidator refuses startup otherwise (HOMELAB-65); catch it here, not in the pod.
+        Properties effective = podConfiguration(env);
+
+        if ("true".equals(String.valueOf(effective.get("lego.pricing.reprice.enabled")))) {
+            assertThat(String.valueOf(effective.get("lego.bricklink.pricing.decision.enabled"))).isEqualTo("false");
+            assertThat(String.valueOf(effective.get("lego.bricklink.pricing.apply-readiness.enabled"))).isEqualTo("false");
+            assertThat(String.valueOf(effective.get("lego.bricklink.pricing.apply.enabled"))).isEqualTo("false");
+        }
+    }
+
+    @Test
+    void sandboxRunsRepriceInDryRun() {
+        Properties effective = podConfiguration("sandbox");
+
+        assertThat(String.valueOf(effective.get("lego.pricing.reprice.enabled"))).isEqualTo("true");
+        assertThat(String.valueOf(effective.get("lego.pricing.reprice.scheduled.enabled"))).isEqualTo("true");
+        assertThat(effective.getProperty("lego.pricing.reprice.mode")).isEqualTo("DRY_RUN");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
     void podUsesItsOwnEnvironmentS3StoreAndFinalPhotoBucket(String env) {
         Properties effective = podConfiguration(env);
 
