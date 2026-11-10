@@ -197,7 +197,46 @@ class BricklinkMarketplaceSyncServiceTest {
         assertThat(retried.getLastErrorMessage()).contains("BrickLink returned 500");
         verify(marketplaceListingDao, never()).update(any());
         verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
+        // Attempts are left, so the decision stays ACCEPTED.
         verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+    }
+
+    @Test
+    void priceUpdateThatFailsOnItsLastAttemptMarksTheDecisionSyncFailed() {
+        applyPriceUpdateAsSandbox();
+        MarketplaceListingSyncRequest lastAttempt = claimedRequest();
+        lastAttempt.setAttemptCount(3);
+        when(marketplaceListingSyncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(lastAttempt));
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class)))
+                .thenThrow(new IllegalStateException("BrickLink returned 500"));
+        when(pricingDecisionDao.transitionStatus(500L, "ACCEPTED", "SYNC_FAILED", null))
+                .thenReturn(Optional.of(PricingDecision.builder().pricingDecisionId(500L).decisionStatusCode("SYNC_FAILED").build()));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.failed()).isOne();
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("FAILED");
+        // The request is saved FAILED first, then the decision moves on.
+        InOrder order = inOrder(marketplaceListingSyncRequestDao, pricingDecisionDao);
+        order.verify(marketplaceListingSyncRequestDao, org.mockito.Mockito.atLeastOnce()).update(any(MarketplaceListingSyncRequest.class));
+        order.verify(pricingDecisionDao).transitionStatus(500L, "ACCEPTED", "SYNC_FAILED", null);
+        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), eq("APPLIED"), any());
+        verify(marketplaceListingDao, never()).update(any());
+    }
+
+    @Test
+    void aBlockedRequestStillEndsBlockedWhenTheDecisionIsNoLongerAccepted() {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes only"));
+        // transitionStatus answers Optional.empty(): the decision was not ACCEPTED any more.
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isOne();
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        verify(pricingDecisionDao).transitionStatus(500L, "ACCEPTED", "SYNC_FAILED", null);
     }
 
     @Test
@@ -211,7 +250,7 @@ class BricklinkMarketplaceSyncServiceTest {
         verify(bricklinkRestClient, never()).updateInventory(any(), any());
         assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("BLOCKED");
         verify(marketplaceListingDao, never()).update(any());
-        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+        assertDecisionMarkedSyncFailedOnly(500L);
     }
 
     @Test
@@ -283,6 +322,27 @@ class BricklinkMarketplaceSyncServiceTest {
         verify(marketplaceListingDao).update(any(MarketplaceListing.class));
     }
 
+    @Test
+    void aBlockedRequestWithoutAPricingDecisionDoesNotTouchDecisions() {
+        applyPriceUpdateAsSandbox();
+        MarketplaceListingSyncRequest manual = request();
+        manual.setPricingDecisionId(null);
+        arrangeRequestAndContext(remoteInventory("Human notes only"));
+        when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
+                eq("PENDING"), eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")), any(ZonedDateTime.class), eq(5)))
+                .thenReturn(Set.of(manual));
+        MarketplaceListingSyncRequest claimedManual = claimedRequest();
+        claimedManual.setPricingDecisionId(null);
+        when(marketplaceListingSyncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(claimedManual));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isOne();
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+    }
+
     private void applyPriceUpdateAsSandbox() {
         properties.setMode("APPLY");
         properties.setEnvironmentCode("sandbox");
@@ -331,7 +391,13 @@ class BricklinkMarketplaceSyncServiceTest {
         assertThat(lastBricklinkListingUpdate().getEnvironmentCode()).isNull();
         verify(marketplaceListingDao, never()).update(any());
         verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
-        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+        assertDecisionMarkedSyncFailedOnly(500L);
+    }
+
+    /** The decision went ACCEPTED to SYNC_FAILED, and was never marked APPLIED. */
+    private void assertDecisionMarkedSyncFailedOnly(long pricingDecisionId) {
+        verify(pricingDecisionDao).transitionStatus(pricingDecisionId, "ACCEPTED", "SYNC_FAILED", null);
+        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), eq("APPLIED"), any());
     }
 
     private MarketplaceListingSyncRequest lastRequestUpdate() {
@@ -793,6 +859,10 @@ class BricklinkMarketplaceSyncServiceTest {
         verify(marketplaceListingSyncRequestDao).update(stale);
         verify(marketplaceListingSyncRequestDao).update(exhausted);
         verify(marketplaceListingSyncRequestDao, never()).update(recent);
+        // Only the exhausted request (PRICE_UPDATE, decision 500) moves its decision; the released
+        // LISTING_CREATE (decision 501) goes back to PENDING and keeps its decision ACCEPTED.
+        verify(pricingDecisionDao).transitionStatus(500L, "ACCEPTED", "SYNC_FAILED", null);
+        verify(pricingDecisionDao, never()).transitionStatus(eq(501L), any(), any(), any());
     }
 
     @Test

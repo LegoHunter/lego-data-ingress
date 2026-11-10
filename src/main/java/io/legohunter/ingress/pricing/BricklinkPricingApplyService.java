@@ -41,6 +41,8 @@ public class BricklinkPricingApplyService {
     static final String STATUS_PROPOSED = BricklinkPricingDecisionService.STATUS_PROPOSED;
     public static final String STATUS_ACCEPTED = "ACCEPTED";
     public static final String STATUS_APPLIED = "APPLIED";
+    /** ACCEPTED, but its sync request ended BLOCKED or FAILED, so BrickLink never got the price. */
+    public static final String STATUS_SYNC_FAILED = "SYNC_FAILED";
     private static final Set<String> OPEN_SYNC_STATUSES = Set.of("PENDING", "CLAIMED");
     private static final String JOB_NAME = "BricklinkPricingApplyJob";
 
