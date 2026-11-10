@@ -140,6 +140,22 @@ public class BricklinkPricingMetricsService {
         increment("bricklink_pricing_apply_decision", "failed", result.failedRows());
     }
 
+    public void recordReprice(RepriceResult result) {
+        registerGauges();
+        recordJob("pricing_reprice_job", "pricing_reprice_job_duration", result.outcome(), result.elapsedMillis());
+        increment("pricing_reprice_listing", "selected", result.listingsSelected());
+        increment("pricing_reprice_listing", "waiting_for_sync", result.waitingForSync());
+        increment("pricing_reprice_listing", "error", result.errors());
+        increment("pricing_reprice_decision", "proposed", result.proposed());
+        increment("pricing_reprice_decision", "blocked", result.blocked());
+        increment("pricing_reprice_decision", "skipped", result.skipped());
+        increment("pricing_reprice_decision", "failed", result.failed());
+        increment("pricing_reprice_decision", "accepted", result.accepted());
+        increment("pricing_reprice_decision", "applied_locally", result.appliedLocally());
+        increment("pricing_reprice_sync", "handed_off", result.handedOff());
+        increment("pricing_reprice_sync", "confirmed", result.syncConfirmed());
+    }
+
     public void recordMarketplaceSync(BricklinkMarketplaceSyncResult result) {
         registerGauges();
         recordJob("bricklink_marketplace_sync_job", "bricklink_marketplace_sync_job_duration", result.outcome(), result.elapsedMillis());
@@ -169,6 +185,7 @@ public class BricklinkPricingMetricsService {
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_PROPOSED, true);
         registerDecisionGauge(BricklinkPricingApplyService.STATUS_ACCEPTED, false);
         registerDecisionGauge(BricklinkPricingApplyService.STATUS_SYNC_FAILED, false);
+        registerDecisionGauge(RepriceService.STATUS_BLOCKED, false);
         APPLY_READINESS_STATUS_CODES.forEach(this::registerApplyReadinessGauge);
         APPLY_READINESS_BLOCK_REASON_CODES.forEach(this::registerApplyReadinessBlockReasonGauge);
         registerMarketplaceSyncGauge("pending", BricklinkMarketplaceSyncService.STATUS_PENDING);

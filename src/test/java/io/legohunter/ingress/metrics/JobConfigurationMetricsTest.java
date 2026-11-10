@@ -45,6 +45,10 @@ class JobConfigurationMetricsTest {
         marketplaceSyncProperties.setEnabled(true);
         marketplaceSyncProperties.setMode("DRY_RUN");
         marketplaceSyncProperties.getScheduled().setEnabled(true);
+        io.legohunter.ingress.pricing.RepriceProperties repriceProperties = new io.legohunter.ingress.pricing.RepriceProperties();
+        repriceProperties.setEnabled(true);
+        repriceProperties.setMode("APPLY");
+        repriceProperties.getScheduled().setEnabled(true);
 
         new JobConfigurationMetrics(
                 meterRegistry,
@@ -55,7 +59,8 @@ class JobConfigurationMetricsTest {
                 decisionProperties,
                 applyReadinessProperties,
                 applyProperties,
-                marketplaceSyncProperties
+                marketplaceSyncProperties,
+                repriceProperties
         );
 
         assertThat(meterRegistry.get(METRIC_NAME)
@@ -112,6 +117,13 @@ class JobConfigurationMetricsTest {
                 .tag("display_name", "BrickLink Marketplace Sync")
                 .tag("enabled", "true")
                 .tag("apply", "false")
+                .gauge()
+                .value()).isEqualTo(1.0d);
+        assertThat(meterRegistry.get(METRIC_NAME)
+                .tag("scheduled_job", "pricing_reprice")
+                .tag("display_name", "Pricing Reprice")
+                .tag("enabled", "true")
+                .tag("apply", "true")
                 .gauge()
                 .value()).isEqualTo(1.0d);
     }

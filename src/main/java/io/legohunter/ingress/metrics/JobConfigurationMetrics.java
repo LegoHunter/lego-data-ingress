@@ -10,6 +10,8 @@ import io.legohunter.ingress.pricing.BricklinkPricingApplyProperties;
 import io.legohunter.ingress.pricing.BricklinkPricingApplyReadinessProperties;
 import io.legohunter.ingress.pricing.BricklinkPricingCrawlProperties;
 import io.legohunter.ingress.pricing.BricklinkPricingDecisionProperties;
+import io.legohunter.ingress.pricing.RepriceMode;
+import io.legohunter.ingress.pricing.RepriceProperties;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
@@ -27,7 +29,8 @@ public class JobConfigurationMetrics {
             BricklinkPricingDecisionProperties bricklinkPricingDecisionProperties,
             BricklinkPricingApplyReadinessProperties bricklinkPricingApplyReadinessProperties,
             BricklinkPricingApplyProperties bricklinkPricingApplyProperties,
-            BricklinkMarketplaceSyncProperties bricklinkMarketplaceSyncProperties
+            BricklinkMarketplaceSyncProperties bricklinkMarketplaceSyncProperties,
+            RepriceProperties repriceProperties
     ) {
         register(
                 meterRegistry,
@@ -77,6 +80,13 @@ public class JobConfigurationMetrics {
                 "BrickLink Pricing Apply",
                 bricklinkPricingApplyProperties.isEnabled() && bricklinkPricingApplyProperties.getScheduled().isEnabled(),
                 bricklinkPricingApplyProperties.effectiveMode() != BricklinkPricingApplyMode.DRY_RUN
+        );
+        register(
+                meterRegistry,
+                "pricing_reprice",
+                "Pricing Reprice",
+                repriceProperties.isEnabled() && repriceProperties.getScheduled().isEnabled(),
+                repriceProperties.effectiveMode() != RepriceMode.DRY_RUN
         );
         register(
                 meterRegistry,
