@@ -167,6 +167,8 @@ public class BricklinkPricingMetricsService {
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_FAILED, false);
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_SKIPPED, false);
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_PROPOSED, true);
+        registerDecisionGauge(BricklinkPricingApplyService.STATUS_ACCEPTED, false);
+        registerDecisionGauge(BricklinkPricingApplyService.STATUS_SYNC_FAILED, false);
         APPLY_READINESS_STATUS_CODES.forEach(this::registerApplyReadinessGauge);
         APPLY_READINESS_BLOCK_REASON_CODES.forEach(this::registerApplyReadinessBlockReasonGauge);
         registerMarketplaceSyncGauge("pending", BricklinkMarketplaceSyncService.STATUS_PENDING);

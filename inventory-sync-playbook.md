@@ -830,7 +830,7 @@ The sync type depends on local listing state:
 
 A listing with a `PENDING` or `CLAIMED` sync request is skipped until that request finishes, and apply never overwrites an existing sync request for the same decision. Each row's writes run in one transaction.
 
-Decision status: `PROPOSED` → `ACCEPTED` (apply queued the sync) → `APPLIED` (BrickLink confirmed the price, `applied_at` set). A blocked or failed sync leaves the decision `ACCEPTED` and the local price unchanged; the next crawl produces a new decision measured from the price BrickLink actually holds.
+Decision status: `PROPOSED` → `ACCEPTED` (apply queued the sync) → `APPLIED` (BrickLink confirmed the price, `applied_at` set), or `ACCEPTED` → `SYNC_FAILED` when the sync request ends `BLOCKED`, or `FAILED` with no attempts left. A retryable failure leaves the decision `ACCEPTED`. Either way the local price is unchanged, and the next crawl produces a new decision measured from the price BrickLink actually holds.
 
 This is the bridge that lets an unpriced local draft enter the Pricing Plane. The draft can be created without `unitPrice`; once the initial decision is ready and apply runs, the price is written locally and the create request is queued. Manual sync-request creation remains blocked while the draft reports `INITIAL_PRICE_PENDING`.
 

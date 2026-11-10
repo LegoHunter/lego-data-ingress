@@ -287,6 +287,38 @@ public class BricklinkMarketplaceSyncService {
         }
     }
 
+    /**
+     * ACCEPTED to SYNC_FAILED when the decision's sync request ends BLOCKED, or FAILED with no attempts
+     * left: BrickLink never got the price, so the decision must not stay ACCEPTED. A retryable failure
+     * leaves it ACCEPTED. Requests without a decision (lego-data-service LISTING_CREATE and
+     * LISTING_DELETE) are left alone, and so is a decision that is no longer ACCEPTED.
+     */
+    private void markDecisionSyncFailed(MarketplaceListingSyncRequest request) {
+        if (request.getPricingDecisionId() == null) {
+            return;
+        }
+        if (pricingDecisionDao.transitionStatus(
+                request.getPricingDecisionId(),
+                BricklinkPricingApplyService.STATUS_ACCEPTED,
+                BricklinkPricingApplyService.STATUS_SYNC_FAILED,
+                null
+        ).isEmpty()) {
+            log.warn(
+                    "bricklink.marketplace_sync.decision_not_accepted marketplaceListingSyncRequestId={} pricingDecisionId={} syncRequestStatus={} message=pricing decision was not ACCEPTED, so it was not marked SYNC_FAILED",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getPricingDecisionId(),
+                    request.getSyncRequestStatusCode()
+            );
+        } else {
+            log.info(
+                    "bricklink.marketplace_sync.decision_sync_failed marketplaceListingSyncRequestId={} pricingDecisionId={} syncRequestStatus={} message=sync request ended without updating BrickLink, pricing decision marked SYNC_FAILED",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getPricingDecisionId(),
+                    request.getSyncRequestStatusCode()
+            );
+        }
+    }
+
     private BigDecimal money(BigDecimal value) {
         return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
     }
@@ -765,7 +797,8 @@ public class BricklinkMarketplaceSyncService {
             ZonedDateTime claimedAt = request.getClaimedAt();
             request.setClaimedAt(null);
             request.setLastErrorMessage(shortMessage("Released a stale claim from " + claimedAt + ": the worker stopped before finishing"));
-            if (request.getAttemptCount() != null && request.getMaxAttempts() != null && request.getAttemptCount() >= request.getMaxAttempts()) {
+            boolean exhausted = request.getAttemptCount() != null && request.getMaxAttempts() != null && request.getAttemptCount() >= request.getMaxAttempts();
+            if (exhausted) {
                 request.setSyncRequestStatusCode(STATUS_FAILED);
                 request.setCompletedAt(now());
             } else {
@@ -783,6 +816,9 @@ public class BricklinkMarketplaceSyncService {
                     request.getSyncRequestStatusCode(),
                     request.getRemoteInventoryId()
             );
+            if (exhausted) {
+                markDecisionSyncFailed(request);
+            }
         }
         return released;
     }
@@ -933,12 +969,14 @@ public class BricklinkMarketplaceSyncService {
         request.setClaimedAt(null);
         request.setCompletedAt(now());
         marketplaceListingSyncRequestDao.update(request);
+        markDecisionSyncFailed(request);
     }
 
     private void markRetryOrFailed(MarketplaceListingSyncRequest request, String message) {
         request.setClaimedAt(null);
         request.setLastErrorMessage(shortMessage(message));
-        if (request.getAttemptCount() != null && request.getMaxAttempts() != null && request.getAttemptCount() >= request.getMaxAttempts()) {
+        boolean exhausted = request.getAttemptCount() != null && request.getMaxAttempts() != null && request.getAttemptCount() >= request.getMaxAttempts();
+        if (exhausted) {
             request.setSyncRequestStatusCode(STATUS_FAILED);
             request.setCompletedAt(now());
         } else {
@@ -946,6 +984,9 @@ public class BricklinkMarketplaceSyncService {
             request.setNextAttemptAt(now().plus(properties.effectiveRetryBackoff()));
         }
         marketplaceListingSyncRequestDao.update(request);
+        if (exhausted) {
+            markDecisionSyncFailed(request);
+        }
     }
 
     private String shortMessage(String message) {
