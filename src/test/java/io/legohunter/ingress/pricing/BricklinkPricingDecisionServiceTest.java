@@ -72,13 +72,16 @@ class BricklinkPricingDecisionServiceTest {
         service = new BricklinkPricingDecisionService(
                 properties,
                 marketplaceListingDao,
-                itemInventoryDao,
-                conditionDao,
-                canonicalItemDao,
-                marketSnapshotDao,
-                marketListingDao,
-                pricingDecisionDao,
-                new ObjectMapper()
+                new BricklinkPricingDecider(
+                        properties,
+                        itemInventoryDao,
+                        conditionDao,
+                        canonicalItemDao,
+                        marketSnapshotDao,
+                        marketListingDao,
+                        new ObjectMapper()
+                ),
+                pricingDecisionDao
         );
     }
 

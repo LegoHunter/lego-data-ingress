@@ -14,6 +14,7 @@ import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.MarketplaceListingSyncRequest;
 import io.legohunter.data.enums.LegoEnvironment;
+import io.legohunter.ingress.marketplace.MarketplaceSyncPort;
 import io.legohunter.ingress.pricing.BricklinkPricingApplyService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,7 +36,7 @@ import java.util.Set;
 @RequiredArgsConstructor
 @Slf4j
 @ConditionalOnProperty(prefix = "lego.bricklink.marketplace-sync", name = "enabled", havingValue = "true")
-public class BricklinkMarketplaceSyncService {
+public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_CLAIMED = "CLAIMED";
     public static final String STATUS_SUCCEEDED = "SUCCEEDED";
@@ -81,8 +82,8 @@ public class BricklinkMarketplaceSyncService {
         Counters counters = new Counters(requests.size());
         for (MarketplaceListingSyncRequest request : requests) {
             MarketplaceListingSyncRequest effectiveRequest = request;
+            String syncRequestType = normalize(request.getSyncRequestTypeCode());
             try {
-                String syncRequestType = normalize(request.getSyncRequestTypeCode());
                 if (!SUPPORTED_TYPES.contains(syncRequestType)) {
                     counters.blocked++;
                     markBlocked(request, "UNSUPPORTED_SYNC_TYPE", "Unsupported sync request type: " + request.getSyncRequestTypeCode());
@@ -100,30 +101,79 @@ public class BricklinkMarketplaceSyncService {
                     }
                     counters.requestsClaimed++;
                 }
-
-                if (TYPE_LISTING_CREATE.equals(syncRequestType)) {
-                    processListingCreate(effectiveRequest, mode, counters);
-                } else if (TYPE_LISTING_DELETE.equals(syncRequestType)) {
-                    processListingDelete(effectiveRequest, mode, counters);
-                } else {
-                    processPriceUpdate(effectiveRequest, mode, counters);
-                }
             } catch (RuntimeException e) {
-                counters.failed++;
-                if (mode == BricklinkMarketplaceSyncMode.APPLY) {
-                    markRetryOrFailed(effectiveRequest, e.getMessage());
-                }
-                log.warn(
-                        "bricklink.marketplace_sync.failed marketplaceListingSyncRequestId={} marketplaceListingId={} message={}",
-                        request.getMarketplaceListingSyncRequestId(),
-                        request.getMarketplaceListingId(),
-                        e.getMessage(),
-                        e
-                );
+                recordFailure(effectiveRequest, mode, counters, e);
+                continue;
             }
+            process(effectiveRequest, syncRequestType, mode, counters);
         }
 
         return counters.result(mode, elapsedMillis(start));
+    }
+
+    @Override
+    public boolean handles(Integer listingExternalServiceId) {
+        return Objects.equals(properties.getBricklinkExternalServiceId(), listingExternalServiceId);
+    }
+
+    /**
+     * The Reprice hand-off (HOMELAB-65): claims one PENDING request by id and processes it now, through the
+     * same code path as the scheduled run. Only in APPLY mode; in DRY_RUN the request waits for the job.
+     * The claim is the same conditional PENDING to CLAIMED update the job uses, so a request is never
+     * processed twice, and a stale-claim release cannot hit it while it is being processed (it takes
+     * seconds, the stale-claim timeout is hours).
+     */
+    @Override
+    public HandOff processNow(Long marketplaceListingSyncRequestId) {
+        BricklinkMarketplaceSyncMode mode = properties.effectiveMode();
+        if (mode != BricklinkMarketplaceSyncMode.APPLY) {
+            return HandOff.notSent(HandOff.SYNC_NOT_APPLY);
+        }
+        MarketplaceListingSyncRequest request = marketplaceListingSyncRequestDao
+                .findByMarketplaceListingSyncRequestId(marketplaceListingSyncRequestId)
+                .orElse(null);
+        String syncRequestType = request == null ? "" : normalize(request.getSyncRequestTypeCode());
+        if (request == null || !STATUS_PENDING.equals(normalize(request.getSyncRequestStatusCode()))
+                || !SUPPORTED_TYPES.contains(syncRequestType)) {
+            return HandOff.notSent(HandOff.NOT_PENDING);
+        }
+        MarketplaceListingSyncRequest claimed = marketplaceListingSyncRequestDao
+                .claim(marketplaceListingSyncRequestId, STATUS_PENDING, STATUS_CLAIMED, now())
+                .orElse(null);
+        if (claimed == null) {
+            return HandOff.notSent(HandOff.CLAIMED_ELSEWHERE);
+        }
+        process(claimed, syncRequestType, mode, new Counters(1));
+        return new HandOff(true, claimed.getSyncRequestStatusCode());
+    }
+
+    /** One claimed (or, in DRY_RUN, unclaimed) request; a failure is recorded on it, never thrown. */
+    private void process(MarketplaceListingSyncRequest request, String syncRequestType, BricklinkMarketplaceSyncMode mode, Counters counters) {
+        try {
+            if (TYPE_LISTING_CREATE.equals(syncRequestType)) {
+                processListingCreate(request, mode, counters);
+            } else if (TYPE_LISTING_DELETE.equals(syncRequestType)) {
+                processListingDelete(request, mode, counters);
+            } else {
+                processPriceUpdate(request, mode, counters);
+            }
+        } catch (RuntimeException e) {
+            recordFailure(request, mode, counters, e);
+        }
+    }
+
+    private void recordFailure(MarketplaceListingSyncRequest request, BricklinkMarketplaceSyncMode mode, Counters counters, RuntimeException e) {
+        counters.failed++;
+        if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+            markRetryOrFailed(request, e.getMessage());
+        }
+        log.warn(
+                "bricklink.marketplace_sync.failed marketplaceListingSyncRequestId={} marketplaceListingId={} message={}",
+                request.getMarketplaceListingSyncRequestId(),
+                request.getMarketplaceListingId(),
+                e.getMessage(),
+                e
+        );
     }
 
     private void processPriceUpdate(

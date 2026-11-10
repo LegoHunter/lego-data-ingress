@@ -475,7 +475,130 @@ Important review rule:
 
 `pricing_decision` is historical. Do not judge current pricing health by all rows mixed together. Review the latest decision per `marketplace_listing_id`. A listing can have an older `NO_CURRENT_SNAPSHOT` row and a newer `PROPOSED` row; the newer row is the current review state.
 
+### `RepriceJob`: decide, guard and send in one pass
+
+Class: `io.legohunter.ingress.pricing.RepriceJob` (service `RepriceService`, guard `RepriceGuard`). Introduced
+in HOMELAB-65 (design: HOMELAB-23). **Replaces the decision, apply-readiness and apply jobs** below; they are
+removed in HOMELAB-66, once Reprice has run in SANDBOX and DEV.
+
+For each candidate listing (the same selection as `BricklinkPricingDecisionJob`: priceable listings whose
+newest shared snapshot has no decision yet, plus fixed-price listings once), in one transaction:
+
+1. **Decide:** the same formula as the decision job (`BricklinkPricingDecider`, settings in
+   `lego.bricklink.pricing.decision.*`).
+2. **Guard:** `RepriceGuard`, a pure function of the listing, the decision and the guard settings
+   (`lego.bricklink.pricing.apply-readiness.*`). The rules are the readiness rules, without the
+   stale-decision check, which Reprice does not need.
+3. **Record:** insert `pricing_decision` with `guard_status_code` (`PASSED`/`BLOCKED`) and
+   `guard_reason_code`.
+4. **Accept (mode `APPLY`):** decision `ACCEPTED` and a `PENDING` sync request: `PRICE_UPDATE` for a listing
+   with a BrickLink lot, `LISTING_CREATE` for a draft without one (the draft gets its local price in the
+   same transaction).
+
+After the commit, each new request goes straight to marketplace sync (`MarketplaceSyncPort.processNow`):
+same claim, same safety checks, same read-back as `BricklinkMarketplaceSyncJob`. At most
+`immediate-sync-limit` requests per run go out this way; the rest, and any that fail with attempts left,
+stay `PENDING` for the sync job. Nothing is handed off while `lego.bricklink.marketplace-sync.mode` is not
+`APPLY`; that switch still guards every BrickLink write.
+
+A listing with a `PENDING` or `CLAIMED` sync request gets **no** decision in modes `APPLY` and
+`APPLY_LOCAL_ONLY`. It stays a candidate, and is decided again once that change has finished, measured from
+the price BrickLink then holds.
+
+| Mode (`lego.pricing.reprice.mode`) | Guard passed | Writes |
+| --- | --- | --- |
+| `DRY_RUN` | decision `PROPOSED` | the decision only |
+| `APPLY_LOCAL_ONLY` | decision `APPLIED` with `applied_at` | the decision and `marketplace_listing.unit_price`; no sync request |
+| `APPLY` | decision `ACCEPTED` | the decision, the sync request (and a draft's first price); then the hand-off |
+
+Decision statuses written by Reprice:
+
+| Status | Meaning |
+| --- | --- |
+| `PROPOSED` | Guard passed, not sent (`DRY_RUN`). |
+| `BLOCKED` | Guard said no; `guard_reason_code` says why. |
+| `SKIPPED` / `FAILED` | Fixed price / no price could be decided (no guard outcome). |
+| `ACCEPTED` | Sync request queued. |
+| `APPLIED` | BrickLink confirmed the price (or `APPLY_LOCAL_ONLY`). |
+| `SYNC_FAILED` | The sync request ended `BLOCKED`, or `FAILED` with no attempts left (HOMELAB-64). |
+
+Guard reason codes (`guard_reason_code`): `FIXED_PRICE`, `MISSING_FINAL_PRICE`, `MISSING_CURRENT_PRICE`,
+`CURRENCY_MISMATCH`, `BLOCKED_REASON_CODE`, `INELIGIBLE_REASON`, `PRICE_UNCHANGED`, `BELOW_MINIMUM_DELTA`,
+`BELOW_MINIMUM_DELTA_PERCENT`, `BELOW_MINIMUM_CONFIDENCE`, `BELOW_MINIMUM_COMPARABLE_COUNT`,
+`ABOVE_MAXIMUM_ABSOLUTE_DELTA`, `ABOVE_MAXIMUM_PERCENT_DELTA`, `NO_REMOTE_LISTING` (a non-draft listing with
+no BrickLink lot), `DRAFT_HAS_REMOTE_LISTING` (an unpriced draft that already has a lot). A draft's first
+price (`DRAFT`, no price, no lot) is checked against confidence and comparable count only.
+
+Config (`lego.pricing.reprice.*`):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Creates the service. **The application refuses to start** if `lego.bricklink.pricing.decision.enabled`, `apply-readiness.enabled` or `apply.enabled` is also `true`. |
+| `mode` | `DRY_RUN` | `DRY_RUN`, `APPLY_LOCAL_ONLY` or `APPLY`. |
+| `batch-size` | `25` | Candidate listings per run. |
+| `immediate-sync-limit` | `5` | Sync requests handed off per run. `0` leaves them all to the sync job. |
+| `sync-request-max-attempts` | `3` | `max_attempts` on new sync requests. |
+| `scheduled.enabled` | `false` | Runs the job every `scheduled.fixed-delay-ms` (default 5 min), under ShedLock lock `RepriceJob`. |
+
+Turning it on in an environment (a profile change, then a deploy):
+
+```yaml
+lego:
+  pricing:
+    reprice:
+      enabled: true
+      mode: DRY_RUN          # then APPLY once the DRY_RUN decisions look right
+      scheduled:
+        enabled: true
+  bricklink:
+    pricing:
+      decision:
+        enabled: false       # formula settings below still apply to Reprice
+      apply-readiness:
+        enabled: false       # guard settings below still apply to Reprice
+      apply:
+        enabled: false
+```
+
+Logs: `pricing.reprice.decided` (one per decision: status, guard outcome, prices, sync request),
+`pricing.reprice.waiting_for_sync`, `pricing.reprice.handed_off` (`sent`, `requestStatus`),
+`pricing.reprice.hand_off_deferred`, `pricing.reprice.hand_off_failed`, `pricing.reprice.failed`,
+`pricing.reprice.job.completed`.
+
+Metrics: `pricing_reprice_job_total{outcome}` and `pricing_reprice_job_duration`;
+`pricing_reprice_listing_total{result=selected|waiting_for_sync|error}`;
+`pricing_reprice_decision_total{result=proposed|blocked|skipped|failed|accepted|applied_locally}`;
+`pricing_reprice_sync_total{result=handed_off|confirmed}`; `bricklink_pricing_decision_current{status="blocked"}`;
+`lego_data_ingress_scheduled_job_config_info{scheduled_job="pricing_reprice"}`.
+
+Latest decision per listing, with its guard outcome and sync status:
+
+```sql
+SELECT pd.marketplace_listing_id,
+       pd.pricing_decision_id,
+       pd.created_at,
+       pd.decision_status_code,
+       pd.reason_code,
+       pd.guard_status_code,
+       pd.guard_reason_code,
+       pd.previous_price,
+       pd.final_price,
+       sr.sync_request_type_code,
+       sr.sync_request_status_code,
+       sr.last_error_message
+FROM pricing_decision pd
+JOIN (SELECT marketplace_listing_id, MAX(pricing_decision_id) AS pricing_decision_id
+      FROM pricing_decision
+      GROUP BY marketplace_listing_id) latest
+  ON latest.pricing_decision_id = pd.pricing_decision_id
+LEFT JOIN marketplace_listing_sync_request sr
+  ON sr.pricing_decision_id = pd.pricing_decision_id
+ORDER BY pd.marketplace_listing_id;
+```
+
 ### `BricklinkPricingDecisionJob`
+
+> Superseded by `RepriceJob` (above) wherever `lego.pricing.reprice.enabled=true`; removed in HOMELAB-66.
 
 Class: `io.legohunter.ingress.pricing.BricklinkPricingDecisionJob`
 
@@ -663,6 +786,8 @@ Important logs:
 
 ### `BricklinkPricingApplyReadinessJob`
 
+> Superseded by `RepriceJob` (above) wherever `lego.pricing.reprice.enabled=true`; removed in HOMELAB-66.
+
 Class: `io.legohunter.ingress.pricing.BricklinkPricingApplyReadinessJob`
 
 Condition:
@@ -809,6 +934,8 @@ The requested `limit` is bounded to the range `1..500`.
 `apply-preview` returns a `summary` block with returned row count, ready count, blocked count, readiness-status counts, and block-reason counts. Row details remain in `readinessReviews` and include current price, proposed price, absolute delta, percent delta, minimum required delta, confidence, comparable count, decision reason, algorithm version, and snapshot timing.
 
 ### `BricklinkPricingApplyJob`
+
+> Superseded by `RepriceJob` (above) wherever `lego.pricing.reprice.enabled=true`; removed in HOMELAB-66.
 
 Class: `io.legohunter.ingress.pricing.BricklinkPricingApplyJob`
 

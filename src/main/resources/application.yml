@@ -18,6 +18,24 @@ lego:
   # The shared marketplace_pricing schema on the same MySQL server (HOMELAB-31/32).
   marketplace-pricing:
     schema: marketplace_pricing
+  pricing:
+    # The Reprice job (HOMELAB-65): decide + guard + accept in one pass per listing, then hand the sync
+    # request straight to marketplace sync. Replaces the decision, apply-readiness and apply jobs below;
+    # the application refuses to start with Reprice and any of them enabled together. Until HOMELAB-66
+    # the formula settings stay in lego.bricklink.pricing.decision and the guard settings in
+    # lego.bricklink.pricing.apply-readiness (Reprice reads them even while those jobs are off).
+    reprice:
+      enabled: false
+      mode: DRY_RUN                   # DRY_RUN | APPLY_LOCAL_ONLY | APPLY
+      batch-size: 25
+      immediate-sync-limit: 5         # requests sent straight away per run; the rest wait for the sync job
+      sync-request-max-attempts: 3
+      scheduled:
+        enabled: false
+        fixed-delay-ms: 300000
+        initial-delay-ms: 60000
+        lock-at-most-for: 10m
+        lock-at-least-for: 0s
   bricklink:
     pricing:
       # What this environment is pricing, kept in marketplace_pricing.want_list_item (HOMELAB-32). Every

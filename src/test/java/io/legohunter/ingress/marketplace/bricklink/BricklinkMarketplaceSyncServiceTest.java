@@ -343,6 +343,81 @@ class BricklinkMarketplaceSyncServiceTest {
         verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
     }
 
+    @Test
+    void handOffSendsAPendingPriceUpdateThroughTheSameCodePathAsTheJob() {
+        applyPriceUpdateAsSandbox();
+        Inventory before = remoteInventory("Human notes " + systemBlock());
+        before.setUnit_price(225.00);
+        arrangeRequestAndContext(before);
+        arrangeReadBack(before, after -> { });
+        when(marketplaceListingSyncRequestDao.findByMarketplaceListingSyncRequestId(900L)).thenReturn(Optional.of(request()));
+        when(pricingDecisionDao.transitionStatus(eq(500L), eq("ACCEPTED"), eq("APPLIED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(PricingDecision.builder().pricingDecisionId(500L).decisionStatusCode("APPLIED").build()));
+
+        io.legohunter.ingress.marketplace.MarketplaceSyncPort.HandOff handOff = service.processNow(900L);
+
+        assertThat(handOff.sent()).isTrue();
+        assertThat(handOff.requestStatus()).isEqualTo("SUCCEEDED");
+        verify(marketplaceListingSyncRequestDao).claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class));
+        verify(bricklinkRestClient).updateInventory(eq(12345L), any(Inventory.class));
+        verify(pricingDecisionDao).transitionStatus(eq(500L), eq("ACCEPTED"), eq("APPLIED"), any(ZonedDateTime.class));
+        // The hand-off is not a job run: it releases no stale claims and selects nothing else.
+        verify(marketplaceListingSyncRequestDao, never()).findBySyncRequestStatusCode(any());
+        verify(marketplaceListingSyncRequestDao, never()).findClaimableByStatusCodeAndSyncRequestTypeCodes(any(), any(), any(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    void handOffRecordsAFailureOnTheRequestInsteadOfThrowing() {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        when(marketplaceListingSyncRequestDao.findByMarketplaceListingSyncRequestId(900L)).thenReturn(Optional.of(request()));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class)))
+                .thenThrow(new IllegalStateException("BrickLink returned 500"));
+
+        io.legohunter.ingress.marketplace.MarketplaceSyncPort.HandOff handOff = service.processNow(900L);
+
+        assertThat(handOff.sent()).isTrue();
+        assertThat(handOff.requestStatus()).isEqualTo("PENDING");
+        assertThat(lastRequestUpdate().getLastErrorMessage()).contains("BrickLink returned 500");
+    }
+
+    @Test
+    void handOffInDryRunLeavesTheRequestForTheJob() {
+        properties.setMode("DRY_RUN");
+        properties.setEnvironmentCode("sandbox");
+
+        io.legohunter.ingress.marketplace.MarketplaceSyncPort.HandOff handOff = service.processNow(900L);
+
+        assertThat(handOff.sent()).isFalse();
+        assertThat(handOff.requestStatus()).isEqualTo("SYNC_NOT_APPLY");
+        verify(marketplaceListingSyncRequestDao, never()).claim(any(), any(), any(), any());
+    }
+
+    @Test
+    void handOffSkipsARequestThatIsNoLongerPendingOrWasClaimedElsewhere() {
+        applyAsSandbox();
+        MarketplaceListingSyncRequest done = request();
+        done.setSyncRequestStatusCode("SUCCEEDED");
+        when(marketplaceListingSyncRequestDao.findByMarketplaceListingSyncRequestId(900L)).thenReturn(Optional.of(done));
+        assertThat(service.processNow(900L).requestStatus()).isEqualTo("NOT_PENDING");
+        assertThat(service.processNow(999L).requestStatus()).isEqualTo("NOT_PENDING");
+
+        when(marketplaceListingSyncRequestDao.findByMarketplaceListingSyncRequestId(900L)).thenReturn(Optional.of(request()));
+        when(marketplaceListingSyncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.empty());
+        io.legohunter.ingress.marketplace.MarketplaceSyncPort.HandOff handOff = service.processNow(900L);
+
+        assertThat(handOff.sent()).isFalse();
+        assertThat(handOff.requestStatus()).isEqualTo("CLAIMED_ELSEWHERE");
+        verify(bricklinkRestClient, never()).getInventories(anyLong());
+    }
+
+    @Test
+    void handlesOnlyBricklinkListings() {
+        assertThat(service.handles(2)).isTrue();
+        assertThat(service.handles(3)).isFalse();
+    }
+
     private void applyPriceUpdateAsSandbox() {
         properties.setMode("APPLY");
         properties.setEnvironmentCode("sandbox");
