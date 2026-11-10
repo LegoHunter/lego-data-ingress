@@ -2,12 +2,12 @@ package io.legohunter.ingress.metrics;
 
 import io.legohunter.egress.fulfillment.FulfillmentSyncProperties;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
-import io.legohunter.ingress.source.bricklink.orders.BricklinkOrderSyncProperties;
-import io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncProperties;
-import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyProperties;
-import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyReadinessProperties;
-import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingCrawlProperties;
-import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingDecisionProperties;
+import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncProperties;
+import io.legohunter.ingress.orders.BricklinkOrderSyncProperties;
+import io.legohunter.ingress.pricing.BricklinkPricingApplyProperties;
+import io.legohunter.ingress.pricing.BricklinkPricingApplyReadinessProperties;
+import io.legohunter.ingress.pricing.BricklinkPricingCrawlProperties;
+import io.legohunter.ingress.pricing.BricklinkPricingDecisionProperties;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
