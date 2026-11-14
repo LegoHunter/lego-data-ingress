@@ -33,7 +33,7 @@ public final class RepriceGuard {
     public static final String ABOVE_MAXIMUM_PERCENT_DELTA = "ABOVE_MAXIMUM_PERCENT_DELTA";
     /** An ACTIVE (or other non-draft) listing with no BrickLink lot: there is nothing to reprice. */
     public static final String NO_REMOTE_LISTING = "NO_REMOTE_LISTING";
-    /** An unpriced draft that already has a BrickLink lot: its first price must not create a second lot. */
+    /** A never-listed draft that already has a BrickLink lot: its first price must not create a second lot. */
     public static final String DRAFT_HAS_REMOTE_LISTING = "DRAFT_HAS_REMOTE_LISTING";
 
     private static final String LISTING_STATUS_DRAFT = "DRAFT";
@@ -131,10 +131,14 @@ public final class RepriceGuard {
         return Result.passed(false);
     }
 
-    /** An unpriced draft that has never been listed: its first price, guarded by confidence and comparables only. */
+    /**
+     * A draft that has never been listed: its first price, guarded by confidence and comparables only. A local
+     * price does not change that. A draft keeps the price an earlier attempt set when its create failed (for
+     * example during a BrickLink outage), and treating that as a price move would let the minimum-move rule
+     * block the create forever. This matches the readiness job it replaces.
+     */
     static boolean isInitialPrice(MarketplaceListing listing) {
         return LISTING_STATUS_DRAFT.equals(upper(listing.getListingStatusCode()))
-                && listing.getUnitPrice() == null
                 && (listing.getExternalListingId() == null || listing.getExternalListingId().isBlank());
     }
 

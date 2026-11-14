@@ -139,6 +139,23 @@ class RepriceGuardTest {
     }
 
     @Test
+    void aPricedDraftWhoseCreateFailedIsStillAFirstPrice() {
+        // SANDBOX listing 973: the old apply job set 438.38 locally, then its create failed during a BrickLink
+        // outage. A 0.7% move must not trip the minimum-move rule and strand the draft without a lot.
+        MarketplaceListing pricedDraft = draft();
+        pricedDraft.setUnitPrice(new BigDecimal("438.38"));
+        RepriceGuard.Result result = RepriceGuard.evaluate(pricedDraft, false, decision("435.14"), config);
+        assertThat(result.isPassed()).isTrue();
+        assertThat(result.initialPrice()).isTrue();
+
+        // It is still guarded by confidence and comparables, and still never creates a second lot.
+        PricingDecision thin = decision("435.14");
+        thin.setComparableCount(1);
+        assertBlocked(RepriceGuard.evaluate(pricedDraft, false, thin, config), "BELOW_MINIMUM_COMPARABLE_COUNT");
+        assertBlocked(RepriceGuard.evaluate(pricedDraft, true, decision("435.14"), config), "DRAFT_HAS_REMOTE_LISTING");
+    }
+
+    @Test
     void anUnpricedDraftThatAlreadyHasALotIsBlocked() {
         assertBlocked(RepriceGuard.evaluate(draft(), true, decision("210.00"), config), "DRAFT_HAS_REMOTE_LISTING");
     }

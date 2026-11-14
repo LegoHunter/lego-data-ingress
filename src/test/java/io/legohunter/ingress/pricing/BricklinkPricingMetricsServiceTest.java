@@ -243,6 +243,24 @@ class BricklinkPricingMetricsServiceTest {
         assertThat(gauge("bricklink_marketplace_sync_request_current", "state", "failed")).isEqualTo(1.0d);
     }
 
+    @Test
+    void registersRepriceCountersAtZeroSoTheFirstEventShowsAsAnIncrease() {
+        metricsService.recordReprice(RepriceResult.noWork(RepriceMode.DRY_RUN, 5));
+
+        assertThat(counter("pricing_reprice_job", "outcome", "no_work")).isEqualTo(1.0d);
+        assertThat(counter("pricing_reprice_decision", "result", "proposed")).isZero();
+        assertThat(counter("pricing_reprice_decision", "result", "blocked")).isZero();
+        assertThat(counter("pricing_reprice_listing", "result", "selected")).isZero();
+        assertThat(counter("pricing_reprice_sync", "result", "handed_off")).isZero();
+
+        metricsService.recordReprice(new RepriceResult("SUCCESS", RepriceMode.DRY_RUN,
+                3, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 40));
+
+        assertThat(counter("pricing_reprice_decision", "result", "proposed")).isEqualTo(2.0d);
+        assertThat(counter("pricing_reprice_decision", "result", "blocked")).isEqualTo(1.0d);
+        assertThat(counter("pricing_reprice_listing", "result", "selected")).isEqualTo(3.0d);
+    }
+
     private double counter(String metricName, String tag, String value) {
         return meterRegistry.get(metricName).tag(tag, value).counter().count();
     }

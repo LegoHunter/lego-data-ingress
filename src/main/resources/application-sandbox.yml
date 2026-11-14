@@ -39,6 +39,24 @@ lego:
     url: http://silo-dev.silo-dev.svc.cluster.local:9000
     buckets:
       final-photo: lego-photos-sandbox
+  pricing:
+    # The Reprice job (HOMELAB-65) replaces the decision, apply-readiness and apply jobs below, which
+    # are off: the application refuses to start with Reprice and any of them on. Reprice still reads
+    # the formula settings in lego.bricklink.pricing.decision and the guard settings in
+    # lego.bricklink.pricing.apply-readiness. Start in DRY_RUN; switch to APPLY once the decisions
+    # look right (BrickLink writes still also need marketplace-sync mode APPLY, which SANDBOX has).
+    reprice:
+      enabled: true
+      mode: DRY_RUN
+      batch-size: 25
+      immediate-sync-limit: 5
+      sync-request-max-attempts: 3
+      scheduled:
+        enabled: true
+        fixed-delay-ms: 600000
+        initial-delay-ms: 120000
+        lock-at-most-for: 10m
+        lock-at-least-for: 0s
   bricklink:
     orders:
       sync:
@@ -82,7 +100,7 @@ lego:
           lock-at-most-for: 30m
           lock-at-least-for: 0s
       decision:
-        enabled: true
+        enabled: false             # replaced by lego.pricing.reprice; settings still used
         bricklink-external-service-id: 2
         priceable-listing-status-codes:
           - ACTIVE
@@ -94,13 +112,13 @@ lego:
         minimum-price:
         maximum-price:
         scheduled:
-          enabled: true
+          enabled: false
           fixed-delay-ms: 600000
           initial-delay-ms: 120000
           lock-at-most-for: 10m
           lock-at-least-for: 0s
       apply-readiness:
-        enabled: true
+        enabled: false             # replaced by lego.pricing.reprice; settings still used
         bricklink-external-service-id: 2
         priceable-listing-status-codes:
           - ACTIVE
@@ -127,19 +145,19 @@ lego:
           - BELOW_MIN_PRICE_CLAMPED
           - ABOVE_MAX_PRICE_CLAMPED
         scheduled:
-          enabled: true
+          enabled: false
           fixed-delay-ms: 600000
           initial-delay-ms: 180000
           lock-at-most-for: 10m
           lock-at-least-for: 0s
       apply:
-        enabled: true
+        enabled: false             # replaced by lego.pricing.reprice
         bricklink-external-service-id: 2
         batch-size: 25
         sync-request-max-attempts: 3
         mode: APPLY_LOCAL_AND_ENQUEUE_SYNC
         scheduled:
-          enabled: true
+          enabled: false
           fixed-delay-ms: 600000
           initial-delay-ms: 240000
           lock-at-most-for: 10m

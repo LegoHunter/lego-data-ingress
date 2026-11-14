@@ -96,6 +96,55 @@ class SpringProfileEnvironmentTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"sandbox", "dev", "prod"})
+    void repriceNeverRunsAlongsideTheJobsItReplaces(String env) {
+        // RepriceConfigurationValidator refuses startup otherwise (HOMELAB-65); catch it here, not in the pod.
+        Properties effective = podConfiguration(env);
+
+        if ("true".equals(String.valueOf(effective.get("lego.pricing.reprice.enabled")))) {
+            assertThat(String.valueOf(effective.get("lego.bricklink.pricing.decision.enabled"))).isEqualTo("false");
+            assertThat(String.valueOf(effective.get("lego.bricklink.pricing.apply-readiness.enabled"))).isEqualTo("false");
+            assertThat(String.valueOf(effective.get("lego.bricklink.pricing.apply.enabled"))).isEqualTo("false");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev"})
+    void lowerEnvironmentsRunRepriceInDryRun(String env) {
+        Properties effective = podConfiguration(env);
+
+        assertThat(String.valueOf(effective.get("lego.pricing.reprice.enabled"))).isEqualTo("true");
+        assertThat(String.valueOf(effective.get("lego.pricing.reprice.scheduled.enabled"))).isEqualTo("true");
+        assertThat(effective.getProperty("lego.pricing.reprice.mode")).isEqualTo("DRY_RUN");
+    }
+
+    @Test
+    void devGuardsRepriceLikeSandbox() {
+        // The defaults in application.yml are far looser (confidence 0, one comparable, no move limits).
+        Properties sandbox = podConfiguration("sandbox");
+        Properties dev = podConfiguration("dev");
+
+        for (String key : List.of(
+                "lego.bricklink.pricing.apply-readiness.minimum-confidence",
+                "lego.bricklink.pricing.apply-readiness.minimum-comparable-count",
+                "lego.bricklink.pricing.apply-readiness.minimum-delta.enabled",
+                "lego.bricklink.pricing.apply-readiness.minimum-delta.percent",
+                "lego.bricklink.pricing.apply-readiness.maximum-absolute-delta",
+                "lego.bricklink.pricing.apply-readiness.maximum-percent-delta",
+                "lego.bricklink.pricing.apply-readiness.blocked-reason-codes[1]",
+                "lego.bricklink.pricing.decision.maximum-absolute-change-per-run",
+                "lego.bricklink.pricing.decision.require-current-snapshot")) {
+            assertThat(String.valueOf(dev.get(key))).as(key).isEqualTo(String.valueOf(sandbox.get(key)));
+        }
+    }
+
+    @Test
+    void prodDoesNotRunRepriceYet() {
+        // Off until lego_prod exists (HOMELAB-56).
+        assertThat(String.valueOf(podConfiguration("prod").get("lego.pricing.reprice.enabled"))).isNotEqualTo("true");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
     void podUsesItsOwnEnvironmentS3StoreAndFinalPhotoBucket(String env) {
         Properties effective = podConfiguration(env);
 
