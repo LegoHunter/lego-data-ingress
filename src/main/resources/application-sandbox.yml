@@ -43,11 +43,13 @@ lego:
     # The Reprice job (HOMELAB-65) replaces the decision, apply-readiness and apply jobs below, which
     # are off: the application refuses to start with Reprice and any of them on. Reprice still reads
     # the formula settings in lego.bricklink.pricing.decision and the guard settings in
-    # lego.bricklink.pricing.apply-readiness. Start in DRY_RUN; switch to APPLY once the decisions
-    # look right (BrickLink writes still also need marketplace-sync mode APPLY, which SANDBOX has).
+    # lego.bricklink.pricing.apply-readiness. APPLY since 2026-11-14, after the owner reviewed the
+    # DRY_RUN decisions: a guard-passed decision is ACCEPTED, its sync request queued and up to
+    # immediate-sync-limit of them sent straight to BrickLink. BrickLink writes also need
+    # marketplace-sync mode APPLY, which SANDBOX has. Every lot stays in stockroom C (non-prod safety).
     reprice:
       enabled: true
-      mode: DRY_RUN
+      mode: APPLY
       batch-size: 25
       immediate-sync-limit: 5
       sync-request-max-attempts: 3
