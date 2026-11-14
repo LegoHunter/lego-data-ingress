@@ -109,12 +109,24 @@ class SpringProfileEnvironmentTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"sandbox", "dev"})
-    void lowerEnvironmentsRunRepriceInDryRun(String env) {
+    void lowerEnvironmentsRunRepriceOnASchedule(String env) {
         Properties effective = podConfiguration(env);
 
         assertThat(String.valueOf(effective.get("lego.pricing.reprice.enabled"))).isEqualTo("true");
         assertThat(String.valueOf(effective.get("lego.pricing.reprice.scheduled.enabled"))).isEqualTo("true");
-        assertThat(effective.getProperty("lego.pricing.reprice.mode")).isEqualTo("DRY_RUN");
+        // SANDBOX applies; DEV stays in DRY_RUN until it has listings and its decisions are reviewed.
+        assertThat(effective.getProperty("lego.pricing.reprice.mode")).isEqualTo(env.equals("sandbox") ? "APPLY" : "DRY_RUN");
+    }
+
+    @Test
+    void sandboxRepriceWritesOnlyToItsOwnStockroom() {
+        // APPLY sends real BrickLink writes, so the non-prod stockroom guard must be on and pointing at C.
+        Properties effective = podConfiguration("sandbox");
+
+        assertThat(effective.getProperty("lego.bricklink.marketplace-sync.mode")).isEqualTo("APPLY");
+        assertThat(String.valueOf(effective.get("lego.bricklink.marketplace-sync.non-prod-require-stock-room"))).isEqualTo("true");
+        assertThat(effective.getProperty("lego.bricklink.marketplace-sync.non-prod-stock-room-id")).isEqualTo("C");
+        assertThat(String.valueOf(effective.get("lego.environment.production"))).isNotEqualTo("true");
     }
 
     @Test
