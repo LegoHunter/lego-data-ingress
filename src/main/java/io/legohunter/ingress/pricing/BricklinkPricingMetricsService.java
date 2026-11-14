@@ -143,17 +143,29 @@ public class BricklinkPricingMetricsService {
     public void recordReprice(RepriceResult result) {
         registerGauges();
         recordJob("pricing_reprice_job", "pricing_reprice_job_duration", result.outcome(), result.elapsedMillis());
-        increment("pricing_reprice_listing", "selected", result.listingsSelected());
-        increment("pricing_reprice_listing", "waiting_for_sync", result.waitingForSync());
-        increment("pricing_reprice_listing", "error", result.errors());
-        increment("pricing_reprice_decision", "proposed", result.proposed());
-        increment("pricing_reprice_decision", "blocked", result.blocked());
-        increment("pricing_reprice_decision", "skipped", result.skipped());
-        increment("pricing_reprice_decision", "failed", result.failed());
-        increment("pricing_reprice_decision", "accepted", result.accepted());
-        increment("pricing_reprice_decision", "applied_locally", result.appliedLocally());
-        increment("pricing_reprice_sync", "handed_off", result.handedOff());
-        increment("pricing_reprice_sync", "confirmed", result.syncConfirmed());
+        // Registered on every run, even at zero: Reprice moves these only a few times an hour, and a counter
+        // that first appears already at 1 shows no increase() in Grafana, so its first event would be lost.
+        count("pricing_reprice_listing", "selected", result.listingsSelected());
+        count("pricing_reprice_listing", "waiting_for_sync", result.waitingForSync());
+        count("pricing_reprice_listing", "error", result.errors());
+        count("pricing_reprice_decision", "proposed", result.proposed());
+        count("pricing_reprice_decision", "blocked", result.blocked());
+        count("pricing_reprice_decision", "skipped", result.skipped());
+        count("pricing_reprice_decision", "failed", result.failed());
+        count("pricing_reprice_decision", "accepted", result.accepted());
+        count("pricing_reprice_decision", "applied_locally", result.appliedLocally());
+        count("pricing_reprice_sync", "handed_off", result.handedOff());
+        count("pricing_reprice_sync", "confirmed", result.syncConfirmed());
+    }
+
+    /** Like {@link #increment} but registers the counter even when {@code count} is zero. */
+    private void count(String metricName, String result, double count) {
+        Counter counter = Counter.builder(metricName)
+                .tag(RESULT_TAG, result)
+                .register(meterRegistry);
+        if (count > 0) {
+            counter.increment(count);
+        }
     }
 
     public void recordMarketplaceSync(BricklinkMarketplaceSyncResult result) {
