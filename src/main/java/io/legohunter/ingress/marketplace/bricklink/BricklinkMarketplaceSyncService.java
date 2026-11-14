@@ -45,8 +45,10 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
     private static final String TYPE_LISTING_CREATE = "LISTING_CREATE";
     private static final String TYPE_PRICE_UPDATE = "PRICE_UPDATE";
     static final String TYPE_LISTING_DELETE = "LISTING_DELETE";
+    /** Pushes a listing's title/description to its existing lot's Description (HOMELAB-80). */
+    public static final String TYPE_DESCRIPTION_UPDATE = "DESCRIPTION_UPDATE";
     /** The sync request types this service claims and processes. */
-    static final Set<String> SUPPORTED_TYPES = Set.of(TYPE_PRICE_UPDATE, TYPE_LISTING_CREATE, TYPE_LISTING_DELETE);
+    static final Set<String> SUPPORTED_TYPES = Set.of(TYPE_PRICE_UPDATE, TYPE_LISTING_CREATE, TYPE_LISTING_DELETE, TYPE_DESCRIPTION_UPDATE);
     private static final String LISTING_STATUS_ACTIVE = "ACTIVE";
     static final String LISTING_STATUS_ENDED = "ENDED";
     static final String SAFETY_REMOTE_DELETED = "REMOTE_DELETED";
@@ -154,6 +156,8 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
                 processListingCreate(request, mode, counters);
             } else if (TYPE_LISTING_DELETE.equals(syncRequestType)) {
                 processListingDelete(request, mode, counters);
+            } else if (TYPE_DESCRIPTION_UPDATE.equals(syncRequestType)) {
+                processDescriptionUpdate(request, mode, counters);
             } else {
                 processPriceUpdate(request, mode, counters);
             }
@@ -259,6 +263,128 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
                 price(request.getPreviousUnitPrice()),
                 price(request.getRequestedUnitPrice())
         );
+    }
+
+    /**
+     * Sets the lot's Description to the listing's description, or its title (HOMELAB-80). Same guards as a price
+     * update: the lot must pass the ownership and stockroom safety check, and the change is read back. Only the
+     * description is written (plus the stockroom outside PROD, which every lower-environment write re-asserts); the
+     * remarks and their system block are never sent, and the read-back checks they did not change.
+     */
+    private void processDescriptionUpdate(
+            MarketplaceListingSyncRequest request,
+            BricklinkMarketplaceSyncMode mode,
+            Counters counters
+    ) {
+        SyncContext context = context(request, true);
+        long lotId = context.bricklinkInventoryId().longValue();
+        Inventory remoteInventory = data(bricklinkRestClient.getInventories(lotId));
+        BricklinkRemoteInventorySafetyResult safety = safetyService.verify(
+                properties,
+                context.listing(),
+                context.bricklinkListing(),
+                context.itemInventory(),
+                remoteInventory
+        );
+        if (!safety.allowed()) {
+            counters.blocked++;
+            if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+                markBlocked(request, safety.statusCode(), safety.message());
+                updateSafetyMetadata(context.bricklinkListing(), safety, remoteInventory);
+            }
+            log.warn(
+                    "bricklink.marketplace_sync.blocked marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} statusCode={} message={}",
+                    request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), lotId,
+                    safety.statusCode(), safety.message()
+            );
+            return;
+        }
+
+        String description = BricklinkLotDescription.expected(context.listing());
+        if (description == null) {
+            // Clearing a lot's Description is not something this request type does: nothing to send.
+            counters.blocked++;
+            if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+                markBlocked(request, "NO_LISTING_DESCRIPTION", "The listing has neither a description nor a title to send");
+            }
+            return;
+        }
+        if (mode == BricklinkMarketplaceSyncMode.DRY_RUN) {
+            counters.dryRunVerified++;
+            log.info(
+                    "bricklink.marketplace_sync.dry_run_verified marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} description={}",
+                    request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), lotId, description
+            );
+            return;
+        }
+
+        if (!BricklinkLotDescription.matches(description, remoteInventory.getDescription())) {
+            Inventory update = new Inventory();
+            update.setDescription(description);
+            if (properties.nonProdEnvironment()) {
+                update.setIs_stock_room(true);
+                update.setStock_room_id(properties.effectiveNonProdStockRoomId());
+            }
+            bricklinkRestClient.updateInventory(lotId, update);
+            counters.remoteUpdated++;
+        }
+
+        Inventory confirmed = data(bricklinkRestClient.getInventories(lotId));
+        ReadBackMismatch mismatch = descriptionUpdateReadBackMismatch(description, remoteInventory, confirmed);
+        if (mismatch != null) {
+            counters.blocked++;
+            transactions.executeWithoutResult(status -> {
+                recordReadBackMismatch(context.bricklinkListing(), mismatch, confirmed);
+                markBlocked(request, mismatch.statusCode(), mismatch.message());
+            });
+            log.error(
+                    "bricklink.marketplace_sync.read_back_mismatch marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} statusCode={} message={}",
+                    request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), lotId,
+                    mismatch.statusCode(), mismatch.message()
+            );
+            return;
+        }
+
+        transactions.executeWithoutResult(status -> {
+            BricklinkMarketplaceListing bricklinkListing = context.bricklinkListing();
+            // The remarks were not written, so the recorded remarks and their hash stay as they are.
+            bricklinkListing.setEnvironmentCode(properties.effectiveEnvironmentCode());
+            bricklinkListing.setLastRemoteVerifiedAt(now());
+            bricklinkListing.setLastRemoteSafetyStatusCode(safety.statusCode());
+            bricklinkListing.setLastRemoteSafetyMessage(safety.message());
+            bricklinkListing.setIsStockRoom(confirmed.getIs_stock_room());
+            bricklinkListing.setStockRoomId(confirmed.getStock_room_id());
+            bricklinkMarketplaceListingDao.update(bricklinkListing);
+            markSucceeded(request, confirmed);
+        });
+        counters.remoteVerified++;
+        log.info(
+                "bricklink.marketplace_sync.description_confirmed marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} description={}",
+                request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), lotId, description
+        );
+    }
+
+    /** The read-back after a description update: the new text, this environment's stockroom, the remarks untouched. */
+    private ReadBackMismatch descriptionUpdateReadBackMismatch(String description, Inventory before, Inventory confirmed) {
+        if (confirmed == null) {
+            return new ReadBackMismatch("REMOTE_INVENTORY_MISSING", "BrickLink returned no lot when read back after the description update");
+        }
+        if (!BricklinkLotDescription.matches(description, confirmed.getDescription())) {
+            return new ReadBackMismatch("REMOTE_DESCRIPTION_MISMATCH",
+                    "BrickLink lot description is [" + confirmed.getDescription() + "] after the update, not the requested [" + description + "]");
+        }
+        if (properties.nonProdEnvironment()) {
+            String stockroom = properties.effectiveNonProdStockRoomId();
+            if (!Boolean.TRUE.equals(confirmed.getIs_stock_room()) || !stockroom.equalsIgnoreCase(trim(confirmed.getStock_room_id()))) {
+                return new ReadBackMismatch("REMOTE_STOCKROOM_MISMATCH",
+                        "BrickLink lot is not in stockroom " + stockroom + " after the update (is_stock_room="
+                                + confirmed.getIs_stock_room() + ", stock_room_id=" + confirmed.getStock_room_id() + ")");
+            }
+        }
+        if (!Objects.equals(trim(before.getRemarks()), trim(confirmed.getRemarks()))) {
+            return new ReadBackMismatch("REMOTE_REMARKS_MISMATCH", "BrickLink lot remarks changed during a description-only update");
+        }
+        return null;
     }
 
     /**

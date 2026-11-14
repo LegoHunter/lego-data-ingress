@@ -223,7 +223,7 @@ class BricklinkListingDeleteSyncTest {
 
     private void arrange(BricklinkMarketplaceListing mapping) {
         when(syncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
-                eq("PENDING"), eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")), any(ZonedDateTime.class), eq(5)))
+                eq("PENDING"), eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE", "DESCRIPTION_UPDATE")), any(ZonedDateTime.class), eq(5)))
                 .thenReturn(Set.of(request("PENDING")));
         when(syncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
                 .thenReturn(Optional.of(request("CLAIMED")));

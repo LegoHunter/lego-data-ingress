@@ -164,6 +164,15 @@ public class BricklinkInventoryReconciliationService {
                         "env=" + blockEnvironment + " listing=" + blockListing));
             }
         }
+
+        // A listing with neither description nor title has nothing to show, so it is never drift. While a change is
+        // in flight (for example a DESCRIPTION_UPDATE) the lot is expected to lag, as with the price.
+        String expectedDescription = BricklinkLotDescription.expected(local.listing());
+        if (!priceChangeInFlight && expectedDescription != null
+                && !BricklinkLotDescription.matches(expectedDescription, lot.getDescription())) {
+            drifts.add(drift(BricklinkInventoryDriftType.DESCRIPTION_DRIFT, local, lotId, expectedDescription,
+                    lot.getDescription() == null ? "(empty)" : lot.getDescription()));
+        }
     }
 
     /**

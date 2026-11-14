@@ -996,9 +996,11 @@ lego.bricklink.marketplace-sync.enabled: true
 lego.bricklink.marketplace-sync.scheduled.enabled: true
 ```
 
-The marketplace sync job consumes due `marketplace_listing_sync_request` rows for BrickLink `PRICE_UPDATE` and `LISTING_CREATE` work. This is the first LegoHunter path that can mutate the live BrickLink account from local system-of-record data, so every write path is guarded by final safety checks in the worker.
+The marketplace sync job consumes due `marketplace_listing_sync_request` rows for BrickLink `PRICE_UPDATE`, `LISTING_CREATE`, `LISTING_DELETE` and `DESCRIPTION_UPDATE` work. This is the first LegoHunter path that can mutate the live BrickLink account from local system-of-record data, so every write path is guarded by final safety checks in the worker.
 
-`PRICE_UPDATE` verifies the existing remote BrickLink inventory before mutating price or remarks. `LISTING_CREATE` verifies local create eligibility, builds a BrickLink `Inventory` create payload, calls BrickLink `createInventory`, fetches the created remote inventory back, verifies the remote safety contract, and only then marks the local `marketplace_listing` `ACTIVE`.
+`PRICE_UPDATE` verifies the existing remote BrickLink inventory before mutating price or remarks.
+
+`DESCRIPTION_UPDATE` (HOMELAB-80) sets an existing lot's Description to the listing's `description`, or else its `title` (`BricklinkLotDescription`, the same rule `LISTING_CREATE` uses). It runs the same remote safety check as `PRICE_UPDATE` first, then writes **only** the description (plus the stockroom outside PROD); the remarks and their system block are never sent. The read-back must show the new text (compared HTML-unescaped, since BrickLink may return `&amp;`), this environment's stockroom, and unchanged remarks, or the request ends `BLOCKED` with `REMOTE_DESCRIPTION_MISMATCH` / `REMOTE_STOCKROOM_MISMATCH` / `REMOTE_REMARKS_MISMATCH`. A lot that already shows the text is confirmed without a write. A listing with neither description nor title ends `BLOCKED` `NO_LISTING_DESCRIPTION` (clearing a Description is not supported). Success logs `bricklink.marketplace_sync.description_confirmed`. Requests come from lego-data-service listing edits and from the description backfill below. `LISTING_CREATE` verifies local create eligibility, builds a BrickLink `Inventory` create payload, calls BrickLink `createInventory`, fetches the created remote inventory back, verifies the remote safety contract, and only then marks the local `marketplace_listing` `ACTIVE`.
 
 `LISTING_CREATE` creates each lot at most once (HOMELAB-15). BrickLink has no idempotency key, so a retried create would otherwise list the same unique item twice:
 
@@ -1201,6 +1203,7 @@ For every ACTIVE local BrickLink listing with a lot id it reports:
 | `QUANTITY_DRIFT` | The lot's quantity differs from `last_remote_quantity` (1 when unset). |
 | `VISIBILITY_DRIFT` | Outside PROD: the lot is not in this environment's stockroom (SANDBOX C, DEV B). In PROD: the stockroom flag or id differs from what the listing recorded. |
 | `REMARKS_DRIFT` | The system remarks block is missing, or names another environment or listing. |
+| `DESCRIPTION_DRIFT` | The lot's Description does not show the listing's `description`, or else its `title` (compared HTML-unescaped and trimmed). Never reported for a listing with neither, nor while a sync request is in flight. Fix with the description backfill. |
 | `UNTRACKED_REMOTE_LOT` | A lot whose block names this environment, but no ACTIVE local listing points at it. |
 
 Each drift is logged at WARN as `bricklink.inventory_reconciliation.drift`; each run logs
@@ -1211,6 +1214,13 @@ Settings (`lego.bricklink.inventory-reconciliation.*`): `enabled` (default `fals
 `bricklink-external-service-id` (`2`), `scheduled.enabled` (`false`), `scheduled.fixed-delay-ms`
 (`3600000`), `scheduled.initial-delay-ms` (`120000`), `scheduled.lock-at-most-for` (`10m`),
 `scheduled.lock-at-least-for` (`0s`). SANDBOX runs it hourly.
+
+**Description backfill** (HOMELAB-80): `POST /internal/bricklink/marketplace-sync/description-backfill?apply=false|true`
+runs a reconciliation now and, for every `DESCRIPTION_DRIFT`, queues a `PENDING` `DESCRIPTION_UPDATE`
+(reason `DESCRIPTION_DRIFT_BACKFILL`, created by `BricklinkDescriptionBackfill`). `apply` defaults to `false`,
+which only lists what it would queue; always run the dry run first. Listings with a change in flight are skipped
+by the reconciliation, so a second run queues no duplicates. The marketplace sync job sends the requests (5 per
+run). Logs `bricklink.description_backfill.completed`. Answers 404 where marketplace sync or reconciliation is off.
 
 ### `BricklinkLotAuditJob`
 

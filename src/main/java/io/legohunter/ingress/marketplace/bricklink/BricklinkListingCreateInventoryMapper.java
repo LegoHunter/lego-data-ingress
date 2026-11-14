@@ -28,7 +28,7 @@ class BricklinkListingCreateInventoryMapper {
         inventory.setNew_or_used(normalizeCondition(itemInventory.getNewOrUsed()));
         inventory.setCompleteness(normalizeCompleteness(itemInventory));
         inventory.setUnit_price(doubleValue(request.getRequestedUnitPrice()));
-        inventory.setDescription(description(listing));
+        inventory.setDescription(BricklinkLotDescription.expected(listing));
         inventory.setRemarks(safety.desiredRemarks());
         inventory.setBulk(bricklinkListing.getBulk() == null ? 1 : bricklinkListing.getBulk());
         inventory.setIs_retain(bricklinkListing.getIsRetain());
@@ -82,13 +82,6 @@ class BricklinkListingCreateInventoryMapper {
             case "S", "SEALED" -> "S";
             default -> normalize(itemInventory.getCompleteness());
         };
-    }
-
-    private String description(MarketplaceListing listing) {
-        if (listing.getDescription() != null && !listing.getDescription().isBlank()) {
-            return listing.getDescription().trim();
-        }
-        return listing.getTitle() == null ? null : listing.getTitle().trim();
     }
 
     private Double doubleValue(BigDecimal value) {

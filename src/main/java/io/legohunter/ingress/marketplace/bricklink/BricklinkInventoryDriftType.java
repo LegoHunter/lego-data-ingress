@@ -12,6 +12,11 @@ public enum BricklinkInventoryDriftType {
     VISIBILITY_DRIFT,
     /** The lot's system remarks block is missing or names another environment or listing. */
     REMARKS_DRIFT,
+    /**
+     * The lot's Description differs from the listing's description (or, without one, its title). Fixed by a
+     * DESCRIPTION_UPDATE sync request (HOMELAB-80).
+     */
+    DESCRIPTION_DRIFT,
     /** The store has a lot tagged for this environment that no local listing owns. */
     UNTRACKED_REMOTE_LOT;
 
