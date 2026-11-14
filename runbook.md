@@ -339,7 +339,7 @@ To test crawler changes from a feature branch, never point them at the real sche
 | `lego.bricklink.pricing.crawl.crawl-cadence` | `7d` | After a success the target is due again this much later. Also the wait after `max-attempts` failures in a row, and the minimum gap when a disabled target is wanted again. |
 | `lego.bricklink.pricing.crawl.schedule-spread-window` | `72h` | New targets are spread across this window. |
 | `lego.bricklink.pricing.crawl.schedule-jitter` | `0s` | Optional random jitter on new targets. |
-| `lego.bricklink.pricing.crawl.retry-backoff` | `6h` | Wait after a failed fetch. |
+| `lego.bricklink.pricing.crawl.retry-backoff` | `6h` | Wait after a failed fetch, and after a BrickLink outage. |
 | `lego.bricklink.pricing.crawl.max-attempts` | `3` | After this many failures in a row, wait a full cadence instead of the backoff. |
 | `lego.bricklink.pricing.crawl.claim-stale-after` | `2h` | A claim expires after this long, so a crashed crawler's target is taken over. |
 | `lego.bricklink.pricing.crawl.claimed-by` | pod host name | Stored in `crawl_target.claimed_by`. |
@@ -355,12 +355,12 @@ Each run:
 | Blackout | Inside the blackout window the run stops here (outcome `BLACKOUT`). |
 | Claim | Due targets (IDLE and due, or CLAIMED with an expired claim) are claimed with a conditional update, so two crawlers never fetch the same target. |
 | Resolve `idItem` | Read from `marketplace_item.marketplace_unique_key`; looked up once with `searchproduct.ajax` and stored when missing. |
-| Fetch | `catalogifs.ajax` for the item and condition. An exception (maintenance redirect, block, timeout) is a failure; an empty list is a successful, empty market. |
+| Fetch | `catalogifs.ajax` for the item and condition. An empty list is a successful, empty market. An exception is either a **BrickLink outage** (any redirect such as the maintenance page, 403/429 block or rate limit, 5xx, I/O or timeout; `BricklinkOutageClassifier`) or a failure of this item (404, not found, ambiguous, unparseable). The same split applies to the `idItem` lookup. |
 | Store | One `market_snapshot` per success (the price history) and one `market_listing` per lot: raw and canonical condition/completeness, display price + currency, the seller's native price, seller key/store/country/feedback, raw payload. |
-| Log | Every attempt is a `crawl_attempt` row (`SUCCEEDED`, `FAILED_HTTP`, `FAILED_PARSE`, `FAILED_RESOLVE_NO_MATCH`, `FAILED_RESOLVE_AMBIGUOUS`, `FAILED_MISSING_ITEM`). |
-| Release | Success: IDLE, failures reset, due after the cadence. Failure: IDLE, `consecutive_failure_count` + 1, due after the backoff (or the cadence after `max-attempts`). |
+| Log | Every attempt is a `crawl_attempt` row (`SUCCEEDED`, `FAILED_OUTAGE`, `FAILED_HTTP`, `FAILED_PARSE`, `FAILED_RESOLVE_NO_MATCH`, `FAILED_RESOLVE_AMBIGUOUS`, `FAILED_MISSING_ITEM`). |
+| Release | Success: IDLE, failures reset, due after the cadence. Item failure: IDLE, `consecutive_failure_count` + 1, due after the backoff (or the cadence after `max-attempts`). Outage: IDLE, `consecutive_failure_count` **unchanged**, due after the backoff, and the run stops without claiming any other target, so an outage never pushes the queue into the full-cadence wait (HOMELAB-78). |
 
-Outcomes: `NO_WORK`, `SCHEDULED` (queue changed, nothing due), `BLACKOUT`, `SUCCESS`, `PARTIAL_SUCCESS` (at least one fetch failed).
+Outcomes: `NO_WORK`, `SCHEDULED` (queue changed, nothing due), `BLACKOUT`, `SUCCESS`, `PARTIAL_SUCCESS` (at least one item failed), `OUTAGE` (BrickLink was down; the run stopped at the first outage).
 
 Monitoring (a ban or block shows as failures rising while successes stay flat):
 
@@ -372,7 +372,7 @@ Monitoring (a ban or block shows as failures rising while successes stay flat):
 | `bricklink_pricing_crawl_listing_total{result="written"}` | Lots stored. |
 | `bricklink_pricing_crawl_target_current{state}` | Queue now: `idle`, `claimed`, `disabled`, `due`, `failing`. Shared, so every deployment reports the same numbers. |
 
-Logs: `bricklink.pricing.crawl.job.completed` (the run result), `bricklink.pricing.crawl.failed` (one per failed fetch, with the target, outcome, failure count and message). The maintenance report (`GET /internal/bricklink/pricing/maintenance-report`) shows the queue by state and the latest failed attempts.
+Logs: `bricklink.pricing.crawl.job.completed` (the run result), `bricklink.pricing.crawl.failed` (one per item failure, with the target, outcome, failure count and message), `bricklink.pricing.crawl.outage` (one per run that hit an outage). During an outage each run probes one target and stops; `bricklink_pricing_crawl_job_total{outcome="outage"}` keeps rising until BrickLink is back. No manual reset of `crawl_target` is needed afterwards. The maintenance report (`GET /internal/bricklink/pricing/maintenance-report`) shows the queue by state and the latest failed attempts.
 
 Boundaries:
 

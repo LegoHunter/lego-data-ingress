@@ -58,6 +58,10 @@ import java.util.regex.Pattern;
  *       target a full cadence ahead; a failure is logged in crawl_attempt and retried after the backoff, or after a
  *       full cadence once {@code max-attempts} failures have run together.</li>
  * </ol>
+ *
+ * <p>A BrickLink-wide outage (maintenance redirect, block, 5xx, I/O; see {@link BricklinkOutageClassifier}) is not a
+ * failure of the item: the attempt is logged as {@code FAILED_OUTAGE}, the target keeps its failure count and is
+ * retried after the backoff, and the run stops with outcome {@code OUTAGE} without touching the rest of the queue.
  */
 @Service
 @RequiredArgsConstructor
@@ -76,6 +80,8 @@ public class BricklinkPricingCrawlService {
     static final String OUTCOME_FAILED_RESOLVE_NO_MATCH = "FAILED_RESOLVE_NO_MATCH";
     static final String OUTCOME_FAILED_RESOLVE_AMBIGUOUS = "FAILED_RESOLVE_AMBIGUOUS";
     static final String OUTCOME_FAILED_MISSING_ITEM = "FAILED_MISSING_ITEM";
+    /** BrickLink was down for everyone (maintenance, block, 5xx, I/O): not counted against the target. */
+    static final String OUTCOME_FAILED_OUTAGE = "FAILED_OUTAGE";
 
     static final String CATALOG_ITEMS_FOR_SALE_PATH = "/ajax/clone/catalogifs.ajax";
 
@@ -114,6 +120,10 @@ public class BricklinkPricingCrawlService {
             }
             counters.targetsClaimed++;
             crawl(crawlTargetDao.findByCrawlTargetId(target.getCrawlTargetId()).orElse(target), counters);
+            if (counters.outage) {
+                // BrickLink is down for everyone: leave the rest of the queue untouched until a later run.
+                break;
+            }
         }
 
         return result(outcome(counters), counters, start);
@@ -179,8 +189,8 @@ public class BricklinkPricingCrawlService {
                     idItem.get(), target.getQueryConditionCode(), properties.effectiveResultsPerPage());
         } catch (RuntimeException e) {
             // bricklink-ajax returns an empty result when BrickLink has no lots for sale, so an exception is a real
-            // failure: maintenance redirect, block, timeout.
-            fail(target, attempt, OUTCOME_FAILED_HTTP, e.getMessage(), counters);
+            // failure: either BrickLink-wide (maintenance redirect, block, 5xx, timeout) or this item's.
+            failOrOutage(target, attempt, OUTCOME_FAILED_HTTP, e, counters);
             return;
         }
 
@@ -228,10 +238,10 @@ public class BricklinkPricingCrawlService {
             return Optional.of(found.get().getIdItem());
         } catch (BricklinkAjaxClientException e) {
             boolean ambiguous = e.getMessage() != null && e.getMessage().contains("Ambiguous");
-            fail(target, attempt, ambiguous ? OUTCOME_FAILED_RESOLVE_AMBIGUOUS : OUTCOME_FAILED_HTTP, e.getMessage(), counters);
+            failOrOutage(target, attempt, ambiguous ? OUTCOME_FAILED_RESOLVE_AMBIGUOUS : OUTCOME_FAILED_HTTP, e, counters);
             return Optional.empty();
         } catch (RuntimeException e) {
-            fail(target, attempt, OUTCOME_FAILED_HTTP, e.getMessage(), counters);
+            failOrOutage(target, attempt, OUTCOME_FAILED_HTTP, e, counters);
             return Optional.empty();
         }
     }
@@ -316,6 +326,38 @@ public class BricklinkPricingCrawlService {
         target.setLastErrorMessage(null);
         target.setNextDueAt(adjustForBlackout(finishedAt.plus(properties.effectiveCrawlCadence())));
         crawlTargetDao.update(target);
+    }
+
+    private void failOrOutage(CrawlTarget target, CrawlAttempt attempt, String itemOutcomeCode, RuntimeException e,
+                              CrawlCounters counters) {
+        if (BricklinkOutageClassifier.isOutage(e)) {
+            outage(target, attempt, e.getMessage(), counters);
+        } else {
+            fail(target, attempt, itemOutcomeCode, e.getMessage(), counters);
+        }
+    }
+
+    /**
+     * BrickLink is down for everyone (HOMELAB-78), so the failure says nothing about this item: record the attempt,
+     * keep the target's failure count, retry it after the backoff, and stop the run. Counting outages against items
+     * once pushed the whole queue a full cadence back during a maintenance window.
+     */
+    private void outage(CrawlTarget target, CrawlAttempt attempt, String message, CrawlCounters counters) {
+        ZonedDateTime finishedAt = now();
+        attempt.setFinishedAt(finishedAt);
+        attempt.setOutcomeCode(OUTCOME_FAILED_OUTAGE);
+        attempt.setErrorMessage(message);
+        crawlAttemptDao.finish(attempt);
+
+        release(target, finishedAt);
+        target.setLastErrorMessage(message);
+        target.setNextDueAt(adjustForBlackout(finishedAt.plus(properties.effectiveRetryBackoff())));
+        crawlTargetDao.update(target);
+
+        counters.outage = true;
+        log.warn("bricklink.pricing.crawl.outage crawlTargetId={} canonicalItemId={} condition={} consecutiveFailures={} message={}",
+                target.getCrawlTargetId(), target.getCanonicalItemId(), target.getQueryConditionCode(),
+                target.getConsecutiveFailureCount(), message);
     }
 
     private void fail(CrawlTarget target, CrawlAttempt attempt, String outcomeCode, String message, CrawlCounters counters) {
@@ -413,6 +455,9 @@ public class BricklinkPricingCrawlService {
     }
 
     private String outcome(CrawlCounters counters) {
+        if (counters.outage) {
+            return "OUTAGE";
+        }
         if (counters.failedFetches > 0) {
             return "PARTIAL_SUCCESS";
         }
@@ -489,6 +534,7 @@ public class BricklinkPricingCrawlService {
         private int listingsWritten;
         private int idItemsResolved;
         private int failedFetches;
+        private boolean outage;
 
         boolean scheduledAnything() {
             return targetsCreated > 0 || targetsReenabled > 0 || targetsDisabled > 0;
