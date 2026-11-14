@@ -46,6 +46,11 @@ lego:
           fixed-delay-ms: 3600000
     pricing:
       # Off until lego_prod exists (HOMELAB-56). Then decide where the one shared crawler runs (HOMELAB-32).
+      # Pricing in PROD is the Reprice job (lego.pricing.reprice, HOMELAB-65), never the older decision,
+      # apply-readiness and apply jobs: the application refuses to start with Reprice and any of them on.
+      # To enable it, copy the lego.pricing.reprice block and the decision/apply-readiness settings from
+      # application-dev.yml, start in DRY_RUN, and switch to APPLY only after the owner reviews the
+      # decisions. PROD lots are public, so there is no stockroom safety net.
       want-list:
         enabled: false
       crawl:

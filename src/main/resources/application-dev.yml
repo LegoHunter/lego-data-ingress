@@ -39,6 +39,24 @@ lego:
     url: http://silo-dev.silo-dev.svc.cluster.local:9000
     buckets:
       final-photo: lego-photos-dev
+  pricing:
+    # The Reprice job (HOMELAB-65), in DRY_RUN as in SANDBOX: it writes PROPOSED/BLOCKED decisions only,
+    # with no sync requests and no BrickLink calls. DEV never ran the decision, apply-readiness or apply
+    # jobs it replaces; they stay off below, and the application refuses to start with Reprice and any of
+    # them on. Reprice reads the formula and guard settings in lego.bricklink.pricing.decision and
+    # apply-readiness, which match SANDBOX's so the two environments decide alike.
+    reprice:
+      enabled: true
+      mode: DRY_RUN
+      batch-size: 25
+      immediate-sync-limit: 5
+      sync-request-max-attempts: 3
+      scheduled:
+        enabled: true
+        fixed-delay-ms: 600000
+        initial-delay-ms: 120000
+        lock-at-most-for: 10m
+        lock-at-least-for: 0s
   bricklink:
     orders:
       sync:
@@ -54,6 +72,53 @@ lego:
           enabled: true
       crawl:
         enabled: false
+      # Off: Reprice replaces these jobs. Their settings are what Reprice decides and guards with (the
+      # defaults in application.yml are far looser), so keep them in step with application-sandbox.yml.
+      decision:
+        enabled: false
+        bricklink-external-service-id: 2
+        priceable-listing-status-codes:
+          - ACTIVE
+          - DRAFT
+        active-listing-status-code: ACTIVE
+        batch-size: 100
+        maximum-absolute-change-per-run: 50.00  # matches apply-readiness maximum-absolute-delta
+        require-current-snapshot: true
+        scheduled:
+          enabled: false
+      apply-readiness:
+        enabled: false
+        bricklink-external-service-id: 2
+        priceable-listing-status-codes:
+          - ACTIVE
+          - DRAFT
+        active-listing-status-code: ACTIVE
+        proposed-decision-status-code: PROPOSED
+        batch-size: 100
+        minimum-price-delta: 0.01
+        minimum-delta:
+          enabled: true
+          percent: 0.02
+        minimum-confidence: 0.75
+        minimum-comparable-count: 3
+        maximum-absolute-delta: 50.00
+        maximum-percent-delta: 0.50
+        blocked-reason-codes:
+          - NO_CURRENT_COMPARABLES
+          - NO_EXACT_COMPARABLES
+          - NO_CURRENT_SNAPSHOT
+        apply-eligible-reason-codes:
+          - MARKET_POSITION
+          - SINGLE_COMPARABLE_DISCOUNTED
+          - TWO_COMPARABLES_WEIGHTED
+          - BELOW_MIN_PRICE_CLAMPED
+          - ABOVE_MAX_PRICE_CLAMPED
+        scheduled:
+          enabled: false
+      apply:
+        enabled: false
+        scheduled:
+          enabled: false
     marketplace-sync:
       enabled: true
       mode: APPLY
