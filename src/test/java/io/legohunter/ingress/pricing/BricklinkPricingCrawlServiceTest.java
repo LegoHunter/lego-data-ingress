@@ -2,6 +2,7 @@ package io.legohunter.ingress.pricing;
 
 import com.bricklink.api.ajax.BricklinkAjaxClient;
 import com.bricklink.api.ajax.exception.BricklinkAjaxClientException;
+import com.bricklink.api.ajax.exception.BricklinkAjaxServerException;
 import com.bricklink.api.ajax.model.v1.Item;
 import com.bricklink.api.ajax.model.v1.ItemForSale;
 import com.bricklink.api.ajax.support.CatalogItemsForSaleResult;
@@ -21,6 +22,7 @@ import io.legohunter.data.dto.MarketplaceItem;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.web.client.ResourceAccessException;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -246,7 +248,7 @@ class BricklinkPricingCrawlServiceTest {
         givenClaimed(target);
         givenResolvedMarketplaceItem("4997");
         when(ajaxClient.catalogItemsForSaleByInternalItemId(4997, "N", 500))
-                .thenThrow(new IllegalStateException("302 to maintenance.bricklink.com"));
+                .thenThrow(new BricklinkAjaxClientException(404, "GET catalogifs.ajax?itemid=4997 returned [Not Found]"));
 
         BricklinkPricingCrawlResult result = service.runOnce();
 
@@ -255,9 +257,9 @@ class BricklinkPricingCrawlServiceTest {
         assertThat(result.snapshotsWritten()).isZero();
         CrawlAttempt attempt = finishedAttempt();
         assertThat(attempt.getOutcomeCode()).isEqualTo("FAILED_HTTP");
-        assertThat(attempt.getErrorMessage()).contains("maintenance");
+        assertThat(attempt.getErrorMessage()).contains("Not Found");
         assertThat(target.getConsecutiveFailureCount()).isOne();
-        assertThat(target.getLastErrorMessage()).contains("maintenance");
+        assertThat(target.getLastErrorMessage()).contains("Not Found");
         assertThat(target.getTargetStatusCode()).isEqualTo("IDLE");
         assertThat(target.getNextDueAt()).isEqualTo(NOW.plusHours(6));
         verify(marketSnapshotDao, never()).insert(any());
@@ -275,6 +277,77 @@ class BricklinkPricingCrawlServiceTest {
 
         assertThat(target.getConsecutiveFailureCount()).isEqualTo(3);
         assertThat(target.getNextDueAt()).isEqualTo(NOW.plusDays(7));
+    }
+
+    @Test
+    void aMaintenanceRedirectIsAnOutageThatNeitherCountsAgainstTheTargetNorTouchesTheRestOfTheQueue() {
+        // The November 2026 maintenance window: every catalogifs call was redirected to maintenance.bricklink.com.
+        properties.setRetryBackoff(Duration.ofHours(6));
+        properties.setMaxAttempts(3);
+        CrawlTarget first = dueTarget(20L, "N", 2);
+        CrawlTarget second = dueTarget(21L, "U", 0);
+        givenClaimed(first, second);
+        givenResolvedMarketplaceItem("4997");
+        when(ajaxClient.catalogItemsForSaleByInternalItemId(4997, "N", 500)).thenThrow(new BricklinkAjaxClientException(302,
+                "GET https://www.bricklink.com/ajax/clone/catalogifs.ajax?itemid=4997 returned [Unexpected redirect to "
+                        + "[https://maintenance.bricklink.com:443/recovery.html]. Response body: []]"));
+
+        BricklinkPricingCrawlResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("OUTAGE");
+        assertThat(result.failedFetches()).isZero();
+        assertThat(result.targetsClaimed()).isOne();
+        CrawlAttempt attempt = finishedAttempt();
+        assertThat(attempt.getOutcomeCode()).isEqualTo("FAILED_OUTAGE");
+        assertThat(attempt.getErrorMessage()).contains("maintenance.bricklink.com");
+        // Two failures before the outage stay two: a third would have pushed the target a full cadence back.
+        assertThat(first.getConsecutiveFailureCount()).isEqualTo(2);
+        assertThat(first.getNextDueAt()).isEqualTo(NOW.plusHours(6));
+        assertThat(first.getTargetStatusCode()).isEqualTo("IDLE");
+        assertThat(first.getLastErrorMessage()).contains("maintenance.bricklink.com");
+        // The run stops: the next due target is not even claimed.
+        verify(crawlTargetDao, never()).claim(eq(21L), any(), any(), any());
+        verify(ajaxClient, never()).catalogItemsForSaleByInternalItemId(eq(4997), eq("U"), anyInt());
+    }
+
+    @Test
+    void serverErrorsBlocksAndTimeoutsAreOutagesToo() {
+        properties.setRetryBackoff(Duration.ofHours(6));
+        for (RuntimeException failure : List.of(
+                new BricklinkAjaxServerException(503, "GET catalogifs.ajax returned [Service Unavailable]"),
+                new BricklinkAjaxClientException(429, "GET catalogifs.ajax returned [Too Many Requests]"),
+                new BricklinkAjaxClientException(403, "GET catalogifs.ajax returned [Forbidden]"),
+                new ResourceAccessException("I/O error on GET request: Read timed out"))) {
+            setUp();
+            properties.setRetryBackoff(Duration.ofHours(6));
+            CrawlTarget target = dueTarget(20L, "N", 1);
+            givenClaimed(target);
+            givenResolvedMarketplaceItem("4997");
+            when(ajaxClient.catalogItemsForSaleByInternalItemId(4997, "N", 500)).thenThrow(failure);
+
+            BricklinkPricingCrawlResult result = service.runOnce();
+
+            assertThat(result.outcome()).as(failure.getMessage()).isEqualTo("OUTAGE");
+            assertThat(finishedAttempt().getOutcomeCode()).as(failure.getMessage()).isEqualTo("FAILED_OUTAGE");
+            assertThat(target.getConsecutiveFailureCount()).as(failure.getMessage()).isOne();
+            assertThat(target.getNextDueAt()).as(failure.getMessage()).isEqualTo(NOW.plusHours(6));
+        }
+    }
+
+    @Test
+    void anOutageWhileResolvingTheIdItemIsAnOutageNotAnItemFailure() {
+        properties.setRetryBackoff(Duration.ofHours(6));
+        CrawlTarget target = dueTarget(20L, "N", 0);
+        givenClaimed(target);
+        when(marketplaceItemDao.findByMarketplaceCodeAndCanonicalItemId("BRICKLINK", 7)).thenReturn(Optional.empty());
+        when(ajaxClient.findCatalogItem("6390-1", "S")).thenThrow(new BricklinkAjaxClientException(302,
+                "GET searchproduct.ajax returned [Unexpected redirect to [https://maintenance.bricklink.com]. Response body: []]"));
+
+        BricklinkPricingCrawlResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("OUTAGE");
+        assertThat(finishedAttempt().getOutcomeCode()).isEqualTo("FAILED_OUTAGE");
+        assertThat(target.getConsecutiveFailureCount()).isZero();
     }
 
     @Test
@@ -396,10 +469,12 @@ class BricklinkPricingCrawlServiceTest {
                 .build();
     }
 
-    private void givenClaimed(CrawlTarget target) {
-        when(crawlTargetDao.findDue(eq("BRICKLINK"), any(), anyInt())).thenReturn(List.of(target));
-        when(crawlTargetDao.claim(eq(target.getCrawlTargetId()), eq("crawler-test"), any(), any())).thenReturn(true);
-        when(crawlTargetDao.findByCrawlTargetId(target.getCrawlTargetId())).thenReturn(Optional.of(target));
+    private void givenClaimed(CrawlTarget... targets) {
+        when(crawlTargetDao.findDue(eq("BRICKLINK"), any(), anyInt())).thenReturn(List.of(targets));
+        for (CrawlTarget target : targets) {
+            when(crawlTargetDao.claim(eq(target.getCrawlTargetId()), eq("crawler-test"), any(), any())).thenReturn(true);
+            when(crawlTargetDao.findByCrawlTargetId(target.getCrawlTargetId())).thenReturn(Optional.of(target));
+        }
     }
 
     private void givenResolvedMarketplaceItem(String idItem) {
