@@ -242,6 +242,53 @@ class BricklinkInventoryReconciliationServiceTest {
         return report.drifts().getFirst();
     }
 
+    @Test
+    void reportsALotWhoseDescriptionDoesNotShowTheListingsTitle() {
+        // The SANDBOX lots created before listings had titles: the lot's Description is empty.
+        MarketplaceListing titled = listing(956, "70.14");
+        titled.setTitle("Summer Cottage");
+        arrangeListings(titled);
+        arrangeBricklink(mapping(956, 1001));
+        arrangeStore(lot(1001, 70.14, 956));
+
+        BricklinkInventoryReconciliationReport report = service.reconcile();
+
+        BricklinkInventoryReconciliationReport.Drift drift = assertSingleDrift(report, BricklinkInventoryDriftType.DESCRIPTION_DRIFT, 956, 1001L);
+        assertThat(drift.expected()).isEqualTo("Summer Cottage");
+        assertThat(drift.actual()).isEqualTo("(empty)");
+    }
+
+    @Test
+    void anEscapedDescriptionMatchesAndAListingWithoutTitleIsNeverDescriptionDrift() {
+        MarketplaceListing escaped = listing(958, "234.51");
+        escaped.setTitle("Metro Park & Service Tower");
+        MarketplaceListing untitled = listing(959, "99.99");
+        arrangeListings(escaped, untitled);
+        arrangeBricklink(mapping(958, 1001), mapping(959, 1002));
+        Inventory escapedLot = lot(1001, 234.51, 958);
+        escapedLot.setDescription("Metro Park &amp; Service Tower");
+        Inventory lotWithText = lot(1002, 99.99, 959);
+        lotWithText.setDescription("Typed on BrickLink by hand");
+        arrangeStore(escapedLot, lotWithText);
+
+        BricklinkInventoryReconciliationReport report = service.reconcile();
+
+        assertThat(report.outcome()).isEqualTo("IN_SYNC");
+    }
+
+    @Test
+    void doesNotReportDescriptionDriftWhileAChangeIsInFlight() {
+        MarketplaceListing titled = listing(956, "70.14");
+        titled.setTitle("Summer Cottage");
+        arrangeListings(titled);
+        arrangeBricklink(mapping(956, 1001));
+        arrangeStore(lot(1001, 70.14, 956));
+        when(syncRequestDao.findByMarketplaceListingId(956)).thenReturn(Set.of(
+                MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(1L).syncRequestStatusCode("PENDING").build()));
+
+        assertThat(service.reconcile().outcome()).isEqualTo("IN_SYNC");
+    }
+
     private void arrangeListings(MarketplaceListing... listings) {
         when(marketplaceListingDao.findAll()).thenReturn(Set.of(listings));
     }

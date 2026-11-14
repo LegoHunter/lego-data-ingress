@@ -307,7 +307,7 @@ class BricklinkMarketplaceSyncServiceTest {
         Inventory before = remoteInventory("Human notes " + systemBlock());
         arrangeRequestAndContext(before);
         when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
-                eq("PENDING"), eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")), any(ZonedDateTime.class), eq(5)))
+                eq("PENDING"), eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE", "DESCRIPTION_UPDATE")), any(ZonedDateTime.class), eq(5)))
                 .thenReturn(Set.of(manual));
         MarketplaceListingSyncRequest claimedManual = claimedRequest();
         claimedManual.setPricingDecisionId(null);
@@ -329,7 +329,7 @@ class BricklinkMarketplaceSyncServiceTest {
         manual.setPricingDecisionId(null);
         arrangeRequestAndContext(remoteInventory("Human notes only"));
         when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
-                eq("PENDING"), eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")), any(ZonedDateTime.class), eq(5)))
+                eq("PENDING"), eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE", "DESCRIPTION_UPDATE")), any(ZonedDateTime.class), eq(5)))
                 .thenReturn(Set.of(manual));
         MarketplaceListingSyncRequest claimedManual = claimedRequest();
         claimedManual.setPricingDecisionId(null);
@@ -959,7 +959,7 @@ class BricklinkMarketplaceSyncServiceTest {
     private void arrangeListingCreate(MarketplaceListingSyncRequest request, BricklinkMarketplaceListing mapping) {
         when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
                 eq("PENDING"),
-                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")),
+                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE", "DESCRIPTION_UPDATE")),
                 any(ZonedDateTime.class),
                 eq(5)
         ))
@@ -996,7 +996,7 @@ class BricklinkMarketplaceSyncServiceTest {
     private void arrangeRequestAndContext(Inventory remoteInventory) {
         when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
                 eq("PENDING"),
-                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")),
+                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE", "DESCRIPTION_UPDATE")),
                 any(ZonedDateTime.class),
                 eq(5)
         ))
@@ -1026,7 +1026,7 @@ class BricklinkMarketplaceSyncServiceTest {
     private void arrangeListingCreateRequestAndContext() {
         when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
                 eq("PENDING"),
-                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE")),
+                eq(Set.of("PRICE_UPDATE", "LISTING_CREATE", "LISTING_DELETE", "DESCRIPTION_UPDATE")),
                 any(ZonedDateTime.class),
                 eq(5)
         ))
@@ -1169,5 +1169,189 @@ class BricklinkMarketplaceSyncServiceTest {
 
     private String systemBlock() {
         return "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=100; ITEM_INVENTORY_UUID=inventory-uuid [SYSTEM_END]";
+    }
+
+    // ---- DESCRIPTION_UPDATE (HOMELAB-80) ----
+
+    @Test
+    void descriptionUpdateWritesOnlyTheDescriptionAndConfirmsItOnReadBack() {
+        applyDescriptionUpdateAsSandbox();
+        Inventory before = remoteInventory("Human notes " + systemBlock());
+        arrangeDescriptionRequest(titledListing("Metro Park & Service Tower", null), before);
+        // BrickLink hands the text back HTML-escaped; that still counts as a match.
+        arrangeDescriptionReadBack(before, after -> after.setDescription("Metro Park &amp; Service Tower"));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.remoteUpdated()).isOne();
+        assertThat(result.remoteVerified()).isOne();
+        assertThat(result.blocked()).isZero();
+        ArgumentCaptor<Inventory> written = ArgumentCaptor.forClass(Inventory.class);
+        verify(bricklinkRestClient).updateInventory(eq(12345L), written.capture());
+        assertThat(written.getValue().getDescription()).isEqualTo("Metro Park & Service Tower");
+        // Description only (plus the lower-environment stockroom): no price, no remarks, no quantity.
+        assertThat(written.getValue().getRemarks()).isNull();
+        assertThat(written.getValue().getUnit_price()).isNull();
+        assertThat(written.getValue().getQuantity()).isNull();
+        assertThat(written.getValue().getIs_stock_room()).isTrue();
+        assertThat(written.getValue().getStock_room_id()).isEqualTo("C");
+
+        MarketplaceListingSyncRequest finished = lastRequestUpdate();
+        assertThat(finished.getSyncRequestStatusCode()).isEqualTo("SUCCEEDED");
+        assertThat(finished.getRemoteVisibilityContainerId()).isEqualTo("C");
+        BricklinkMarketplaceListing verified = lastBricklinkListingUpdate();
+        assertThat(verified.getLastRemoteSafetyStatusCode()).isEqualTo("VERIFIED");
+        assertThat(verified.getEnvironmentCode()).isEqualTo("sandbox");
+        // The remarks were not written, so their recorded hash is left alone.
+        assertThat(verified.getSystemRemarksHash()).isNull();
+        verify(marketplaceListingDao, never()).update(any());
+        verify(pricingDecisionDao, never()).transitionStatus(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    void aListingDescriptionWinsOverItsTitle() {
+        applyDescriptionUpdateAsSandbox();
+        Inventory before = remoteInventory("Human notes " + systemBlock());
+        arrangeDescriptionRequest(titledListing("Main Street", "Complete, with box and instructions"), before);
+        arrangeDescriptionReadBack(before, after -> { });
+
+        service.runOnce();
+
+        ArgumentCaptor<Inventory> written = ArgumentCaptor.forClass(Inventory.class);
+        verify(bricklinkRestClient).updateInventory(eq(12345L), written.capture());
+        assertThat(written.getValue().getDescription()).isEqualTo("Complete, with box and instructions");
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
+    void aLotThatAlreadyShowsTheDescriptionIsConfirmedWithoutAWrite() {
+        applyDescriptionUpdateAsSandbox();
+        Inventory before = remoteInventory("Human notes " + systemBlock());
+        before.setDescription("Main Street");
+        arrangeDescriptionRequest(titledListing("Main Street", null), before);
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        verify(bricklinkRestClient, never()).updateInventory(anyLong(), any());
+        assertThat(result.remoteUpdated()).isZero();
+        assertThat(result.remoteVerified()).isOne();
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
+    void aDescriptionUpdateIsBlockedWhenTheReadBackShowsOtherText() {
+        applyDescriptionUpdateAsSandbox();
+        Inventory before = remoteInventory("Human notes " + systemBlock());
+        arrangeDescriptionRequest(titledListing("Main Street", null), before);
+        arrangeDescriptionReadBack(before, after -> after.setDescription("Something else"));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isOne();
+        MarketplaceListingSyncRequest blocked = lastRequestUpdate();
+        assertThat(blocked.getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        assertThat(blocked.getLastErrorMessage()).startsWith("REMOTE_DESCRIPTION_MISMATCH");
+    }
+
+    @Test
+    void aDescriptionUpdateIsBlockedWhenTheRemarksChangedUnderIt() {
+        applyDescriptionUpdateAsSandbox();
+        Inventory before = remoteInventory("Human notes " + systemBlock());
+        arrangeDescriptionRequest(titledListing("Main Street", null), before);
+        arrangeDescriptionReadBack(before, after -> after.setRemarks("Edited by hand"));
+
+        service.runOnce();
+
+        assertThat(lastRequestUpdate().getLastErrorMessage()).startsWith("REMOTE_REMARKS_MISMATCH");
+    }
+
+    @Test
+    void aDescriptionUpdateNeverWritesToALotThatFailsTheSafetyCheck() {
+        applyDescriptionUpdateAsSandbox();
+        arrangeDescriptionRequest(titledListing("Main Street", null), remoteInventory("No system block here"));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        verify(bricklinkRestClient, never()).updateInventory(anyLong(), any());
+        assertThat(result.blocked()).isOne();
+        assertThat(lastRequestUpdate().getLastErrorMessage()).startsWith("REMOTE_SYSTEM_BLOCK_MISSING");
+    }
+
+    @Test
+    void aListingWithNoTitleOrDescriptionHasNothingToSend() {
+        applyDescriptionUpdateAsSandbox();
+        arrangeDescriptionRequest(titledListing(null, "  "), remoteInventory("Human notes " + systemBlock()));
+
+        service.runOnce();
+
+        verify(bricklinkRestClient, never()).updateInventory(anyLong(), any());
+        assertThat(lastRequestUpdate().getLastErrorMessage()).startsWith("NO_LISTING_DESCRIPTION");
+    }
+
+    @Test
+    void aDescriptionUpdateInDryRunWritesNothing() {
+        properties.setEnvironmentCode("sandbox");
+        arrangeDescriptionRequest(titledListing("Main Street", null), remoteInventory("Human notes " + systemBlock()));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.dryRunVerified()).isOne();
+        verify(bricklinkRestClient, never()).updateInventory(anyLong(), any());
+        verify(marketplaceListingSyncRequestDao, never()).claim(anyLong(), any(), any(), any());
+    }
+
+    private void applyDescriptionUpdateAsSandbox() {
+        applyPriceUpdateAsSandbox();
+        MarketplaceListingSyncRequest claimed = descriptionRequest();
+        claimed.setSyncRequestStatusCode("CLAIMED");
+        claimed.setAttemptCount(1);
+        when(marketplaceListingSyncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(claimed));
+    }
+
+    private void arrangeDescriptionRequest(MarketplaceListing listing, Inventory remoteInventory) {
+        arrangeRequestAndContext(remoteInventory);
+        when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
+                eq("PENDING"), any(), any(ZonedDateTime.class), eq(5)))
+                .thenReturn(Set.of(descriptionRequest()));
+        when(marketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(listing));
+    }
+
+    /** Before the write the lot is {@code before}; after it, the written description, changed further by {@code tamper}. */
+    private void arrangeDescriptionReadBack(Inventory before, java.util.function.Consumer<Inventory> tamper) {
+        Inventory[] written = new Inventory[1];
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class))).thenAnswer(invocation -> {
+            written[0] = invocation.getArgument(1);
+            return null;
+        });
+        when(bricklinkRestClient.getInventories(12345L)).thenAnswer(invocation -> {
+            if (written[0] == null) {
+                return resource(before);
+            }
+            Inventory after = remoteInventory(before.getRemarks());
+            after.setDescription(written[0].getDescription());
+            tamper.accept(after);
+            return resource(after);
+        });
+    }
+
+    private MarketplaceListingSyncRequest descriptionRequest() {
+        return MarketplaceListingSyncRequest.builder()
+                .marketplaceListingSyncRequestId(900L)
+                .marketplaceListingId(100)
+                .listingExternalServiceId(2)
+                .syncRequestTypeCode("DESCRIPTION_UPDATE")
+                .syncRequestStatusCode("PENDING")
+                .remoteInventoryId("12345")
+                .attemptCount(0)
+                .maxAttempts(3)
+                .build();
+    }
+
+    private MarketplaceListing titledListing(String title, String description) {
+        MarketplaceListing listing = listing();
+        listing.setTitle(title);
+        listing.setDescription(description);
+        return listing;
     }
 }
