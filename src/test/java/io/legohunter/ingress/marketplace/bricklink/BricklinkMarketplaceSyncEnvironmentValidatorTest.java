@@ -1,6 +1,5 @@
 package io.legohunter.ingress.marketplace.bricklink;
 
-import io.legohunter.ingress.pricing.BricklinkPricingApplyProperties;
 import io.legohunter.lego.data.environment.LegoEnvironmentProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -19,13 +18,13 @@ class BricklinkMarketplaceSyncEnvironmentValidatorTest {
     @ParameterizedTest
     @CsvSource({"sandbox, C", "local, C", "dev, B"})
     void startsWithEachLowerEnvironmentInItsOwnStockroom(String environment, String stockroom) {
-        assertThatCode(() -> validator(lowerEnvironment(environment, stockroom), applyCode(environment), environment(environment, false)).afterPropertiesSet())
+        assertThatCode(() -> validator(lowerEnvironment(environment, stockroom), environment(environment, false)).afterPropertiesSet())
                 .doesNotThrowAnyException();
     }
 
     @Test
     void refusesToStartWithSandboxInStockroomA() {
-        assertThatThrownBy(() -> validator(lowerEnvironment("sandbox", "A"), applyCode("sandbox"), environment("sandbox", false)).afterPropertiesSet())
+        assertThatThrownBy(() -> validator(lowerEnvironment("sandbox", "A"), environment("sandbox", false)).afterPropertiesSet())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Unsafe BrickLink marketplace-sync configuration")
                 .hasMessageNotContaining("HOMELAB")
@@ -34,21 +33,21 @@ class BricklinkMarketplaceSyncEnvironmentValidatorTest {
 
     @Test
     void refusesToStartWithAnUnknownEnvironmentCode() {
-        assertThatThrownBy(() -> validator(lowerEnvironment("sandbx", "B"), applyCode("sandbx"), environment("sandbx", false)).afterPropertiesSet())
+        assertThatThrownBy(() -> validator(lowerEnvironment("sandbx", "B"), environment("sandbx", false)).afterPropertiesSet())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("lego.bricklink.marketplace-sync.environment-code 'sandbx' is not a known environment");
     }
 
     @Test
     void refusesToStartWithoutAStockroomOutsideProd() {
-        assertThatThrownBy(() -> validator(lowerEnvironment("dev", null), applyCode("dev"), environment("dev", false)).afterPropertiesSet())
+        assertThatThrownBy(() -> validator(lowerEnvironment("dev", null), environment("dev", false)).afterPropertiesSet())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("non-prod-stock-room-id must be set for environment 'dev' (expected B)");
     }
 
     @Test
     void refusesToStartWhenMarketplaceSyncThinksItIsNotProdButTheRuntimeIsProd() {
-        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(lowerEnvironment("local", "C"), applyCode("local"), environment("local", true)))
+        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(lowerEnvironment("local", "C"), environment("local", true)))
                 .singleElement().asString()
                 .contains("marketplace-sync.production (false) must equal lego.environment.production (true)");
     }
@@ -57,22 +56,16 @@ class BricklinkMarketplaceSyncEnvironmentValidatorTest {
     void refusesToStartWhenMarketplaceSyncThinksItIsProdButTheRuntimeIsNot() {
         BricklinkMarketplaceSyncProperties marketplaceSync = prod();
 
-        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(marketplaceSync, applyCode("prod"), environment("prod", false)))
+        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(marketplaceSync, environment("prod", false)))
                 .singleElement().asString()
                 .contains("marketplace-sync.production (true) must equal lego.environment.production (false)");
     }
 
-    @Test
-    void refusesToStartWhenPricingApplyAndMarketplaceSyncNameDifferentEnvironments() {
-        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(lowerEnvironment("sandbox", "C"), applyCode("local"), environment("sandbox", false)))
-                .singleElement().asString()
-                .contains("lego.bricklink.pricing.apply.environment-code 'local' must equal lego.bricklink.marketplace-sync.environment-code 'sandbox'");
-    }
 
     @Test
     void refusesToStartWhenMarketplaceSyncNamesAnotherEnvironmentThanLegoEnvironment() {
         // lego.environment.code is the one the lego-data starter checked against the database.
-        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(lowerEnvironment("sandbox", "C"), applyCode("sandbox"), environment("dev", false)))
+        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(lowerEnvironment("sandbox", "C"), environment("dev", false)))
                 .singleElement().asString()
                 .contains("lego.bricklink.marketplace-sync.environment-code 'sandbox' must equal lego.environment.code 'dev'");
     }
@@ -82,13 +75,13 @@ class BricklinkMarketplaceSyncEnvironmentValidatorTest {
         BricklinkMarketplaceSyncProperties marketplaceSync = lowerEnvironment("sandbox", "C");
         marketplaceSync.setNonProdRequireStockRoom(false);
 
-        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(marketplaceSync, applyCode("sandbox"), environment("sandbox", false)))
+        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(marketplaceSync, environment("sandbox", false)))
                 .singleElement().asString().contains("non-prod-require-stock-room must be true outside PROD");
     }
 
     @Test
     void prodStartsWithoutANonProdStockroom() {
-        assertThatCode(() -> validator(prod(), applyCode("prod"), environment("prod", true)).afterPropertiesSet())
+        assertThatCode(() -> validator(prod(), environment("prod", true)).afterPropertiesSet())
                 .doesNotThrowAnyException();
     }
 
@@ -97,20 +90,18 @@ class BricklinkMarketplaceSyncEnvironmentValidatorTest {
         BricklinkMarketplaceSyncProperties marketplaceSync = lowerEnvironment("sandbox", "A");
         marketplaceSync.setNonProdRequireStockRoom(false);
 
-        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(marketplaceSync, applyCode("local"), environment("sandbox", true)))
-                .hasSize(4)
+        assertThat(BricklinkMarketplaceSyncEnvironmentValidator.violations(marketplaceSync, environment("sandbox", true)))
+                .hasSize(3)
                 .anySatisfy(v -> assertThat(v).contains("must equal lego.environment.production"))
-                .anySatisfy(v -> assertThat(v).contains("pricing.apply.environment-code"))
                 .anySatisfy(v -> assertThat(v).contains("non-prod-require-stock-room must be true"))
                 .anySatisfy(v -> assertThat(v).contains("must not be A"));
     }
 
     private static BricklinkMarketplaceSyncEnvironmentValidator validator(
             BricklinkMarketplaceSyncProperties marketplaceSync,
-            BricklinkPricingApplyProperties pricingApply,
             LegoEnvironmentProperties environment
     ) {
-        return new BricklinkMarketplaceSyncEnvironmentValidator(marketplaceSync, pricingApply, environment);
+        return new BricklinkMarketplaceSyncEnvironmentValidator(marketplaceSync, environment);
     }
 
     private static BricklinkMarketplaceSyncProperties lowerEnvironment(String environmentCode, String stockroom) {
@@ -127,11 +118,6 @@ class BricklinkMarketplaceSyncEnvironmentValidatorTest {
         return properties;
     }
 
-    private static BricklinkPricingApplyProperties applyCode(String environmentCode) {
-        BricklinkPricingApplyProperties properties = new BricklinkPricingApplyProperties();
-        properties.setEnvironmentCode(environmentCode);
-        return properties;
-    }
 
     private static LegoEnvironmentProperties environment(String code, boolean production) {
         LegoEnvironmentProperties properties = new LegoEnvironmentProperties();

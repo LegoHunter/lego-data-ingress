@@ -15,7 +15,6 @@ class BricklinkPricingMaintenanceReportControllerTest {
     @Test
     void maintenanceReportReturnsServiceReport() {
         BricklinkPricingMaintenanceReportService service = mock(BricklinkPricingMaintenanceReportService.class);
-        BricklinkPricingApplyPreviewService applyPreviewService = mock(BricklinkPricingApplyPreviewService.class);
         BricklinkPricingMaintenanceReport expected = new BricklinkPricingMaintenanceReport(
                 ZonedDateTime.parse("2026-06-27T12:00:00Z"),
                 true,
@@ -24,7 +23,7 @@ class BricklinkPricingMaintenanceReportControllerTest {
         );
         when(service.buildReport(25)).thenReturn(expected);
 
-        BricklinkPricingMaintenanceReportController controller = new BricklinkPricingMaintenanceReportController(service, applyPreviewService);
+        BricklinkPricingMaintenanceReportController controller = new BricklinkPricingMaintenanceReportController(service);
         ResponseEntity<BricklinkPricingMaintenanceReport> response = controller.maintenanceReport(25);
 
         assertThat(response.getBody()).isSameAs(expected);
@@ -43,59 +42,11 @@ class BricklinkPricingMaintenanceReportControllerTest {
         );
         when(service.buildDataQualityReport(25)).thenReturn(expected);
 
-        BricklinkPricingMaintenanceReportController controller = new BricklinkPricingMaintenanceReportController(
-                service,
-                mock(BricklinkPricingApplyPreviewService.class)
-        );
+        BricklinkPricingMaintenanceReportController controller = new BricklinkPricingMaintenanceReportController(service);
         ResponseEntity<BricklinkPricingDataQualityReport> response = controller.dataQualityReport(25);
 
         assertThat(response.getBody()).isSameAs(expected);
         verify(service).buildDataQualityReport(25);
     }
 
-    @Test
-    void applyPreviewReturnsServiceReport() {
-        BricklinkPricingMaintenanceReportService maintenanceService = mock(BricklinkPricingMaintenanceReportService.class);
-        BricklinkPricingApplyPreviewService applyPreviewService = mock(BricklinkPricingApplyPreviewService.class);
-        BricklinkPricingApplyPreviewReport expected = new BricklinkPricingApplyPreviewReport(
-                ZonedDateTime.parse("2026-07-06T12:00:00Z"),
-                true,
-                "READY_TO_APPLY",
-                null,
-                new BricklinkPricingApplyPreviewSummary(0, 0, 0, java.util.Map.of(), java.util.Map.of()),
-                Set.of()
-        );
-        when(applyPreviewService.buildPreview("ready_to_apply", null, 50)).thenReturn(expected);
-
-        BricklinkPricingMaintenanceReportController controller = new BricklinkPricingMaintenanceReportController(
-                maintenanceService,
-                applyPreviewService
-        );
-        ResponseEntity<BricklinkPricingApplyPreviewReport> response = controller.applyPreview("ready_to_apply", null, 50);
-
-        assertThat(response.getBody()).isSameAs(expected);
-        verify(applyPreviewService).buildPreview("ready_to_apply", null, 50);
-    }
-
-    @Test
-    void dryRunApplySelectionReturnsServiceReport() {
-        BricklinkPricingMaintenanceReportService maintenanceService = mock(BricklinkPricingMaintenanceReportService.class);
-        BricklinkPricingApplyPreviewService applyPreviewService = mock(BricklinkPricingApplyPreviewService.class);
-        BricklinkPricingDryRunApplySelectionReport expected = new BricklinkPricingDryRunApplySelectionReport(
-                ZonedDateTime.parse("2026-07-06T12:00:00Z"),
-                true,
-                0,
-                Set.of()
-        );
-        when(applyPreviewService.buildDryRunApplySelection(10)).thenReturn(expected);
-
-        BricklinkPricingMaintenanceReportController controller = new BricklinkPricingMaintenanceReportController(
-                maintenanceService,
-                applyPreviewService
-        );
-        ResponseEntity<BricklinkPricingDryRunApplySelectionReport> response = controller.dryRunApplySelection(10);
-
-        assertThat(response.getBody()).isSameAs(expected);
-        verify(applyPreviewService).buildDryRunApplySelection(10);
-    }
 }

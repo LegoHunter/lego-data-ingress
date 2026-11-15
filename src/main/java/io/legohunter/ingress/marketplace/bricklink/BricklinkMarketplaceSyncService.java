@@ -1,5 +1,7 @@
 package io.legohunter.ingress.marketplace.bricklink;
 
+import io.legohunter.ingress.pricing.PricingDecisionStatus;
+import io.legohunter.ingress.marketplace.MarketplaceSyncCodes;
 import com.bricklink.api.rest.client.BricklinkRestClient;
 import com.bricklink.api.rest.exception.BricklinkClientException;
 import com.bricklink.api.rest.model.v1.BricklinkResource;
@@ -15,7 +17,6 @@ import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.MarketplaceListingSyncRequest;
 import io.legohunter.data.enums.LegoEnvironment;
 import io.legohunter.ingress.marketplace.MarketplaceSyncPort;
-import io.legohunter.ingress.pricing.BricklinkPricingApplyService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -451,8 +452,8 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
         }
         if (pricingDecisionDao.transitionStatus(
                 request.getPricingDecisionId(),
-                BricklinkPricingApplyService.STATUS_ACCEPTED,
-                BricklinkPricingApplyService.STATUS_APPLIED,
+                PricingDecisionStatus.ACCEPTED,
+                PricingDecisionStatus.APPLIED,
                 now()
         ).isEmpty()) {
             log.warn(
@@ -475,8 +476,8 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
         }
         if (pricingDecisionDao.transitionStatus(
                 request.getPricingDecisionId(),
-                BricklinkPricingApplyService.STATUS_ACCEPTED,
-                BricklinkPricingApplyService.STATUS_SYNC_FAILED,
+                PricingDecisionStatus.ACCEPTED,
+                PricingDecisionStatus.SYNC_FAILED,
                 null
         ).isEmpty()) {
             log.warn(
@@ -1058,7 +1059,7 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
 
         updateCreateSafetyMetadata(context.bricklinkListing(), safety, verifiedRemoteInventory);
         request.setRemoteInventoryId(remoteInventoryId.toString());
-        request.setRemoteVisibilityScopeCode(safety.stockRoom() ? BricklinkPricingApplyService.REMOTE_SCOPE_STOCKROOM : BricklinkPricingApplyService.REMOTE_SCOPE_PUBLIC);
+        request.setRemoteVisibilityScopeCode(safety.stockRoom() ? MarketplaceSyncCodes.REMOTE_SCOPE_STOCKROOM : MarketplaceSyncCodes.REMOTE_SCOPE_PUBLIC);
         request.setRemoteVisibilityContainerId(safety.stockRoomId());
         request.setRemoteIsPubliclyAvailable(safety.publiclyAvailable());
     }
@@ -1126,13 +1127,13 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
         if (remoteInventory == null) {
             // No read-back to go by: a non-PROD lot is always a stockroom lot; otherwise keep what was requested.
             if (properties.nonProdEnvironment()) {
-                request.setRemoteVisibilityScopeCode(BricklinkPricingApplyService.REMOTE_SCOPE_STOCKROOM);
+                request.setRemoteVisibilityScopeCode(MarketplaceSyncCodes.REMOTE_SCOPE_STOCKROOM);
                 request.setRemoteVisibilityContainerId(properties.effectiveNonProdStockRoomId());
                 request.setRemoteIsPubliclyAvailable(false);
             }
         } else {
             boolean stockRoom = Boolean.TRUE.equals(remoteInventory.getIs_stock_room());
-            request.setRemoteVisibilityScopeCode(stockRoom ? BricklinkPricingApplyService.REMOTE_SCOPE_STOCKROOM : BricklinkPricingApplyService.REMOTE_SCOPE_PUBLIC);
+            request.setRemoteVisibilityScopeCode(stockRoom ? MarketplaceSyncCodes.REMOTE_SCOPE_STOCKROOM : MarketplaceSyncCodes.REMOTE_SCOPE_PUBLIC);
             request.setRemoteVisibilityContainerId(stockRoom ? remoteInventory.getStock_room_id() : null);
             request.setRemoteIsPubliclyAvailable(!stockRoom);
         }

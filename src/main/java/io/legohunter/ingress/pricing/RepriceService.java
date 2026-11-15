@@ -1,5 +1,6 @@
 package io.legohunter.ingress.pricing;
 
+import io.legohunter.ingress.marketplace.MarketplaceSyncCodes;
 import io.legohunter.data.dao.BricklinkMarketplaceListingDao;
 import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
@@ -45,13 +46,11 @@ import java.util.Set;
 @Slf4j
 @ConditionalOnProperty(prefix = "lego.pricing.reprice", name = "enabled", havingValue = "true")
 public class RepriceService {
-    public static final String STATUS_BLOCKED = "BLOCKED";
     static final String JOB_NAME = "RepriceJob";
     private static final Set<String> OPEN_SYNC_STATUSES = Set.of("PENDING", "CLAIMED");
 
     private final RepriceProperties properties;
-    private final BricklinkPricingDecisionProperties decisionProperties;
-    private final BricklinkPricingApplyReadinessProperties guardProperties;
+    private final RepriceGuardProperties guardProperties;
     private final BricklinkMarketplaceSyncProperties marketplaceSyncProperties;
     private final BricklinkPricingDecider decider;
     private final MarketplaceListingDao marketplaceListingDao;
@@ -65,10 +64,10 @@ public class RepriceService {
         long start = System.currentTimeMillis();
         RepriceMode mode = properties.effectiveMode();
         Set<MarketplaceListing> listings = marketplaceListingDao.findPricingDecisionCandidatesByListingExternalServiceIdAndListingStatusCodes(
-                decisionProperties.getBricklinkExternalServiceId(),
-                decisionProperties.effectivePriceableListingStatusCodes(),
+                properties.getBricklinkExternalServiceId(),
+                properties.effectivePriceableListingStatusCodes(),
                 properties.effectiveBatchSize(),
-                decisionProperties.isRequireCurrentSnapshot()
+                properties.isRequireCurrentSnapshot()
         );
         if (listings.isEmpty()) {
             return RepriceResult.noWork(mode, elapsedMillis(start));
@@ -107,7 +106,7 @@ public class RepriceService {
         }
 
         PricingDecision decision = decider.decide(listing);
-        if (!BricklinkPricingDecider.STATUS_PROPOSED.equals(decision.getDecisionStatusCode())) {
+        if (!PricingDecisionStatus.PROPOSED.equals(decision.getDecisionStatusCode())) {
             pricingDecisionDao.insert(decision);
             logDecision(listing, decision, null);
             return new Outcome(decision.getDecisionStatusCode(), null);
@@ -122,32 +121,32 @@ public class RepriceService {
         decision.setGuardReasonCode(guard.reasonCode());
 
         if (!guard.isPassed()) {
-            decision.setDecisionStatusCode(STATUS_BLOCKED);
+            decision.setDecisionStatusCode(PricingDecisionStatus.BLOCKED);
             pricingDecisionDao.insert(decision);
             logDecision(listing, decision, null);
-            return new Outcome(STATUS_BLOCKED, null);
+            return new Outcome(PricingDecisionStatus.BLOCKED, null);
         }
         return switch (mode) {
             case DRY_RUN -> {
                 pricingDecisionDao.insert(decision);
                 logDecision(listing, decision, null);
-                yield new Outcome(BricklinkPricingDecider.STATUS_PROPOSED, null);
+                yield new Outcome(PricingDecisionStatus.PROPOSED, null);
             }
             case APPLY_LOCAL_ONLY -> {
                 transactions.executeWithoutResult(status -> {
                     ZonedDateTime now = now();
-                    decision.setDecisionStatusCode(BricklinkPricingApplyService.STATUS_APPLIED);
+                    decision.setDecisionStatusCode(PricingDecisionStatus.APPLIED);
                     decision.setAppliedAt(now);
                     pricingDecisionDao.insert(decision);
                     updateLocalPrice(listing, decision, now);
                 });
                 logDecision(listing, decision, null);
-                yield new Outcome(BricklinkPricingApplyService.STATUS_APPLIED, null);
+                yield new Outcome(PricingDecisionStatus.APPLIED, null);
             }
             case APPLY -> {
                 MarketplaceListingSyncRequest request = transactions.execute(status -> accept(listing, decision, bricklinkListing, hasRemoteLot, guard));
                 logDecision(listing, decision, request);
-                yield new Outcome(BricklinkPricingApplyService.STATUS_ACCEPTED, request.getMarketplaceListingSyncRequestId());
+                yield new Outcome(PricingDecisionStatus.ACCEPTED, request.getMarketplaceListingSyncRequestId());
             }
         };
     }
@@ -164,14 +163,14 @@ public class RepriceService {
             boolean hasRemoteLot,
             RepriceGuard.Result guard
     ) {
-        decision.setDecisionStatusCode(BricklinkPricingApplyService.STATUS_ACCEPTED);
+        decision.setDecisionStatusCode(PricingDecisionStatus.ACCEPTED);
         pricingDecisionDao.insert(decision);
         MarketplaceListingSyncRequest request;
         if (hasRemoteLot) {
-            request = syncRequest(listing, decision, BricklinkPricingApplyService.SYNC_TYPE_PRICE_UPDATE, guard)
+            request = syncRequest(listing, decision, MarketplaceSyncCodes.TYPE_PRICE_UPDATE, guard)
                     .remoteInventoryId(bricklinkListing.getBricklinkInventoryId().toString())
                     .remoteVisibilityScopeCode(Boolean.TRUE.equals(bricklinkListing.getIsStockRoom())
-                            ? BricklinkPricingApplyService.REMOTE_SCOPE_STOCKROOM : BricklinkPricingApplyService.REMOTE_SCOPE_PUBLIC)
+                            ? MarketplaceSyncCodes.REMOTE_SCOPE_STOCKROOM : MarketplaceSyncCodes.REMOTE_SCOPE_PUBLIC)
                     .remoteVisibilityContainerId(bricklinkListing.getStockRoomId())
                     .remoteIsPubliclyAvailable(!Boolean.TRUE.equals(bricklinkListing.getIsStockRoom()))
                     .appliedLocalAt(null)
@@ -181,9 +180,9 @@ public class RepriceService {
             updateLocalPrice(listing, decision, now());
             boolean nonProd = marketplaceSyncProperties.nonProdEnvironment();
             boolean stockroom = nonProd || (bricklinkListing != null && Boolean.TRUE.equals(bricklinkListing.getIsStockRoom()));
-            request = syncRequest(listing, decision, BricklinkPricingApplyService.SYNC_TYPE_LISTING_CREATE, guard)
+            request = syncRequest(listing, decision, MarketplaceSyncCodes.TYPE_LISTING_CREATE, guard)
                     .remoteInventoryId(null)
-                    .remoteVisibilityScopeCode(stockroom ? BricklinkPricingApplyService.REMOTE_SCOPE_STOCKROOM : BricklinkPricingApplyService.REMOTE_SCOPE_PUBLIC)
+                    .remoteVisibilityScopeCode(stockroom ? MarketplaceSyncCodes.REMOTE_SCOPE_STOCKROOM : MarketplaceSyncCodes.REMOTE_SCOPE_PUBLIC)
                     .remoteVisibilityContainerId(nonProd
                             ? marketplaceSyncProperties.effectiveNonProdStockRoomId()
                             : bricklinkListing == null ? null : bricklinkListing.getStockRoomId())
@@ -206,14 +205,14 @@ public class RepriceService {
     ) {
         return MarketplaceListingSyncRequest.builder()
                 .marketplaceListingId(listing.getMarketplaceListingId())
-                .listingExternalServiceId(decisionProperties.getBricklinkExternalServiceId())
+                .listingExternalServiceId(properties.getBricklinkExternalServiceId())
                 .pricingDecisionId(decision.getPricingDecisionId())
                 .pricingApplyReadinessId(null)
                 .syncRequestTypeCode(type)
-                .syncRequestStatusCode(BricklinkPricingApplyService.SYNC_STATUS_PENDING)
+                .syncRequestStatusCode(MarketplaceSyncCodes.STATUS_PENDING)
                 .syncReasonCode(guard.initialPrice()
-                        ? BricklinkPricingApplyService.SYNC_REASON_INITIAL_PRICE_APPLIED
-                        : BricklinkPricingApplyService.SYNC_REASON_PRICING_DECISION_APPLIED)
+                        ? MarketplaceSyncCodes.REASON_INITIAL_PRICE_APPLIED
+                        : MarketplaceSyncCodes.REASON_PRICING_DECISION_APPLIED)
                 .previousUnitPrice(money(listing.getUnitPrice()))
                 .requestedUnitPrice(money(decision.getFinalPrice()))
                 .currencyCode(decision.getCurrencyCode())
@@ -238,7 +237,7 @@ public class RepriceService {
                 continue;
             }
             Optional<MarketplaceSyncPort> port = syncPorts.orderedStream()
-                    .filter(candidate -> candidate.handles(decisionProperties.getBricklinkExternalServiceId()))
+                    .filter(candidate -> candidate.handles(properties.getBricklinkExternalServiceId()))
                     .findFirst();
             if (port.isEmpty()) {
                 log.info("pricing.reprice.hand_off_deferred marketplaceListingSyncRequestId={} message=marketplace sync is not enabled here; the request stays PENDING",
@@ -345,12 +344,12 @@ public class RepriceService {
             }
             written++;
             switch (outcome.status()) {
-                case BricklinkPricingDecider.STATUS_PROPOSED -> proposed++;
-                case STATUS_BLOCKED -> blocked++;
-                case BricklinkPricingDecider.STATUS_SKIPPED -> skipped++;
-                case BricklinkPricingDecider.STATUS_FAILED -> failed++;
-                case BricklinkPricingApplyService.STATUS_ACCEPTED -> accepted++;
-                case BricklinkPricingApplyService.STATUS_APPLIED -> appliedLocally++;
+                case PricingDecisionStatus.PROPOSED -> proposed++;
+                case PricingDecisionStatus.BLOCKED -> blocked++;
+                case PricingDecisionStatus.SKIPPED -> skipped++;
+                case PricingDecisionStatus.FAILED -> failed++;
+                case PricingDecisionStatus.ACCEPTED -> accepted++;
+                case PricingDecisionStatus.APPLIED -> appliedLocally++;
                 default -> {
                 }
             }

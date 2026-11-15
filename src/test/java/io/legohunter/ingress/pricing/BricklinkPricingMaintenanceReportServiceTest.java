@@ -36,7 +36,7 @@ class BricklinkPricingMaintenanceReportServiceTest {
                 crawlTargetDao,
                 crawlAttemptDao,
                 mock(MarketplaceListingDao.class),
-                new BricklinkPricingCrawlProperties()
+                new RepriceProperties()
         );
 
         BricklinkPricingMaintenanceReport report = service.buildReport(0);
@@ -50,7 +50,7 @@ class BricklinkPricingMaintenanceReportServiceTest {
     @Test
     void buildDataQualityReportUsesPriceableStatusesAndCapsTheLimit() {
         MarketplaceListingDao marketplaceListingDao = mock(MarketplaceListingDao.class);
-        BricklinkPricingCrawlProperties properties = new BricklinkPricingCrawlProperties();
+        RepriceProperties properties = new RepriceProperties();
         properties.setBricklinkExternalServiceId(7);
         properties.setPriceableListingStatusCodes(Set.of("active", "draft"));
 
@@ -97,7 +97,7 @@ class BricklinkPricingMaintenanceReportServiceTest {
                 mock(CrawlTargetDao.class),
                 crawlAttemptDao,
                 mock(MarketplaceListingDao.class),
-                new BricklinkPricingCrawlProperties()
+                new RepriceProperties()
         );
 
         service.buildReport(10_000);

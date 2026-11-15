@@ -1,8 +1,8 @@
 package io.legohunter.ingress.marketplace.bricklink;
 
+import io.legohunter.ingress.marketplace.MarketplaceSyncCodes;
 import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
 import io.legohunter.data.dto.MarketplaceListingSyncRequest;
-import io.legohunter.ingress.pricing.BricklinkPricingApplyService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -68,7 +68,7 @@ public class BricklinkDescriptionBackfillService {
                 .syncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_PENDING)
                 .syncReasonCode(SYNC_REASON)
                 .remoteInventoryId(String.valueOf(drift.bricklinkInventoryId()))
-                .remoteVisibilityScopeCode(nonProd ? BricklinkPricingApplyService.REMOTE_SCOPE_STOCKROOM : null)
+                .remoteVisibilityScopeCode(nonProd ? MarketplaceSyncCodes.REMOTE_SCOPE_STOCKROOM : null)
                 .remoteVisibilityContainerId(nonProd ? properties.effectiveNonProdStockRoomId() : null)
                 .remoteIsPubliclyAvailable(nonProd ? Boolean.FALSE : null)
                 .environmentCode(properties.effectiveEnvironmentCode())

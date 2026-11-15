@@ -40,8 +40,7 @@ import static org.mockito.Mockito.when;
 
 class RepriceServiceTest {
     private final RepriceProperties properties = new RepriceProperties();
-    private final BricklinkPricingDecisionProperties decisionProperties = new BricklinkPricingDecisionProperties();
-    private final BricklinkPricingApplyReadinessProperties guardProperties = new BricklinkPricingApplyReadinessProperties();
+    private final RepriceGuardProperties guardProperties = new RepriceGuardProperties();
     private final BricklinkMarketplaceSyncProperties syncProperties = new BricklinkMarketplaceSyncProperties();
     private final BricklinkPricingDecider decider = mock(BricklinkPricingDecider.class);
     private final MarketplaceListingDao marketplaceListingDao = mock(MarketplaceListingDao.class);
@@ -60,7 +59,7 @@ class RepriceServiceTest {
     void setUp() {
         properties.setEnabled(true);
         properties.setBatchSize(10);
-        decisionProperties.setRequireCurrentSnapshot(true);
+        properties.setRequireCurrentSnapshot(true);
         syncProperties.setEnvironmentCode("sandbox");
         syncProperties.setNonProdStockRoomId("C");
         when(pricingDecisionDao.insert(any())).thenAnswer(invocation -> {
@@ -79,7 +78,7 @@ class RepriceServiceTest {
         when(ports.orderedStream()).thenAnswer(invocation -> Stream.of(port));
         when(port.handles(2)).thenReturn(true);
         when(port.processNow(anyLong())).thenReturn(new MarketplaceSyncPort.HandOff(true, "SUCCEEDED"));
-        service = new RepriceService(properties, decisionProperties, guardProperties, syncProperties, decider,
+        service = new RepriceService(properties, guardProperties, syncProperties, decider,
                 marketplaceListingDao, bricklinkMarketplaceListingDao, pricingDecisionDao, syncRequestDao, ports, transactions);
     }
 
@@ -94,7 +93,7 @@ class RepriceServiceTest {
     }
 
     @Test
-    void selectsCandidatesLikeTheDecisionJobWithTheRepriceBatchSize() {
+    void selectsCandidatesByStatusBatchSizeAndCurrentSnapshot() {
         candidates();
 
         service.runOnce();

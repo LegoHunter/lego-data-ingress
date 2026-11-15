@@ -10,23 +10,19 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
- * Settings for the BrickLink pricing decision job and its market-position formula.
+ * The Reprice market-position formula ({@code lego.pricing.reprice.algorithm}, HOMELAB-66). What to price and when
+ * is in {@link RepriceProperties}; whether a decision may be sent is in {@link RepriceGuardProperties}.
  * See the runbook section "Pricing formula and its levers".
  */
 @Getter
 @Setter
 @Configuration
-@ConfigurationProperties(prefix = "lego.bricklink.pricing.decision")
-public class BricklinkPricingDecisionProperties {
-    private boolean enabled = false;
-    private Integer bricklinkExternalServiceId = 2;
-    private Set<String> priceableListingStatusCodes = Set.of("ACTIVE", "DRAFT");
-    private String activeListingStatusCode = "ACTIVE";
-    private int batchSize = 25;
-    private boolean requireCurrentSnapshot = false;
+@ConfigurationProperties(prefix = "lego.pricing.reprice.algorithm")
+public class RepriceAlgorithmProperties {
+    /** The listing status the weekly step-down applies to. */
+    static final String ACTIVE_LISTING_STATUS = "ACTIVE";
 
     /** How hard to push for a sale. Sets the default target percentile for each market. */
     private Aggression aggression = Aggression.BALANCED;
@@ -50,7 +46,7 @@ public class BricklinkPricingDecisionProperties {
     private BigDecimal maximumChangePerRun = new BigDecimal("0.25");
     /**
      * Largest move from the current price in one run, in listing currency. Null or 0 means no limit. Keep it at or
-     * below apply-readiness {@code maximum-absolute-delta}, so big corrections move in steps instead of being blocked.
+     * below the guard's {@code maximum-absolute-delta}, so big corrections move in steps instead of being blocked.
      */
     private BigDecimal maximumAbsoluteChangePerRun;
     /** Apply the small box and instructions condition-grade adjustments to used items. */
@@ -59,29 +55,6 @@ public class BricklinkPricingDecisionProperties {
     private StepDown stepDown = new StepDown();
     private BigDecimal minimumPrice;
     private BigDecimal maximumPrice;
-    private Scheduled scheduled = new Scheduled();
-
-    public String effectiveActiveListingStatusCode() {
-        if (activeListingStatusCode == null || activeListingStatusCode.isBlank()) {
-            return "ACTIVE";
-        }
-        return activeListingStatusCode.trim().toUpperCase();
-    }
-
-    public Set<String> effectivePriceableListingStatusCodes() {
-        if (priceableListingStatusCodes == null || priceableListingStatusCodes.isEmpty()) {
-            return Set.of(effectiveActiveListingStatusCode());
-        }
-        Set<String> normalizedStatusCodes = priceableListingStatusCodes.stream()
-                .filter(statusCode -> statusCode != null && !statusCode.isBlank())
-                .map(statusCode -> statusCode.trim().toUpperCase())
-                .collect(Collectors.toUnmodifiableSet());
-        return normalizedStatusCodes.isEmpty() ? Set.of(effectiveActiveListingStatusCode()) : normalizedStatusCodes;
-    }
-
-    public int effectiveBatchSize() {
-        return Math.max(1, batchSize);
-    }
 
     public Aggression effectiveAggression() {
         return aggression == null ? Aggression.BALANCED : aggression;
@@ -243,15 +216,5 @@ public class BricklinkPricingDecisionProperties {
         private BigDecimal maximumTotalPercent = new BigDecimal("0.20");
         /** Never below this percentile of the current competing lots (3 or more comparables). */
         private BigDecimal floorPercentile = new BigDecimal("0.10");
-    }
-
-    @Getter
-    @Setter
-    public static class Scheduled {
-        private boolean enabled = false;
-        private long fixedDelayMs = 300_000L;
-        private long initialDelayMs = 30_000L;
-        private String lockAtMostFor = "10m";
-        private String lockAtLeastFor = "0s";
     }
 }
