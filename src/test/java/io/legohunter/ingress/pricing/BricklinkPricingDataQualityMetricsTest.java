@@ -24,7 +24,7 @@ class BricklinkPricingDataQualityMetricsTest {
 
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final MarketplaceListingDao dao = mock(MarketplaceListingDao.class);
-    private final BricklinkPricingCrawlProperties properties = properties();
+    private final RepriceProperties properties = properties();
     private final BricklinkPricingDataQualityMetrics metrics =
             new BricklinkPricingDataQualityMetrics(registry, dao, properties, Clock.fixed(NOW, ZoneOffset.UTC));
 
@@ -77,8 +77,8 @@ class BricklinkPricingDataQualityMetricsTest {
         return registry.get(BricklinkPricingDataQualityMetrics.LAST_REFRESH).gauge().value();
     }
 
-    private static BricklinkPricingCrawlProperties properties() {
-        BricklinkPricingCrawlProperties properties = new BricklinkPricingCrawlProperties();
+    private static RepriceProperties properties() {
+        RepriceProperties properties = new RepriceProperties();
         properties.setBricklinkExternalServiceId(2);
         return properties;
     }

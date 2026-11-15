@@ -19,14 +19,17 @@ lego:
   marketplace-pricing:
     schema: marketplace_pricing
   pricing:
-    # The Reprice job (HOMELAB-65): decide + guard + accept in one pass per listing, then hand the sync
-    # request straight to marketplace sync. Replaces the decision, apply-readiness and apply jobs below;
-    # the application refuses to start with Reprice and any of them enabled together. Until HOMELAB-66
-    # the formula settings stay in lego.bricklink.pricing.decision and the guard settings in
-    # lego.bricklink.pricing.apply-readiness (Reprice reads them even while those jobs are off).
+    # Reprice: the one pricing job (HOMELAB-65, HOMELAB-66). For each listing with a market snapshot newer
+    # than its last decision it decides a price (algorithm), checks it (guard), records the decision and,
+    # in APPLY, hands the change straight to marketplace sync. See the runbook section "RepriceJob".
     reprice:
       enabled: false
       mode: DRY_RUN                   # DRY_RUN | APPLY_LOCAL_ONLY | APPLY
+      bricklink-external-service-id: 2
+      priceable-listing-status-codes: # ACTIVE listings, and DRAFTs awaiting their first price
+        - ACTIVE
+        - DRAFT
+      require-current-snapshot: false # true: skip listings without a current snapshot instead of FAILED
       batch-size: 25
       immediate-sync-limit: 5         # requests sent straight away per run; the rest wait for the sync job
       sync-request-max-attempts: 3
@@ -36,6 +39,42 @@ lego:
         initial-delay-ms: 60000
         lock-at-most-for: 10m
         lock-at-least-for: 0s
+      # The market-position formula. See the runbook section "Pricing formula and its levers".
+      algorithm:
+        aggression: BALANCED                 # QUICK | BALANCED | PATIENT
+        target-percentiles: {}               # overrides, e.g. "[U-C-BI]": 0.70 or "[N-S]": 0.25
+        own-seller-names:                    # your BrickLink store username(s); their lots are never competitors
+          - tvattima
+        outlier-max-ratio-to-median: 3.0
+        two-comparables-fraction: 0.25
+        maximum-change-per-run: 0.25
+        maximum-absolute-change-per-run:      # e.g. 50.00; keep <= guard.maximum-absolute-delta
+        box-instructions-adjustment-enabled: true
+        step-down:                           # lower an unsold active listing's price weekly
+          enabled: false
+          start-after-weeks: 8                # full market price for the first 8 weeks
+          weekly-percent: 0.01                # then 1% lower per further week unsold
+          maximum-total-percent: 0.20         # never more than 20% below the market price
+          floor-percentile: 0.10              # never below the 10th percentile of competing lots
+        minimum-price:
+        maximum-price:
+      # Whether a decided price may be sent. A decision the guard stops is recorded BLOCKED with the reason.
+      guard:
+        minimum-price-delta: 0.01
+        minimum-delta:
+          enabled: false
+          percent: 0.02
+        minimum-confidence: 0.00
+        minimum-comparable-count: 1
+        maximum-absolute-delta:
+        maximum-percent-delta:
+        blocked-reason-codes: []
+        eligible-reason-codes:
+          - MARKET_POSITION
+          - SINGLE_COMPARABLE_DISCOUNTED
+          - TWO_COMPARABLES_WEIGHTED
+          - BELOW_MIN_PRICE_CLAMPED
+          - ABOVE_MAX_PRICE_CLAMPED
   bricklink:
     pricing:
       # What this environment is pricing, kept in marketplace_pricing.want_list_item (HOMELAB-32). Every
@@ -58,13 +97,6 @@ lego:
       # exists); it crawls for every environment into marketplace_pricing. Never enable it anywhere else.
       crawl:
         enabled: false
-        bricklink-external-service-id: 2
-        priceable-listing-status-codes:
-          - ACTIVE
-          - DRAFT
-        active-listing-status-code: ACTIVE
-        catalog-item-type: S
-        batch-size: 25
         results-per-page: 500
         max-attempts: 3
         scheduled:
@@ -72,82 +104,6 @@ lego:
           fixed-delay-ms: 300000
           initial-delay-ms: 30000
           lock-at-most-for: 30m
-          lock-at-least-for: 0s
-      decision:
-        enabled: false
-        bricklink-external-service-id: 2
-        priceable-listing-status-codes:
-          - ACTIVE
-          - DRAFT
-        active-listing-status-code: ACTIVE
-        batch-size: 25
-        require-current-snapshot: false
-        # Market-position formula. See the runbook section "Pricing formula and its levers".
-        aggression: BALANCED                 # QUICK | BALANCED | PATIENT
-        target-percentiles: {}               # overrides, e.g. "[U-C-BI]": 0.70 or "[N-S]": 0.25
-        own-seller-names:                    # your BrickLink store username(s); their lots are never competitors
-          - tvattima
-        outlier-max-ratio-to-median: 3.0
-        two-comparables-fraction: 0.25
-        maximum-change-per-run: 0.25
-        maximum-absolute-change-per-run:      # e.g. 50.00; keep <= apply-readiness maximum-absolute-delta
-        box-instructions-adjustment-enabled: true
-        step-down:                           # lower an unsold active listing's price weekly
-          enabled: false
-          start-after-weeks: 8                # full market price for the first 8 weeks
-          weekly-percent: 0.01                # then 1% lower per further week unsold
-          maximum-total-percent: 0.20         # never more than 20% below the market price
-          floor-percentile: 0.10              # never below the 10th percentile of competing lots
-        minimum-price:
-        maximum-price:
-        scheduled:
-          enabled: false
-          fixed-delay-ms: 300000
-          initial-delay-ms: 30000
-          lock-at-most-for: 10m
-          lock-at-least-for: 0s
-      apply-readiness:
-        enabled: false
-        bricklink-external-service-id: 2
-        priceable-listing-status-codes:
-          - ACTIVE
-          - DRAFT
-        active-listing-status-code: ACTIVE
-        proposed-decision-status-code: PROPOSED
-        batch-size: 25
-        minimum-price-delta: 0.01
-        minimum-delta:
-          enabled: false
-          percent: 0.02
-        minimum-confidence: 0.00
-        minimum-comparable-count: 1
-        maximum-absolute-delta:
-        maximum-percent-delta:
-        blocked-reason-codes: []
-        apply-eligible-reason-codes:
-          - MARKET_POSITION
-          - SINGLE_COMPARABLE_DISCOUNTED
-          - TWO_COMPARABLES_WEIGHTED
-          - BELOW_MIN_PRICE_CLAMPED
-          - ABOVE_MAX_PRICE_CLAMPED
-        scheduled:
-          enabled: false
-          fixed-delay-ms: 300000
-          initial-delay-ms: 30000
-          lock-at-most-for: 10m
-          lock-at-least-for: 0s
-      apply:
-        enabled: false
-        bricklink-external-service-id: 2
-        batch-size: 25
-        sync-request-max-attempts: 3
-        mode: DRY_RUN
-        environment-code: ${lego.environment.code}
-        scheduled:
-          enabled: false
-          fixed-delay-ms: 300000
-          initial-delay-ms: 30000
-          lock-at-most-for: 10m
           lock-at-least-for: 0s
     marketplace-sync:
       enabled: false

@@ -40,16 +40,15 @@ lego:
     buckets:
       final-photo: lego-photos-sandbox
   pricing:
-    # The Reprice job (HOMELAB-65) replaces the decision, apply-readiness and apply jobs below, which
-    # are off: the application refuses to start with Reprice and any of them on. Reprice still reads
-    # the formula settings in lego.bricklink.pricing.decision and the guard settings in
-    # lego.bricklink.pricing.apply-readiness. APPLY since 2026-11-14, after the owner reviewed the
+    # Reprice (HOMELAB-65/66), the one pricing job. APPLY since 2026-11-14, after the owner reviewed the
     # DRY_RUN decisions: a guard-passed decision is ACCEPTED, its sync request queued and up to
     # immediate-sync-limit of them sent straight to BrickLink. BrickLink writes also need
     # marketplace-sync mode APPLY, which SANDBOX has. Every lot stays in stockroom C (non-prod safety).
+    # Only the keys that differ from application.yml are set here; DEV uses the same algorithm and guard.
     reprice:
       enabled: true
       mode: APPLY
+      require-current-snapshot: true
       batch-size: 25
       immediate-sync-limit: 5
       sync-request-max-attempts: 3
@@ -59,6 +58,21 @@ lego:
         initial-delay-ms: 120000
         lock-at-most-for: 10m
         lock-at-least-for: 0s
+      algorithm:
+        maximum-absolute-change-per-run: 50.00  # matches guard.maximum-absolute-delta
+      guard:
+        minimum-price-delta: 0.01
+        minimum-delta:
+          enabled: true
+          percent: 0.02
+        minimum-confidence: 0.75
+        minimum-comparable-count: 3
+        maximum-absolute-delta: 50.00
+        maximum-percent-delta: 0.50
+        blocked-reason-codes:
+          - NO_CURRENT_COMPARABLES
+          - NO_EXACT_COMPARABLES
+          - NO_CURRENT_SNAPSHOT
   bricklink:
     orders:
       sync:
@@ -74,13 +88,6 @@ lego:
       # SANDBOX runs THE shared BrickLink crawler for every environment (HOMELAB-32), until PROD exists.
       crawl:
         enabled: true
-        bricklink-external-service-id: 2
-        priceable-listing-status-codes:
-          - ACTIVE
-          - DRAFT
-        active-listing-status-code: ACTIVE
-        catalog-item-type: S
-        batch-size: 100
         worker-batch-size: 1
         results-per-page: 500
         max-attempts: 3
@@ -100,69 +107,6 @@ lego:
           fixed-delay-ms: 600000
           initial-delay-ms: 30000
           lock-at-most-for: 30m
-          lock-at-least-for: 0s
-      decision:
-        enabled: false             # replaced by lego.pricing.reprice; settings still used
-        bricklink-external-service-id: 2
-        priceable-listing-status-codes:
-          - ACTIVE
-          - DRAFT
-        active-listing-status-code: ACTIVE
-        batch-size: 100
-        maximum-absolute-change-per-run: 50.00  # matches apply-readiness maximum-absolute-delta
-        require-current-snapshot: true
-        minimum-price:
-        maximum-price:
-        scheduled:
-          enabled: false
-          fixed-delay-ms: 600000
-          initial-delay-ms: 120000
-          lock-at-most-for: 10m
-          lock-at-least-for: 0s
-      apply-readiness:
-        enabled: false             # replaced by lego.pricing.reprice; settings still used
-        bricklink-external-service-id: 2
-        priceable-listing-status-codes:
-          - ACTIVE
-          - DRAFT
-        active-listing-status-code: ACTIVE
-        proposed-decision-status-code: PROPOSED
-        batch-size: 100
-        minimum-price-delta: 0.01
-        minimum-delta:
-          enabled: true
-          percent: 0.02
-        minimum-confidence: 0.75
-        minimum-comparable-count: 3
-        maximum-absolute-delta: 50.00
-        maximum-percent-delta: 0.50
-        blocked-reason-codes:
-          - NO_CURRENT_COMPARABLES
-          - NO_EXACT_COMPARABLES
-          - NO_CURRENT_SNAPSHOT
-        apply-eligible-reason-codes:
-          - MARKET_POSITION
-          - SINGLE_COMPARABLE_DISCOUNTED
-          - TWO_COMPARABLES_WEIGHTED
-          - BELOW_MIN_PRICE_CLAMPED
-          - ABOVE_MAX_PRICE_CLAMPED
-        scheduled:
-          enabled: false
-          fixed-delay-ms: 600000
-          initial-delay-ms: 180000
-          lock-at-most-for: 10m
-          lock-at-least-for: 0s
-      apply:
-        enabled: false             # replaced by lego.pricing.reprice
-        bricklink-external-service-id: 2
-        batch-size: 25
-        sync-request-max-attempts: 3
-        mode: APPLY_LOCAL_AND_ENQUEUE_SYNC
-        scheduled:
-          enabled: false
-          fixed-delay-ms: 600000
-          initial-delay-ms: 240000
-          lock-at-most-for: 10m
           lock-at-least-for: 0s
     marketplace-sync:
       enabled: true

@@ -22,6 +22,30 @@ lego:
     code: local
   s3:
     url: https://api.silo.dev.internal.legohunter.io
+  pricing:
+    # Reprice (HOMELAB-66) in DRY_RUN with SANDBOX's guard: decisions only, never a sync request.
+    reprice:
+      enabled: true
+      mode: DRY_RUN
+      batch-size: 100
+      scheduled:
+        enabled: true
+        initial-delay-ms: 5000
+        fixed-delay-ms: 600000
+      algorithm:
+        maximum-absolute-change-per-run: 50.00  # matches guard.maximum-absolute-delta
+      guard:
+        minimum-delta:
+          enabled: true
+          percent: 0.02
+        minimum-confidence: 0.75
+        minimum-comparable-count: 3
+        maximum-absolute-delta: 50.00
+        maximum-percent-delta: 0.50
+        blocked-reason-codes:
+          - NO_CURRENT_COMPARABLES
+          - NO_EXACT_COMPARABLES
+          - NO_CURRENT_SNAPSHOT
   bricklink:
     orders:
       sync:
@@ -36,52 +60,8 @@ lego:
       # crawl with a long scheduled.fixed-delay-ms, so it fetches a handful of items at most.
       crawl:
         enabled: false
-        priceable-listing-status-codes:
-          - ACTIVE
-          - DRAFT
-        batch-size: 100
         scheduled:
           enabled: false
-      decision:
-        enabled: true
-        priceable-listing-status-codes:
-          - ACTIVE
-          - DRAFT
-        batch-size: 100
-        maximum-absolute-change-per-run: 50.00  # matches apply-readiness maximum-absolute-delta
-        scheduled:
-          enabled: true
-          initial-delay-ms: 5000
-          fixed-delay-ms: 600000
-      apply-readiness:
-        enabled: true
-        priceable-listing-status-codes:
-          - ACTIVE
-          - DRAFT
-        batch-size: 100
-        minimum-delta:
-          enabled: true
-          percent: 0.02
-        minimum-confidence: 0.75
-        minimum-comparable-count: 3
-        maximum-absolute-delta: 50.00
-        maximum-percent-delta: 0.50
-        blocked-reason-codes:
-          - NO_CURRENT_COMPARABLES
-          - NO_EXACT_COMPARABLES
-          - NO_CURRENT_SNAPSHOT
-        scheduled:
-          enabled: true
-          initial-delay-ms: 10000
-          fixed-delay-ms: 600000
-      apply:
-        enabled: true
-        batch-size: 25
-        mode: DRY_RUN
-        scheduled:
-          enabled: false
-          initial-delay-ms: 30000
-          fixed-delay-ms: 600000
     marketplace-sync:
       enabled: true
       mode: DRY_RUN

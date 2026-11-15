@@ -1,5 +1,13 @@
 # Inventory Sync Playbook
 
+> [!WARNING]
+> **Partly out of date since HOMELAB-66 (2026-11-15).** The `BricklinkPricingDecisionJob`,
+> `BricklinkPricingApplyReadinessJob` and `BricklinkPricingApplyJob`, their `lego.bricklink.pricing.decision`,
+> `apply-readiness` and `apply` settings, the readiness table and the `apply-preview` endpoints described below no
+> longer exist. Pricing is the single `RepriceJob` (`lego.pricing.reprice`, with `algorithm` and `guard`). See
+> `runbook.md`, which is current. This playbook is being merged into the runbook (HOMELAB-24).
+
+
 This is the operator guide for moving one physical LEGO item from acquisition intake to a live BrickLink inventory listing, and for understanding how the Pricing Plane participates in that journey.
 
 It describes the behavior implemented across:

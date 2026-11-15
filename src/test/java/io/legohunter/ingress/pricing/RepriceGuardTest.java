@@ -11,12 +11,12 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RepriceGuardTest {
-    private BricklinkPricingApplyReadinessProperties config;
+    private RepriceGuardProperties config;
 
     @BeforeEach
     void setUp() {
         // SANDBOX's guard settings.
-        config = new BricklinkPricingApplyReadinessProperties();
+        config = new RepriceGuardProperties();
         config.setMinimumPriceDelta(new BigDecimal("0.01"));
         config.getMinimumDelta().setEnabled(true);
         config.getMinimumDelta().setPercent(new BigDecimal("0.02"));

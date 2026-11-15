@@ -2,7 +2,6 @@ package io.legohunter.ingress.pricing;
 
 import io.legohunter.data.dao.CrawlTargetDao;
 import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
-import io.legohunter.data.dao.PricingApplyReadinessDao;
 import io.legohunter.data.dao.PricingDecisionDao;
 import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncResult;
 import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncService;
@@ -15,7 +14,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -25,45 +23,10 @@ public class BricklinkPricingMetricsService {
     private static final String RESULT_TAG = "result";
     private static final String STATE_TAG = "state";
     private static final String STATUS_TAG = "status";
-    private static final List<String> APPLY_READINESS_STATUS_CODES = List.of(
-            "READY_TO_APPLY",
-            "READY_TO_APPLY_INITIAL_PRICE",
-            "BLOCKED_FIXED_PRICE",
-            "BLOCKED_MISSING_CURRENT_PRICE",
-            "BLOCKED_MISSING_FINAL_PRICE",
-            "BLOCKED_CURRENCY_MISMATCH",
-            "BLOCKED_UNSUPPORTED_DECISION_STATUS",
-            "BLOCKED_REASON_CODE",
-            "BLOCKED_INELIGIBLE_REASON",
-            "BLOCKED_BELOW_MINIMUM_DELTA",
-            "BLOCKED_BELOW_MINIMUM_DELTA_PERCENT",
-            "BLOCKED_BELOW_MINIMUM_CONFIDENCE",
-            "BLOCKED_BELOW_MINIMUM_COMPARABLE_COUNT",
-            "BLOCKED_ABOVE_MAXIMUM_ABSOLUTE_DELTA",
-            "BLOCKED_ABOVE_MAXIMUM_PERCENT_DELTA",
-            "BLOCKED_STALE_DECISION"
-    );
-    private static final List<String> APPLY_READINESS_BLOCK_REASON_CODES = List.of(
-            "FIXED_PRICE",
-            "MISSING_CURRENT_PRICE",
-            "MISSING_FINAL_PRICE",
-            "CURRENCY_MISMATCH",
-            "UNSUPPORTED_DECISION_STATUS",
-            "BLOCKED_REASON_CODE",
-            "INELIGIBLE_REASON",
-            "BELOW_MINIMUM_DELTA",
-            "BELOW_MINIMUM_DELTA_PERCENT",
-            "BELOW_MINIMUM_CONFIDENCE",
-            "BELOW_MINIMUM_COMPARABLE_COUNT",
-            "ABOVE_MAXIMUM_ABSOLUTE_DELTA",
-            "ABOVE_MAXIMUM_PERCENT_DELTA",
-            "STALE_DECISION"
-    );
 
     private final MeterRegistry meterRegistry;
     private final CrawlTargetDao crawlTargetDao;
     private final PricingDecisionDao pricingDecisionDao;
-    private final PricingApplyReadinessDao pricingApplyReadinessDao;
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao;
     private boolean gaugesRegistered;
 
@@ -93,52 +56,8 @@ public class BricklinkPricingMetricsService {
         increment("bricklink_pricing_want_list_item", "pruned", result.itemsPruned());
     }
 
-    public void recordDecision(BricklinkPricingDecisionResult result) {
-        registerGauges();
-        recordJob("bricklink_pricing_decision_job", "bricklink_pricing_decision_job_duration", result.outcome(), result.elapsedMillis());
-        increment("bricklink_pricing_decision_listing", "selected", result.listingsSelected());
-        increment("bricklink_pricing_decision", "written", result.decisionsWritten());
-        increment("bricklink_pricing_decision", "proposed", result.proposedDecisions());
-        increment("bricklink_pricing_decision", "skipped", result.skippedDecisions());
-        increment("bricklink_pricing_decision", "failed", result.failedDecisions());
-    }
 
-    public void recordApplyReadiness(BricklinkPricingApplyReadinessResult result) {
-        registerGauges();
-        recordJob(
-                "bricklink_pricing_apply_readiness_job",
-                "bricklink_pricing_apply_readiness_job_duration",
-                result.outcome(),
-                result.elapsedMillis()
-        );
-        increment("bricklink_pricing_apply_readiness_decision", "selected", result.decisionsSelected());
-        increment("bricklink_pricing_apply_readiness_decision", "ready_to_apply", result.readyToApply());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_fixed_price", result.skippedFixedPrice());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_missing_current_price", result.skippedMissingCurrentPrice());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_missing_final_price", result.skippedMissingFinalPrice());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_currency_mismatch", result.skippedCurrencyMismatch());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_unsupported_decision_status", result.skippedUnsupportedDecisionStatus());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_blocked_reason_code", result.skippedBlockedReasonCode());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_ineligible_reason", result.skippedIneligibleReason());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_delta", result.skippedBelowMinimumDelta());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_delta_percent", result.skippedBelowMinimumDeltaPercent());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_confidence", result.skippedBelowMinimumConfidence());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_comparable_count", result.skippedBelowMinimumComparableCount());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_above_maximum_absolute_delta", result.skippedAboveMaximumAbsoluteDelta());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_above_maximum_percent_delta", result.skippedAboveMaximumPercentDelta());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_stale_decision", result.skippedStaleDecision());
-    }
 
-    public void recordApply(BricklinkPricingApplyResult result) {
-        registerGauges();
-        recordJob("bricklink_pricing_apply_job", "bricklink_pricing_apply_job_duration", result.outcome(), result.elapsedMillis());
-        increment("bricklink_pricing_apply_decision", "selected", result.readinessRowsSelected());
-        increment("bricklink_pricing_apply_decision", "local_price_updated", result.localPricesUpdated());
-        increment("bricklink_pricing_apply_decision", "sync_request_enqueued", result.syncRequestsEnqueued());
-        increment("bricklink_pricing_apply_decision", "dry_run_selected", result.dryRunSelections());
-        increment("bricklink_pricing_apply_decision", "skipped", result.skippedRows());
-        increment("bricklink_pricing_apply_decision", "failed", result.failedRows());
-    }
 
     public void recordReprice(RepriceResult result) {
         registerGauges();
@@ -191,15 +110,13 @@ public class BricklinkPricingMetricsService {
         registerCrawlGauge("due", () -> crawlTargetDao.countDue(marketplace, now()));
         registerCrawlGauge("failing", () -> crawlTargetDao.countFailing(marketplace));
 
-        registerDecisionGauge(BricklinkPricingDecisionService.STATUS_PROPOSED, false);
-        registerDecisionGauge(BricklinkPricingDecisionService.STATUS_FAILED, false);
-        registerDecisionGauge(BricklinkPricingDecisionService.STATUS_SKIPPED, false);
-        registerDecisionGauge(BricklinkPricingDecisionService.STATUS_PROPOSED, true);
-        registerDecisionGauge(BricklinkPricingApplyService.STATUS_ACCEPTED, false);
-        registerDecisionGauge(BricklinkPricingApplyService.STATUS_SYNC_FAILED, false);
-        registerDecisionGauge(RepriceService.STATUS_BLOCKED, false);
-        APPLY_READINESS_STATUS_CODES.forEach(this::registerApplyReadinessGauge);
-        APPLY_READINESS_BLOCK_REASON_CODES.forEach(this::registerApplyReadinessBlockReasonGauge);
+        registerDecisionGauge(PricingDecisionStatus.PROPOSED, false);
+        registerDecisionGauge(PricingDecisionStatus.FAILED, false);
+        registerDecisionGauge(PricingDecisionStatus.SKIPPED, false);
+        registerDecisionGauge(PricingDecisionStatus.PROPOSED, true);
+        registerDecisionGauge(PricingDecisionStatus.ACCEPTED, false);
+        registerDecisionGauge(PricingDecisionStatus.SYNC_FAILED, false);
+        registerDecisionGauge(PricingDecisionStatus.BLOCKED, false);
         registerMarketplaceSyncGauge("pending", BricklinkMarketplaceSyncService.STATUS_PENDING);
         registerMarketplaceSyncGauge("claimed", BricklinkMarketplaceSyncService.STATUS_CLAIMED);
         registerMarketplaceSyncGauge("succeeded", BricklinkMarketplaceSyncService.STATUS_SUCCEEDED);
@@ -226,29 +143,7 @@ public class BricklinkPricingMetricsService {
                 .register(meterRegistry);
     }
 
-    private void registerApplyReadinessGauge(String status) {
-        Gauge.builder(
-                        "bricklink_pricing_apply_readiness_current",
-                        this,
-                        ignored -> pricingApplyReadinessDao.countLatestByReadinessStatusCode(status)
-                )
-                .description("Current latest BrickLink pricing apply-readiness count by status.")
-                .tag(STATUS_TAG, status.toLowerCase())
-                .strongReference(true)
-                .register(meterRegistry);
-    }
 
-    private void registerApplyReadinessBlockReasonGauge(String reason) {
-        Gauge.builder(
-                        "bricklink_pricing_apply_readiness_block_reason_current",
-                        this,
-                        ignored -> pricingApplyReadinessDao.countLatestByBlockReasonCode(reason)
-                )
-                .description("Current latest BrickLink pricing apply-readiness count by block reason.")
-                .tag("reason", reason.toLowerCase())
-                .strongReference(true)
-                .register(meterRegistry);
-    }
 
     private void registerMarketplaceSyncGauge(String state, String statusCode) {
         Gauge.builder(

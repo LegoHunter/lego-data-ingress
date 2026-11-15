@@ -5,11 +5,7 @@ import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncMode;
 import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncProperties;
 import io.legohunter.ingress.orders.BricklinkOrderSyncProperties;
-import io.legohunter.ingress.pricing.BricklinkPricingApplyMode;
-import io.legohunter.ingress.pricing.BricklinkPricingApplyProperties;
-import io.legohunter.ingress.pricing.BricklinkPricingApplyReadinessProperties;
 import io.legohunter.ingress.pricing.BricklinkPricingCrawlProperties;
-import io.legohunter.ingress.pricing.BricklinkPricingDecisionProperties;
 import io.legohunter.ingress.pricing.RepriceMode;
 import io.legohunter.ingress.pricing.RepriceProperties;
 import io.micrometer.core.instrument.Gauge;
@@ -26,9 +22,6 @@ public class JobConfigurationMetrics {
             ImageHostingSyncProperties imageHostingSyncProperties,
             FulfillmentSyncProperties fulfillmentSyncProperties,
             BricklinkPricingCrawlProperties bricklinkPricingCrawlProperties,
-            BricklinkPricingDecisionProperties bricklinkPricingDecisionProperties,
-            BricklinkPricingApplyReadinessProperties bricklinkPricingApplyReadinessProperties,
-            BricklinkPricingApplyProperties bricklinkPricingApplyProperties,
             BricklinkMarketplaceSyncProperties bricklinkMarketplaceSyncProperties,
             RepriceProperties repriceProperties
     ) {
@@ -59,27 +52,6 @@ public class JobConfigurationMetrics {
                 "BrickLink Pricing Crawl",
                 bricklinkPricingCrawlProperties.isEnabled() && bricklinkPricingCrawlProperties.getScheduled().isEnabled(),
                 false
-        );
-        register(
-                meterRegistry,
-                "bricklink_pricing_decision",
-                "BrickLink Pricing Decision",
-                bricklinkPricingDecisionProperties.isEnabled() && bricklinkPricingDecisionProperties.getScheduled().isEnabled(),
-                false
-        );
-        register(
-                meterRegistry,
-                "bricklink_pricing_apply_readiness",
-                "BrickLink Pricing Apply Readiness",
-                bricklinkPricingApplyReadinessProperties.isEnabled() && bricklinkPricingApplyReadinessProperties.getScheduled().isEnabled(),
-                false
-        );
-        register(
-                meterRegistry,
-                "bricklink_pricing_apply",
-                "BrickLink Pricing Apply",
-                bricklinkPricingApplyProperties.isEnabled() && bricklinkPricingApplyProperties.getScheduled().isEnabled(),
-                bricklinkPricingApplyProperties.effectiveMode() != BricklinkPricingApplyMode.DRY_RUN
         );
         register(
                 meterRegistry,

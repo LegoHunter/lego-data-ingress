@@ -14,18 +14,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-import static io.legohunter.ingress.pricing.BricklinkPricingDecisionProperties.Packaging.BI;
-import static io.legohunter.ingress.pricing.BricklinkPricingDecisionProperties.Packaging.NONE;
-import static io.legohunter.ingress.pricing.BricklinkPricingDecisionProperties.Packaging.ONE;
+import static io.legohunter.ingress.pricing.RepriceAlgorithmProperties.Packaging.BI;
+import static io.legohunter.ingress.pricing.RepriceAlgorithmProperties.Packaging.NONE;
+import static io.legohunter.ingress.pricing.RepriceAlgorithmProperties.Packaging.ONE;
 import static org.assertj.core.api.Assertions.assertThat;
 
-class BricklinkPricingDecisionPropertiesTest {
+class RepriceAlgorithmPropertiesTest {
 
     @Test
     void defaultsAreTheBalancedPreset() {
-        BricklinkPricingDecisionProperties properties = new BricklinkPricingDecisionProperties();
+        RepriceAlgorithmProperties properties = new RepriceAlgorithmProperties();
 
-        assertThat(properties.effectiveAggression()).isEqualTo(BricklinkPricingDecisionProperties.Aggression.BALANCED);
+        assertThat(properties.effectiveAggression()).isEqualTo(RepriceAlgorithmProperties.Aggression.BALANCED);
         assertThat(properties.targetPercentile("U", "C", BI)).isEqualByComparingTo("0.65");
         assertThat(properties.targetPercentile("U", "C", ONE)).isEqualByComparingTo("0.35");
         assertThat(properties.targetPercentile("U", "X", NONE)).isEqualByComparingTo("0.25");
@@ -43,17 +43,17 @@ class BricklinkPricingDecisionPropertiesTest {
 
     @Test
     void bindsThePresetAndBracketedPerMarketOverridesFromConfiguration() {
-        BricklinkPricingDecisionProperties properties = bind(Map.of(
-                "lego.bricklink.pricing.decision.aggression", "patient",
-                "lego.bricklink.pricing.decision.target-percentiles.[U-C]", "0.40",
-                "lego.bricklink.pricing.decision.target-percentiles.[U-C-BI]", "0.70",
-                "lego.bricklink.pricing.decision.step-down.enabled", "true",
-                "lego.bricklink.pricing.decision.step-down.weekly-percent", "0.02",
-                "lego.bricklink.pricing.decision.maximum-change-per-run", "0",
-                "lego.bricklink.pricing.decision.box-instructions-adjustment-enabled", "false"
+        RepriceAlgorithmProperties properties = bind(Map.of(
+                "lego.pricing.reprice.algorithm.aggression", "patient",
+                "lego.pricing.reprice.algorithm.target-percentiles.[U-C]", "0.40",
+                "lego.pricing.reprice.algorithm.target-percentiles.[U-C-BI]", "0.70",
+                "lego.pricing.reprice.algorithm.step-down.enabled", "true",
+                "lego.pricing.reprice.algorithm.step-down.weekly-percent", "0.02",
+                "lego.pricing.reprice.algorithm.maximum-change-per-run", "0",
+                "lego.pricing.reprice.algorithm.box-instructions-adjustment-enabled", "false"
         ));
 
-        assertThat(properties.effectiveAggression()).isEqualTo(BricklinkPricingDecisionProperties.Aggression.PATIENT);
+        assertThat(properties.effectiveAggression()).isEqualTo(RepriceAlgorithmProperties.Aggression.PATIENT);
         assertThat(properties.targetPercentile("U", "C", BI)).isEqualByComparingTo("0.70");
         assertThat(properties.targetPercentile("U", "C", NONE)).isEqualByComparingTo("0.40");
         assertThat(properties.targetPercentile("N", "S", null)).isEqualByComparingTo("0.30");
@@ -65,7 +65,7 @@ class BricklinkPricingDecisionPropertiesTest {
 
     @Test
     void keepsTargetPercentilesBetweenZeroAndOne() {
-        BricklinkPricingDecisionProperties properties = new BricklinkPricingDecisionProperties();
+        RepriceAlgorithmProperties properties = new RepriceAlgorithmProperties();
         properties.setTargetPercentiles(Map.of("U-C", new BigDecimal("1.5"), "N-S", new BigDecimal("-0.2")));
 
         assertThat(properties.targetPercentile("U", "C", BI)).isEqualByComparingTo("1");
@@ -79,11 +79,11 @@ class BricklinkPricingDecisionPropertiesTest {
         // Read the shipped files from src/main/resources: the test classpath has its own application.yml.
         sources.addAll(loader.load("sandbox", new FileSystemResource("src/main/resources/application-sandbox.yml")));
         sources.addAll(loader.load("base", new FileSystemResource("src/main/resources/application.yml")));
-        BricklinkPricingDecisionProperties properties = new Binder(ConfigurationPropertySources.from(sources))
-                .bind("lego.bricklink.pricing.decision", Bindable.of(BricklinkPricingDecisionProperties.class))
+        RepriceAlgorithmProperties properties = new Binder(ConfigurationPropertySources.from(sources))
+                .bind("lego.pricing.reprice.algorithm", Bindable.of(RepriceAlgorithmProperties.class))
                 .get();
 
-        assertThat(properties.effectiveAggression()).isEqualTo(BricklinkPricingDecisionProperties.Aggression.BALANCED);
+        assertThat(properties.effectiveAggression()).isEqualTo(RepriceAlgorithmProperties.Aggression.BALANCED);
         assertThat(properties.targetPercentile("U", "C", BI)).isEqualByComparingTo("0.65");
         assertThat(properties.isStepDownEnabled()).isFalse();
         assertThat(properties.effectiveMaximumChangePerRun()).isEqualByComparingTo("0.25");
@@ -94,9 +94,9 @@ class BricklinkPricingDecisionPropertiesTest {
         assertThat(properties.isOwnSeller("someone-else")).isFalse();
     }
 
-    private BricklinkPricingDecisionProperties bind(Map<String, String> values) {
+    private RepriceAlgorithmProperties bind(Map<String, String> values) {
         return new Binder(new MapConfigurationPropertySource(values))
-                .bind("lego.bricklink.pricing.decision", Bindable.of(BricklinkPricingDecisionProperties.class))
+                .bind("lego.pricing.reprice.algorithm", Bindable.of(RepriceAlgorithmProperties.class))
                 .get();
     }
 }

@@ -95,16 +95,15 @@ class SpringProfileEnvironmentTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"sandbox", "dev", "prod"})
-    void repriceNeverRunsAlongsideTheJobsItReplaces(String env) {
-        // RepriceConfigurationValidator refuses startup otherwise (HOMELAB-65); catch it here, not in the pod.
+    @ValueSource(strings = {"sandbox", "dev", "prod", "local"})
+    void noProfileSetsTheRetiredPricingJobKeys(String env) {
+        // HOMELAB-66 removed the decision, apply-readiness and apply jobs; their keys would now be silently ignored.
         Properties effective = podConfiguration(env);
 
-        if ("true".equals(String.valueOf(effective.get("lego.pricing.reprice.enabled")))) {
-            assertThat(String.valueOf(effective.get("lego.bricklink.pricing.decision.enabled"))).isEqualTo("false");
-            assertThat(String.valueOf(effective.get("lego.bricklink.pricing.apply-readiness.enabled"))).isEqualTo("false");
-            assertThat(String.valueOf(effective.get("lego.bricklink.pricing.apply.enabled"))).isEqualTo("false");
-        }
+        assertThat(effective.stringPropertyNames())
+                .noneMatch(key -> key.startsWith("lego.bricklink.pricing.decision.")
+                        || key.startsWith("lego.bricklink.pricing.apply-readiness.")
+                        || key.startsWith("lego.bricklink.pricing.apply."));
     }
 
     @ParameterizedTest
@@ -136,15 +135,15 @@ class SpringProfileEnvironmentTest {
         Properties dev = podConfiguration("dev");
 
         for (String key : List.of(
-                "lego.bricklink.pricing.apply-readiness.minimum-confidence",
-                "lego.bricklink.pricing.apply-readiness.minimum-comparable-count",
-                "lego.bricklink.pricing.apply-readiness.minimum-delta.enabled",
-                "lego.bricklink.pricing.apply-readiness.minimum-delta.percent",
-                "lego.bricklink.pricing.apply-readiness.maximum-absolute-delta",
-                "lego.bricklink.pricing.apply-readiness.maximum-percent-delta",
-                "lego.bricklink.pricing.apply-readiness.blocked-reason-codes[1]",
-                "lego.bricklink.pricing.decision.maximum-absolute-change-per-run",
-                "lego.bricklink.pricing.decision.require-current-snapshot")) {
+                "lego.pricing.reprice.guard.minimum-confidence",
+                "lego.pricing.reprice.guard.minimum-comparable-count",
+                "lego.pricing.reprice.guard.minimum-delta.enabled",
+                "lego.pricing.reprice.guard.minimum-delta.percent",
+                "lego.pricing.reprice.guard.maximum-absolute-delta",
+                "lego.pricing.reprice.guard.maximum-percent-delta",
+                "lego.pricing.reprice.guard.blocked-reason-codes[1]",
+                "lego.pricing.reprice.algorithm.maximum-absolute-change-per-run",
+                "lego.pricing.reprice.require-current-snapshot")) {
             assertThat(String.valueOf(dev.get(key))).as(key).isEqualTo(String.valueOf(sandbox.get(key)));
         }
     }

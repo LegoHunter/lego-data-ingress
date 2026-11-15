@@ -3,7 +3,6 @@ package io.legohunter.ingress.config.environment;
 import io.legohunter.data.environment.EnvironmentDatabasePolicy;
 import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncEnvironmentValidator;
 import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncProperties;
-import io.legohunter.ingress.pricing.BricklinkPricingApplyProperties;
 import io.legohunter.lego.data.environment.LegoEnvironmentProperties;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -24,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * Every real Spring profile combination binds to a BrickLink stockroom setup that the startup
- * check accepts: each lower environment in its own stockroom, PROD known as PROD, and pricing apply
+ * check accepts: each lower environment in its own stockroom, PROD known as PROD, and Reprice
  * naming the same environment as marketplace sync (HOMELAB-20).
  *
  * <p>The profiles are the ones that actually run: a pod runs {@code <env>,kubernetes} (see
@@ -51,7 +50,6 @@ class StockroomProfileTest {
         assertThat(environment(effective).getCode()).isEqualTo(environmentCode);
         assertThat(marketplaceSync.isProduction()).isFalse();
         assertThat(marketplaceSync.effectiveEnvironmentCode()).isEqualTo(environmentCode);
-        assertThat(pricingApply(effective).effectiveEnvironmentCode()).isEqualTo(environmentCode);
         assertThat(marketplaceSync.isNonProdRequireStockRoom()).isTrue();
         assertThat(marketplaceSync.effectiveNonProdStockRoomId()).isEqualTo(stockroom);
         assertStartupCheckPasses(effective);
@@ -66,7 +64,6 @@ class StockroomProfileTest {
         assertThat(environment(effective).getCode()).isEqualTo("prod");
         assertThat(marketplaceSync(effective).isProduction()).isTrue();
         assertThat(marketplaceSync(effective).effectiveEnvironmentCode()).isEqualTo("prod");
-        assertThat(pricingApply(effective).effectiveEnvironmentCode()).isEqualTo("prod");
         assertStartupCheckPasses(effective);
     }
 
@@ -95,7 +92,7 @@ class StockroomProfileTest {
     }
 
     private static void assertStartupCheckPasses(Properties effective) {
-        assertThatCode(() -> new BricklinkMarketplaceSyncEnvironmentValidator(marketplaceSync(effective), pricingApply(effective), environment(effective)).afterPropertiesSet())
+        assertThatCode(() -> new BricklinkMarketplaceSyncEnvironmentValidator(marketplaceSync(effective), environment(effective)).afterPropertiesSet())
                 .doesNotThrowAnyException();
     }
 
@@ -105,11 +102,6 @@ class StockroomProfileTest {
                 .get();
     }
 
-    private static BricklinkPricingApplyProperties pricingApply(Properties effective) {
-        return binder(effective)
-                .bind("lego.bricklink.pricing.apply", Bindable.ofInstance(new BricklinkPricingApplyProperties()))
-                .get();
-    }
 
     private static LegoEnvironmentProperties environment(Properties effective) {
         return binder(effective)

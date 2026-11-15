@@ -2,7 +2,6 @@ package io.legohunter.ingress.pricing;
 
 import io.legohunter.data.dao.CrawlTargetDao;
 import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
-import io.legohunter.data.dao.PricingApplyReadinessDao;
 import io.legohunter.data.dao.PricingDecisionDao;
 import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncMode;
 import io.legohunter.ingress.marketplace.bricklink.BricklinkMarketplaceSyncResult;
@@ -25,13 +24,11 @@ class BricklinkPricingMetricsServiceTest {
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     private final CrawlTargetDao crawlTargetDao = mock(CrawlTargetDao.class);
     private final PricingDecisionDao pricingDecisionDao = mock(PricingDecisionDao.class);
-    private final PricingApplyReadinessDao pricingApplyReadinessDao = mock(PricingApplyReadinessDao.class);
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao = mock(MarketplaceListingSyncRequestDao.class);
     private final BricklinkPricingMetricsService metricsService = new BricklinkPricingMetricsService(
             meterRegistry,
             crawlTargetDao,
             pricingDecisionDao,
-            pricingApplyReadinessDao,
             marketplaceListingSyncRequestDao
     );
 
@@ -86,112 +83,26 @@ class BricklinkPricingMetricsServiceTest {
     }
 
     @Test
-    void recordsPricingDecisionMetricsAndLatestDecisionGauges() {
-        when(pricingDecisionDao.countLatestByDecisionStatusCode(BricklinkPricingDecisionService.STATUS_PROPOSED)).thenReturn(8L);
-        when(pricingDecisionDao.countLatestByDecisionStatusCode(BricklinkPricingDecisionService.STATUS_FAILED)).thenReturn(2L);
-        when(pricingDecisionDao.countLatestByDecisionStatusCode(BricklinkPricingDecisionService.STATUS_SKIPPED)).thenReturn(1L);
-        when(pricingDecisionDao.countLatestUnappliedByDecisionStatusCode(BricklinkPricingDecisionService.STATUS_PROPOSED)).thenReturn(6L);
+    void registersTheLatestDecisionGaugesOnTheFirstRun() {
+        when(pricingDecisionDao.countLatestByDecisionStatusCode(PricingDecisionStatus.PROPOSED)).thenReturn(8L);
+        when(pricingDecisionDao.countLatestByDecisionStatusCode(PricingDecisionStatus.FAILED)).thenReturn(2L);
+        when(pricingDecisionDao.countLatestByDecisionStatusCode(PricingDecisionStatus.SKIPPED)).thenReturn(1L);
+        when(pricingDecisionDao.countLatestUnappliedByDecisionStatusCode(PricingDecisionStatus.PROPOSED)).thenReturn(6L);
 
-        metricsService.recordDecision(new BricklinkPricingDecisionResult("PARTIAL_SUCCESS", 10, 9, 6, 1, 2, 125));
+        when(pricingDecisionDao.countLatestByDecisionStatusCode(PricingDecisionStatus.BLOCKED)).thenReturn(3L);
 
-        assertThat(counter("bricklink_pricing_decision_job", "outcome", "partial_success")).isEqualTo(1.0d);
-        assertThat(timerCount("bricklink_pricing_decision_job_duration", "outcome", "partial_success")).isOne();
-        assertThat(counter("bricklink_pricing_decision_listing", "result", "selected")).isEqualTo(10.0d);
-        assertThat(counter("bricklink_pricing_decision", "result", "written")).isEqualTo(9.0d);
-        assertThat(counter("bricklink_pricing_decision", "result", "proposed")).isEqualTo(6.0d);
+        metricsService.recordReprice(RepriceResult.noWork(RepriceMode.APPLY, 5));
+
         assertThat(gauge("bricklink_pricing_decision_current", "status", "proposed", "unapplied_only", "false")).isEqualTo(8.0d);
         assertThat(gauge("bricklink_pricing_decision_current", "status", "failed", "unapplied_only", "false")).isEqualTo(2.0d);
         assertThat(gauge("bricklink_pricing_decision_current", "status", "skipped", "unapplied_only", "false")).isEqualTo(1.0d);
         assertThat(gauge("bricklink_pricing_decision_current", "status", "proposed", "unapplied_only", "true")).isEqualTo(6.0d);
+        assertThat(gauge("bricklink_pricing_decision_current", "status", "blocked", "unapplied_only", "false")).isEqualTo(3.0d);
     }
 
-    @Test
-    void recordsApplyReadinessMetrics() {
-        when(pricingApplyReadinessDao.countLatestByReadinessStatusCode("READY_TO_APPLY")).thenReturn(7L);
-        when(pricingApplyReadinessDao.countLatestByReadinessStatusCode("BLOCKED_MISSING_CURRENT_PRICE")).thenReturn(1L);
-        when(pricingApplyReadinessDao.countLatestByBlockReasonCode("MISSING_CURRENT_PRICE")).thenReturn(1L);
-
-        metricsService.recordApplyReadiness(new BricklinkPricingApplyReadinessResult(
-                "SUCCESS",
-                12,
-                7,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                1,
-                75
-        ));
-
-        assertThat(counter("bricklink_pricing_apply_readiness_job", "outcome", "success")).isEqualTo(1.0d);
-        assertThat(timerCount("bricklink_pricing_apply_readiness_job_duration", "outcome", "success")).isOne();
-        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "selected")).isEqualTo(12.0d);
-        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "ready_to_apply")).isEqualTo(7.0d);
-        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_fixed_price")).isEqualTo(1.0d);
-        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_missing_current_price")).isEqualTo(1.0d);
-        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_blocked_reason_code")).isEqualTo(1.0d);
-        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_below_minimum_delta")).isEqualTo(1.0d);
-        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_below_minimum_delta_percent")).isEqualTo(1.0d);
-        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_above_maximum_percent_delta")).isEqualTo(1.0d);
-        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_stale_decision")).isEqualTo(1.0d);
-        assertThat(gauge("bricklink_pricing_apply_readiness_current", "status", "ready_to_apply")).isEqualTo(7.0d);
-        assertThat(gauge("bricklink_pricing_apply_readiness_current", "status", "blocked_missing_current_price")).isEqualTo(1.0d);
-        assertThat(gauge("bricklink_pricing_apply_readiness_block_reason_current", "reason", "missing_current_price")).isEqualTo(1.0d);
-
-        List<String> statusTags = List.of(
-                "ready_to_apply",
-                "ready_to_apply_initial_price",
-                "blocked_fixed_price",
-                "blocked_missing_current_price",
-                "blocked_missing_final_price",
-                "blocked_currency_mismatch",
-                "blocked_unsupported_decision_status",
-                "blocked_reason_code",
-                "blocked_ineligible_reason",
-                "blocked_below_minimum_delta",
-                "blocked_below_minimum_delta_percent",
-                "blocked_below_minimum_confidence",
-                "blocked_below_minimum_comparable_count",
-                "blocked_above_maximum_absolute_delta",
-                "blocked_above_maximum_percent_delta",
-                "blocked_stale_decision"
-        );
-        statusTags.forEach(status -> assertThat(meterRegistry.find("bricklink_pricing_apply_readiness_current")
-                .tag("status", status)
-                .gauge()).as(status).isNotNull());
-
-        List<String> reasonTags = List.of(
-                "fixed_price",
-                "missing_current_price",
-                "missing_final_price",
-                "currency_mismatch",
-                "unsupported_decision_status",
-                "blocked_reason_code",
-                "ineligible_reason",
-                "below_minimum_delta",
-                "below_minimum_delta_percent",
-                "below_minimum_confidence",
-                "below_minimum_comparable_count",
-                "above_maximum_absolute_delta",
-                "above_maximum_percent_delta",
-                "stale_decision"
-        );
-        reasonTags.forEach(reason -> assertThat(meterRegistry.find("bricklink_pricing_apply_readiness_block_reason_current")
-                .tag("reason", reason)
-                .gauge()).as(reason).isNotNull());
-    }
 
     @Test
-    void recordsPricingApplyAndMarketplaceSyncMetrics() {
+    void recordsMarketplaceSyncMetrics() {
         when(marketplaceListingSyncRequestDao.countBySyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_PENDING)).thenReturn(4L);
         when(marketplaceListingSyncRequestDao.countDueBySyncRequestStatusCode(eq(BricklinkMarketplaceSyncService.STATUS_PENDING), any())).thenReturn(2L);
         when(marketplaceListingSyncRequestDao.countBySyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_CLAIMED)).thenReturn(1L);
@@ -199,18 +110,6 @@ class BricklinkPricingMetricsServiceTest {
         when(marketplaceListingSyncRequestDao.countBySyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_BLOCKED)).thenReturn(3L);
         when(marketplaceListingSyncRequestDao.countBySyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_FAILED)).thenReturn(1L);
 
-        metricsService.recordApply(new BricklinkPricingApplyResult(
-                "SUCCESS",
-                true,
-                BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC,
-                5,
-                4,
-                4,
-                0,
-                1,
-                0,
-                100
-        ));
         metricsService.recordMarketplaceSync(new BricklinkMarketplaceSyncResult(
                 "PARTIAL_SUCCESS",
                 BricklinkMarketplaceSyncMode.APPLY,
@@ -224,11 +123,6 @@ class BricklinkPricingMetricsServiceTest {
                 125
         ));
 
-        assertThat(counter("bricklink_pricing_apply_job", "outcome", "success")).isEqualTo(1.0d);
-        assertThat(timerCount("bricklink_pricing_apply_job_duration", "outcome", "success")).isOne();
-        assertThat(counter("bricklink_pricing_apply_decision", "result", "selected")).isEqualTo(5.0d);
-        assertThat(counter("bricklink_pricing_apply_decision", "result", "local_price_updated")).isEqualTo(4.0d);
-        assertThat(counter("bricklink_pricing_apply_decision", "result", "sync_request_enqueued")).isEqualTo(4.0d);
         assertThat(counter("bricklink_marketplace_sync_job", "outcome", "partial_success")).isEqualTo(1.0d);
         assertThat(timerCount("bricklink_marketplace_sync_job_duration", "outcome", "partial_success")).isOne();
         assertThat(counter("bricklink_marketplace_sync_request", "result", "selected")).isEqualTo(5.0d);

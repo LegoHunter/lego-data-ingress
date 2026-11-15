@@ -32,16 +32,12 @@ import java.util.Set;
 
 /**
  * Decides a price for one listing from its newest shared BrickLink market snapshot: the market-position
- * formula, step-down, change limit and clamps. It reads but never writes, so the older decision job and
- * the Reprice job share exactly the same calculation (HOMELAB-65).
+ * formula, step-down, change limit and clamps, with the settings in {@code lego.pricing.reprice.algorithm}
+ * ({@link RepriceAlgorithmProperties}). It reads but never writes: {@link RepriceService} records the decision.
  */
 @Component
 @RequiredArgsConstructor
 public class BricklinkPricingDecider {
-    public static final String STATUS_PROPOSED = "PROPOSED";
-    public static final String STATUS_SKIPPED = "SKIPPED";
-    public static final String STATUS_FAILED = "FAILED";
-
     static final String ALGORITHM_VERSION = "bricklink-market-position-v2";
 
     static final String REASON_FIXED_PRICE_OVERRIDE = "FIXED_PRICE_OVERRIDE";
@@ -76,7 +72,7 @@ public class BricklinkPricingDecider {
             "BW", bd("0.85")
     );
 
-    private final BricklinkPricingDecisionProperties properties;
+    private final RepriceAlgorithmProperties properties;
     private final ItemInventoryDao itemInventoryDao;
     private final ConditionDao conditionDao;
     private final CanonicalItemDao canonicalItemDao;
@@ -90,7 +86,7 @@ public class BricklinkPricingDecider {
             return decision(
                     listing,
                     null,
-                    STATUS_SKIPPED,
+                    PricingDecisionStatus.SKIPPED,
                     REASON_FIXED_PRICE_OVERRIDE,
                     null,
                     money(listing.getUnitPrice()),
@@ -169,7 +165,7 @@ public class BricklinkPricingDecider {
         return decision(
                 listing,
                 snapshot.get(),
-                STATUS_PROPOSED,
+                PricingDecisionStatus.PROPOSED,
                 reasonCode,
                 stepDown.price(),
                 clamp.price(),
@@ -198,7 +194,7 @@ public class BricklinkPricingDecider {
         return decision(
                 listing,
                 snapshot,
-                STATUS_FAILED,
+                PricingDecisionStatus.FAILED,
                 reasonCode,
                 null,
                 null,
@@ -296,7 +292,7 @@ public class BricklinkPricingDecider {
     private Long weeksUnsold(MarketplaceListing listing) {
         String status = clean(listing.getListingStatusCode());
         if (listing.getPublishedAt() == null || status == null
-                || !properties.effectiveActiveListingStatusCode().equalsIgnoreCase(status)) {
+                || !RepriceAlgorithmProperties.ACTIVE_LISTING_STATUS.equalsIgnoreCase(status)) {
             return null;
         }
         long days = ChronoUnit.DAYS.between(listing.getPublishedAt(), now());
@@ -373,7 +369,7 @@ public class BricklinkPricingDecider {
         }
         Optional<String> box = conditionCode(inventory.getBoxConditionId()).filter(code -> !ABSENT_CODES.contains(code));
         Optional<String> instructions = conditionCode(inventory.getInstructionsConditionId()).filter(code -> !ABSENT_CODES.contains(code));
-        return new ItemPackaging(box, instructions, BricklinkPricingDecisionProperties.Packaging.of(box.isPresent(), instructions.isPresent()));
+        return new ItemPackaging(box, instructions, RepriceAlgorithmProperties.Packaging.of(box.isPresent(), instructions.isPresent()));
     }
 
     private Optional<String> conditionCode(Integer conditionId) {
@@ -492,7 +488,7 @@ public class BricklinkPricingDecider {
     private record ItemPackaging(
             Optional<String> boxCode,
             Optional<String> instructionsCode,
-            BricklinkPricingDecisionProperties.Packaging packaging
+            RepriceAlgorithmProperties.Packaging packaging
     ) {
     }
 

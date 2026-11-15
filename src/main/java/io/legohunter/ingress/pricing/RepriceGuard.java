@@ -8,9 +8,9 @@ import java.math.RoundingMode;
 
 /**
  * Whether a decided price may be sent: a pure function of the listing, the decision and the guard
- * settings, with no reads or writes (HOMELAB-65). The rules are the apply-readiness rules
- * ({@link BricklinkPricingApplyReadinessService}) in the same order, minus the stale-decision check,
- * which Reprice does not need because it decides and guards in one pass on the same data.
+ * settings ({@code lego.pricing.reprice.guard}, {@link RepriceGuardProperties}), with no reads or writes
+ * (HOMELAB-65). The rules came from the old apply-readiness job, in the same order, minus its stale-decision
+ * check: Reprice decides and guards in one pass on the same data, so a decision is never stale.
  *
  * <p>Only a PROPOSED decision is guarded; SKIPPED (fixed price) and FAILED decisions have no price to send.
  */
@@ -46,13 +46,13 @@ public final class RepriceGuard {
      * @param hasRemoteLot whether the listing has a BrickLink lot (a {@code bricklink_marketplace_listing}
      *                    row with an inventory id)
      * @param decision    the PROPOSED decision just made for it
-     * @param config      the guard settings ({@code lego.bricklink.pricing.apply-readiness} until HOMELAB-66)
+     * @param config      the guard settings ({@code lego.pricing.reprice.guard})
      */
     public static Result evaluate(
             MarketplaceListing listing,
             boolean hasRemoteLot,
             PricingDecision decision,
-            BricklinkPricingApplyReadinessProperties config
+            RepriceGuardProperties config
     ) {
         if (Boolean.TRUE.equals(listing.getFixedPrice())) {
             return Result.blocked(FIXED_PRICE);
@@ -73,7 +73,7 @@ public final class RepriceGuard {
         if (config.effectiveBlockedReasonCodes().contains(reasonCode)) {
             return Result.blocked(BLOCKED_REASON_CODE);
         }
-        if (!config.effectiveApplyEligibleReasonCodes().contains(reasonCode)) {
+        if (!config.effectiveEligibleReasonCodes().contains(reasonCode)) {
             return Result.blocked(INELIGIBLE_REASON);
         }
 

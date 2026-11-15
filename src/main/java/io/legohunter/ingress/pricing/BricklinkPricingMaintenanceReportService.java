@@ -22,7 +22,7 @@ public class BricklinkPricingMaintenanceReportService {
     private final CrawlTargetDao crawlTargetDao;
     private final CrawlAttemptDao crawlAttemptDao;
     private final MarketplaceListingDao marketplaceListingDao;
-    private final BricklinkPricingCrawlProperties crawlProperties;
+    private final RepriceProperties repriceProperties;
 
     /**
      * The shared BrickLink crawl queue and its latest failures (HOMELAB-32). The queue is shared by every
@@ -45,8 +45,8 @@ public class BricklinkPricingMaintenanceReportService {
 
     public BricklinkPricingDataQualityReport buildDataQualityReport(int limit) {
         int effectiveLimit = Math.min(MAX_REPORT_LIMIT, Math.max(1, limit));
-        Integer serviceId = crawlProperties.getBricklinkExternalServiceId();
-        Set<String> statusCodes = crawlProperties.effectivePriceableListingStatusCodes();
+        Integer serviceId = repriceProperties.getBricklinkExternalServiceId();
+        Set<String> statusCodes = repriceProperties.effectivePriceableListingStatusCodes();
         PricingDataQualitySummary summary = marketplaceListingDao.summarizePricingDataQualityByListingExternalServiceIdAndListingStatusCodes(
                 serviceId,
                 statusCodes

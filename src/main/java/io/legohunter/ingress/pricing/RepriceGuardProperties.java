@@ -10,17 +10,15 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * The Reprice guard ({@code lego.pricing.reprice.guard}, HOMELAB-66): whether a decision may be sent to the
+ * marketplace. A decision the guard blocks is recorded BLOCKED with the reason. See {@link RepriceGuard}.
+ */
 @Getter
 @Setter
 @Configuration
-@ConfigurationProperties(prefix = "lego.bricklink.pricing.apply-readiness")
-public class BricklinkPricingApplyReadinessProperties {
-    private boolean enabled = false;
-    private Integer bricklinkExternalServiceId = 2;
-    private Set<String> priceableListingStatusCodes = Set.of("ACTIVE", "DRAFT");
-    private String activeListingStatusCode = "ACTIVE";
-    private String proposedDecisionStatusCode = BricklinkPricingDecisionService.STATUS_PROPOSED;
-    private int batchSize = 25;
+@ConfigurationProperties(prefix = "lego.pricing.reprice.guard")
+public class RepriceGuardProperties {
     private BigDecimal minimumPriceDelta = new BigDecimal("0.01");
     private MinimumDelta minimumDelta = new MinimumDelta();
     private BigDecimal minimumConfidence = BigDecimal.ZERO;
@@ -28,43 +26,14 @@ public class BricklinkPricingApplyReadinessProperties {
     private BigDecimal maximumAbsoluteDelta;
     private BigDecimal maximumPercentDelta;
     private Set<String> blockedReasonCodes = new LinkedHashSet<>();
-    private Set<String> applyEligibleReasonCodes = new LinkedHashSet<>(Set.of(
-            BricklinkPricingDecisionService.REASON_MARKET_POSITION,
-            BricklinkPricingDecisionService.REASON_SINGLE_COMPARABLE_DISCOUNTED,
-            BricklinkPricingDecisionService.REASON_TWO_COMPARABLES_WEIGHTED,
-            BricklinkPricingDecisionService.REASON_BELOW_MIN_PRICE_CLAMPED,
-            BricklinkPricingDecisionService.REASON_ABOVE_MAX_PRICE_CLAMPED
+    /** Decision reasons that may be sent. A decision for any other reason is BLOCKED (INELIGIBLE_REASON). */
+    private Set<String> eligibleReasonCodes = new LinkedHashSet<>(Set.of(
+            BricklinkPricingDecider.REASON_MARKET_POSITION,
+            BricklinkPricingDecider.REASON_SINGLE_COMPARABLE_DISCOUNTED,
+            BricklinkPricingDecider.REASON_TWO_COMPARABLES_WEIGHTED,
+            BricklinkPricingDecider.REASON_BELOW_MIN_PRICE_CLAMPED,
+            BricklinkPricingDecider.REASON_ABOVE_MAX_PRICE_CLAMPED
     ));
-    private Scheduled scheduled = new Scheduled();
-
-    public String effectiveActiveListingStatusCode() {
-        if (activeListingStatusCode == null || activeListingStatusCode.isBlank()) {
-            return "ACTIVE";
-        }
-        return activeListingStatusCode.trim().toUpperCase();
-    }
-
-    public Set<String> effectivePriceableListingStatusCodes() {
-        if (priceableListingStatusCodes == null || priceableListingStatusCodes.isEmpty()) {
-            return Set.of(effectiveActiveListingStatusCode());
-        }
-        Set<String> normalizedStatusCodes = priceableListingStatusCodes.stream()
-                .filter(statusCode -> statusCode != null && !statusCode.isBlank())
-                .map(statusCode -> statusCode.trim().toUpperCase())
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        return normalizedStatusCodes.isEmpty() ? Set.of(effectiveActiveListingStatusCode()) : normalizedStatusCodes;
-    }
-
-    public String effectiveProposedDecisionStatusCode() {
-        if (proposedDecisionStatusCode == null || proposedDecisionStatusCode.isBlank()) {
-            return BricklinkPricingDecisionService.STATUS_PROPOSED;
-        }
-        return proposedDecisionStatusCode.trim().toUpperCase();
-    }
-
-    public int effectiveBatchSize() {
-        return Math.max(1, batchSize);
-    }
 
     public BigDecimal effectiveMinimumPriceDelta() {
         if (minimumPriceDelta == null || minimumPriceDelta.signum() < 0) {
@@ -113,8 +82,8 @@ public class BricklinkPricingApplyReadinessProperties {
         return normalizeReasonCodes(blockedReasonCodes);
     }
 
-    public Set<String> effectiveApplyEligibleReasonCodes() {
-        return normalizeReasonCodes(applyEligibleReasonCodes);
+    public Set<String> effectiveEligibleReasonCodes() {
+        return normalizeReasonCodes(eligibleReasonCodes);
     }
 
     private Set<String> normalizeReasonCodes(Set<String> reasonCodes) {
@@ -129,15 +98,5 @@ public class BricklinkPricingApplyReadinessProperties {
     public static class MinimumDelta {
         private boolean enabled = false;
         private BigDecimal percent = new BigDecimal("0.02");
-    }
-
-    @Getter
-    @Setter
-    public static class Scheduled {
-        private boolean enabled = false;
-        private long fixedDelayMs = 300_000L;
-        private long initialDelayMs = 30_000L;
-        private String lockAtMostFor = "10m";
-        private String lockAtLeastFor = "0s";
     }
 }

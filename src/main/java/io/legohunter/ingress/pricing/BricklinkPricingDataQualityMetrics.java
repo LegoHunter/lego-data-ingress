@@ -53,7 +53,7 @@ public class BricklinkPricingDataQualityMetrics {
     }
 
     private final MarketplaceListingDao marketplaceListingDao;
-    private final BricklinkPricingCrawlProperties crawlProperties;
+    private final RepriceProperties repriceProperties;
     private final Clock clock;
     private final Map<String, AtomicLong> gaps = new LinkedHashMap<>();
     private final Map<String, AtomicLong> listings = new LinkedHashMap<>();
@@ -63,19 +63,19 @@ public class BricklinkPricingDataQualityMetrics {
     public BricklinkPricingDataQualityMetrics(
             MeterRegistry meterRegistry,
             MarketplaceListingDao marketplaceListingDao,
-            BricklinkPricingCrawlProperties crawlProperties
+            RepriceProperties repriceProperties
     ) {
-        this(meterRegistry, marketplaceListingDao, crawlProperties, Clock.systemUTC());
+        this(meterRegistry, marketplaceListingDao, repriceProperties, Clock.systemUTC());
     }
 
     BricklinkPricingDataQualityMetrics(
             MeterRegistry meterRegistry,
             MarketplaceListingDao marketplaceListingDao,
-            BricklinkPricingCrawlProperties crawlProperties,
+            RepriceProperties repriceProperties,
             Clock clock
     ) {
         this.marketplaceListingDao = marketplaceListingDao;
-        this.crawlProperties = crawlProperties;
+        this.repriceProperties = repriceProperties;
         this.clock = clock;
         GAP_COUNTS.keySet().forEach(gap -> gaps.put(gap, register(meterRegistry, GAPS,
                 "Priceable BrickLink listings missing data the Pricing Plane needs, by gap.", "gap", gap)));
@@ -93,8 +93,8 @@ public class BricklinkPricingDataQualityMetrics {
     public void refresh() {
         try {
             PricingDataQualitySummary summary = marketplaceListingDao.summarizePricingDataQualityByListingExternalServiceIdAndListingStatusCodes(
-                    crawlProperties.getBricklinkExternalServiceId(),
-                    crawlProperties.effectivePriceableListingStatusCodes()
+                    repriceProperties.getBricklinkExternalServiceId(),
+                    repriceProperties.effectivePriceableListingStatusCodes()
             );
             if (summary == null) {
                 summary = new PricingDataQualitySummary();
