@@ -379,7 +379,7 @@ Boundaries:
 | Boundary | Detail |
 | --- | --- |
 | Crawl only captures source data | Prices are computed by `RepriceJob` in each environment; the crawler never changes a listing. |
-| Shared, append-only history | `market_snapshot` and `market_listing` are never updated. SANDBOX's earlier `pricing_snapshot*` history was copied in once (HOMELAB-31). The old `pricing_crawl_work_item` / `pricing_snapshot*` tables are no longer written; dropping them is a later cleanup. |
+| Shared, append-only history | `market_snapshot` and `market_listing` are never updated. SANDBOX's earlier `pricing_snapshot*` history was copied in once (HOMELAB-31). The old `pricing_crawl_work_item`, `pricing_snapshot*` and `pricing_apply_readiness` tables were dropped by deployer changeset 2.4.0 (HOMELAB-66/67). |
 | AJAX rate limit protection | Outbound AJAX calls are protected by `bricklink-ajax` rate limiting. Keep it enabled for live runs. |
 
 ### Pricing Plane Table And Timing Mental Model
