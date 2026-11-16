@@ -207,7 +207,6 @@ public class RepriceService {
                 .marketplaceListingId(listing.getMarketplaceListingId())
                 .listingExternalServiceId(properties.getBricklinkExternalServiceId())
                 .pricingDecisionId(decision.getPricingDecisionId())
-                .pricingApplyReadinessId(null)
                 .syncRequestTypeCode(type)
                 .syncRequestStatusCode(MarketplaceSyncCodes.STATUS_PENDING)
                 .syncReasonCode(guard.initialPrice()

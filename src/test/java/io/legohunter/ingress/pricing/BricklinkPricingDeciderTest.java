@@ -586,7 +586,6 @@ class BricklinkPricingDeciderTest {
         assertThat(decision.getReasonCode()).isEqualTo(BricklinkPricingDecider.REASON_NO_CURRENT_COMPARABLES);
         assertThat(decision.getMarketSnapshotId()).isEqualTo(500L);
         assertThat(decision.getMarketSnapshotCapturedAt()).isEqualTo(snapshot.getCapturedAt());
-        assertThat(decision.getPricingSnapshotId()).isNull();
     }
 
     private ItemInventory withPackaging(ItemInventory inventory, String boxCode, String instructionsCode) {

@@ -182,7 +182,6 @@ class RepriceServiceTest {
         assertThat(request.getSyncRequestTypeCode()).isEqualTo("PRICE_UPDATE");
         assertThat(request.getSyncRequestStatusCode()).isEqualTo("PENDING");
         assertThat(request.getPricingDecisionId()).isEqualTo(saved.getPricingDecisionId());
-        assertThat(request.getPricingApplyReadinessId()).isNull();
         assertThat(request.getRequestedUnitPrice()).isEqualByComparingTo("210.00");
         assertThat(request.getPreviousUnitPrice()).isEqualByComparingTo("200.00");
         assertThat(request.getRemoteInventoryId()).isEqualTo("12345");
