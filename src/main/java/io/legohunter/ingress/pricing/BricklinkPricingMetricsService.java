@@ -97,6 +97,7 @@ public class BricklinkPricingMetricsService {
         increment("bricklink_marketplace_sync_request", "dry_run_verified", result.dryRunVerified());
         increment("bricklink_marketplace_sync_request", "blocked", result.blocked());
         increment("bricklink_marketplace_sync_request", "failed", result.failed());
+        increment("bricklink_marketplace_sync_request", "outage_deferred", result.outageDeferred());
     }
 
     private synchronized void registerGauges() {

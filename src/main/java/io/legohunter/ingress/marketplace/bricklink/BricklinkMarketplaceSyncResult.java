@@ -10,9 +10,11 @@ public record BricklinkMarketplaceSyncResult(
         int dryRunVerified,
         int blocked,
         int failed,
+        /** Requests put back to PENDING, attempt not counted, because BrickLink was down (HOMELAB-81). */
+        int outageDeferred,
         long elapsedMillis
 ) {
     static BricklinkMarketplaceSyncResult noWork(BricklinkMarketplaceSyncMode mode, long elapsedMillis) {
-        return new BricklinkMarketplaceSyncResult("NO_WORK", mode, 0, 0, 0, 0, 0, 0, 0, elapsedMillis);
+        return new BricklinkMarketplaceSyncResult("NO_WORK", mode, 0, 0, 0, 0, 0, 0, 0, 0, elapsedMillis);
     }
 }

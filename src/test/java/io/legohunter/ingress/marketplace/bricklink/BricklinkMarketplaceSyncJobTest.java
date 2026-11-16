@@ -22,6 +22,7 @@ class BricklinkMarketplaceSyncJobTest {
                 0,
                 0,
                 0,
+                0,
                 75
         );
         when(marketplaceSyncService.runOnce()).thenReturn(expected);

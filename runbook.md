@@ -866,6 +866,13 @@ The marketplace sync job consumes due `marketplace_listing_sync_request` rows fo
 
 BrickLink calls time out (`bricklink.rest.timeouts.connect`, default `10s`; `.read`, default `60s`). A timed-out create may still have been applied by BrickLink; step 3 finds it on the retry.
 
+**BrickLink outages (HOMELAB-81).** A failure is checked for an outage before an attempt is spent. A redirect, 401, 403, 429, any 5xx, or an I/O failure (refused, reset, timeout) is a *candidate* (`BricklinkRestOutageClassifier`). The worker then probes BrickLink with one read-only call (`GET /colors/1`):
+
+- **Probe fails: outage.** The request goes back to `PENDING` with the claim's attempt given back (`attempt_count` - 1), due again after `retry-backoff`, and its decision stays `ACCEPTED`. The run stops without claiming more requests: they stay `PENDING`. The run outcome is `OUTAGE`, and the counter `bricklink_marketplace_sync_request{result="outage_deferred"}` goes up. A Reprice hand-off that hits an outage leaves its request `PENDING` for the job the same way.
+- **Probe answers: the failure is this request's own.** For example, BrickLink also answers a malformed URL with a redirect. The attempt counts as before, and after `max_attempts` the request ends `FAILED`. Without the probe, such a request would never use up its attempts and would stop every run.
+
+Any other failure (400, 404, a validation error, a local check, a read-back mismatch) spends the attempt as before, without probing. Nothing about what is written changes: the stockroom guard, remarks block, read-back checks and LISTING_CREATE duplicate protection all still apply. During the 2026-11 maintenance window, requests 677–683 used up their attempts and their decisions became `SYNC_FAILED`; with this handling they would have waited.
+
 Local profile is always dry-run for marketplace sync. `BricklinkMarketplaceSyncProperties.effectiveMode()` returns `DRY_RUN` when `environment-code=local` even if the configured mode says `APPLY`.
 
 Modes:
@@ -955,7 +962,7 @@ Settings:
 | `lego.bricklink.marketplace-sync.enabled` | `false` | `true`, `false` | Creates the BrickLink marketplace sync service and imports the BrickLink REST client. |
 | `lego.bricklink.marketplace-sync.mode` | `DRY_RUN` | `DRY_RUN`, `APPLY` | Controls whether remote inventory is only verified or actually updated/created. The effective mode is forced to `DRY_RUN` when `environment-code=local`. |
 | `lego.bricklink.marketplace-sync.batch-size` | `5` | Integer; effective value at least `1` | Maximum due sync requests processed per run. |
-| `lego.bricklink.marketplace-sync.retry-backoff` | `6h` | Spring `Duration` | Delay before retrying transient sync failures. |
+| `lego.bricklink.marketplace-sync.retry-backoff` | `6h` | Spring `Duration` | Delay before retrying transient sync failures, and before a request deferred by a BrickLink outage is due again. |
 | `lego.bricklink.marketplace-sync.environment-code` | `local` | Short environment code | Runtime environment used for safety checks and remarks block generation. |
 | `lego.bricklink.marketplace-sync.production` | `false` | `true`, `false` | Explicitly marks the runtime as production. Omitted or `false` means non-production safety checks apply, regardless of the environment name. |
 | `lego.bricklink.marketplace-sync.require-system-remarks-block` | `true` | `true`, `false` | Requires matching system remarks ownership data before remote writes. |
@@ -988,6 +995,8 @@ Important logs:
 | `bricklink.marketplace_sync.remote_updated` | BrickLink `updateInventory` was called for a price update. |
 | `bricklink.marketplace_sync.blocked` | A request failed safety checks and was marked blocked in apply mode. |
 | `bricklink.marketplace_sync.failed` | A transient or unexpected failure occurred. In apply mode, the request retries with backoff until max attempts is reached. |
+| `bricklink.marketplace_sync.outage` | BrickLink was down (the probe confirmed it). The request went back to `PENDING` without spending an attempt, and the run stopped. |
+| `bricklink.marketplace_sync.outage_probe_failed` | The outage probe (`GET /colors/1`) failed too; its message says how. |
 | `bricklink.marketplace_sync.decision_sync_failed` | A request with a pricing decision ended `BLOCKED`, or `FAILED` with no attempts left, so the decision moved from `ACCEPTED` to `SYNC_FAILED`. |
 | `bricklink.marketplace_sync.decision_not_accepted` | The request finished (succeeded, blocked or failed) but its decision was no longer `ACCEPTED`, so its status was left alone. |
 | `bricklink.marketplace_sync.job.completed` | Scheduled run completed and logs `BricklinkMarketplaceSyncResult`. |

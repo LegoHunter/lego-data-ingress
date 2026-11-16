@@ -53,6 +53,10 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
     private static final String LISTING_STATUS_ACTIVE = "ACTIVE";
     static final String LISTING_STATUS_ENDED = "ENDED";
     static final String SAFETY_REMOTE_DELETED = "REMOTE_DELETED";
+    /** Run outcome when a BrickLink outage stopped the run (HOMELAB-81). */
+    static final String OUTCOME_OUTAGE = "OUTAGE";
+    /** White: a catalog color that always exists. Reading it is the outage probe: cheap and read-only. */
+    static final int OUTAGE_PROBE_COLOR_ID = 1;
 
     private final BricklinkMarketplaceSyncProperties properties;
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao;
@@ -105,10 +109,15 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
                     counters.requestsClaimed++;
                 }
             } catch (RuntimeException e) {
-                recordFailure(effectiveRequest, mode, counters, e);
+                if (recordFailure(effectiveRequest, mode, counters, e)) {
+                    break;
+                }
                 continue;
             }
-            process(effectiveRequest, syncRequestType, mode, counters);
+            if (process(effectiveRequest, syncRequestType, mode, counters)) {
+                // BrickLink is down: every further request would fail the same way. The rest stay PENDING.
+                break;
+            }
         }
 
         return counters.result(mode, elapsedMillis(start));
@@ -150,8 +159,12 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
         return new HandOff(true, claimed.getSyncRequestStatusCode());
     }
 
-    /** One claimed (or, in DRY_RUN, unclaimed) request; a failure is recorded on it, never thrown. */
-    private void process(MarketplaceListingSyncRequest request, String syncRequestType, BricklinkMarketplaceSyncMode mode, Counters counters) {
+    /**
+     * One claimed (or, in DRY_RUN, unclaimed) request; a failure is recorded on it, never thrown.
+     *
+     * @return true when the failure was a BrickLink outage, so the caller stops claiming more requests
+     */
+    private boolean process(MarketplaceListingSyncRequest request, String syncRequestType, BricklinkMarketplaceSyncMode mode, Counters counters) {
         try {
             if (TYPE_LISTING_CREATE.equals(syncRequestType)) {
                 processListingCreate(request, mode, counters);
@@ -162,12 +175,34 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
             } else {
                 processPriceUpdate(request, mode, counters);
             }
+            return false;
         } catch (RuntimeException e) {
-            recordFailure(request, mode, counters, e);
+            return recordFailure(request, mode, counters, e);
         }
     }
 
-    private void recordFailure(MarketplaceListingSyncRequest request, BricklinkMarketplaceSyncMode mode, Counters counters, RuntimeException e) {
+    /**
+     * Records a failed request. A BrickLink outage (HOMELAB-81) puts it back to PENDING without spending the attempt
+     * its claim took, and its decision stays ACCEPTED; any other failure spends the attempt as before.
+     *
+     * @return true for an outage
+     */
+    private boolean recordFailure(MarketplaceListingSyncRequest request, BricklinkMarketplaceSyncMode mode, Counters counters, RuntimeException e) {
+        if (isConfirmedOutage(e)) {
+            counters.outageDeferred++;
+            if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+                deferForOutage(request, e.getMessage());
+            }
+            log.warn(
+                    "bricklink.marketplace_sync.outage marketplaceListingSyncRequestId={} marketplaceListingId={} syncRequestType={} retryAfter={} message={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    request.getSyncRequestTypeCode(),
+                    properties.effectiveRetryBackoff(),
+                    e.getMessage()
+            );
+            return true;
+        }
         counters.failed++;
         if (mode == BricklinkMarketplaceSyncMode.APPLY) {
             markRetryOrFailed(request, e.getMessage());
@@ -179,6 +214,40 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
                 e.getMessage(),
                 e
         );
+        return false;
+    }
+
+    /**
+     * A failure that may be an outage is confirmed by reading one catalog color. If BrickLink answers that, it is
+     * up and the failure belongs to this request (for example a malformed URL, which BrickLink also answers with a
+     * redirect), so the attempt counts. Without the probe, such a request would never use up its attempts and would
+     * stop every run at the same place.
+     */
+    private boolean isConfirmedOutage(RuntimeException failure) {
+        if (!BricklinkRestOutageClassifier.mayBeOutage(failure)) {
+            return false;
+        }
+        try {
+            bricklinkRestClient.getColor(OUTAGE_PROBE_COLOR_ID);
+            return false;
+        } catch (RuntimeException probeFailure) {
+            log.warn("bricklink.marketplace_sync.outage_probe_failed message={}", probeFailure.getMessage());
+            return true;
+        }
+    }
+
+    /**
+     * Back to PENDING, due after the retry backoff, with the claim's attempt given back. Safe to retry like any
+     * other failure: a LISTING_CREATE resumes from its saved lot id or finds the lot by its remarks.
+     */
+    private void deferForOutage(MarketplaceListingSyncRequest request, String message) {
+        int attempts = request.getAttemptCount() == null ? 0 : request.getAttemptCount();
+        request.setAttemptCount(Math.max(0, attempts - 1));
+        request.setClaimedAt(null);
+        request.setLastErrorMessage(shortMessage("BrickLink outage, attempt not counted: " + message));
+        request.setSyncRequestStatusCode(STATUS_PENDING);
+        request.setNextAttemptAt(now().plus(properties.effectiveRetryBackoff()));
+        marketplaceListingSyncRequestDao.update(request);
     }
 
     private void processPriceUpdate(
@@ -1213,6 +1282,7 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
         private int dryRunVerified;
         private int blocked;
         private int failed;
+        private int outageDeferred;
 
         private Counters(int selected) {
             this.selected = selected;
@@ -1220,7 +1290,9 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
 
         private BricklinkMarketplaceSyncResult result(BricklinkMarketplaceSyncMode mode, long elapsedMillis) {
             String outcome;
-            if (failed > 0 && remoteUpdated == 0 && dryRunVerified == 0) {
+            if (outageDeferred > 0) {
+                outcome = OUTCOME_OUTAGE;
+            } else if (failed > 0 && remoteUpdated == 0 && dryRunVerified == 0) {
                 outcome = "FAILED";
             } else if (failed > 0 || blocked > 0) {
                 outcome = "PARTIAL_SUCCESS";
@@ -1239,6 +1311,7 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
                     dryRunVerified,
                     blocked,
                     failed,
+                    outageDeferred,
                     elapsedMillis
             );
         }
