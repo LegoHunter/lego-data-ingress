@@ -24,7 +24,9 @@ import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import org.slf4j.MDC;
+import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
@@ -58,6 +60,7 @@ public class PhotoProcessingService {
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
     private final ExternalCatalogItemDao externalCatalogItemDao;
     private final ItemInventoryExternalCatalogItemDao itemInventoryExternalCatalogItemDao;
+    private final TransactionOperations transactions;
 
     // =========================================================
     // EVENT INGESTION
@@ -259,8 +262,6 @@ public class PhotoProcessingService {
             );
         }
 
-        String description =
-                metadata.caption();
 
         String metadataHash =
                 metadataFingerprintService.calculateHash(metadata);
@@ -435,17 +436,19 @@ public class PhotoProcessingService {
         // BUILD DB STATE
         // =========================================================
 
-        ItemInventory itemInventory =
-                buildItemInventory(
-                        uuid,
-                        description,
-                        metadata,
-                        existingItemInventory
-                );
+        ItemInventory existingItem = existingItemInventory.orElseThrow();
 
-        existingItemInventory
-                .map(ItemInventory::getItemInventoryId)
-                .ifPresent(itemInventory::setItemInventoryId);
+        // The sealed and built-once rules across all of the item's photos. A conflict rejects this photo
+        // before anything is uploaded; the rules are checked again under the item's row lock when it is written.
+        PhotoKeywordRules.Outcome keywordOutcome =
+                keywordOutcome(existingItem, existingLogicalPhoto, metadata, originalFilename);
+
+        ItemInventory desiredItem =
+                buildItemInventory(
+                        existingItem,
+                        metadata,
+                        keywordOutcome
+                );
 
         boolean primaryPhoto =
                 effectivePrimaryPhoto(metadata, existingLogicalPhoto);
@@ -457,8 +460,8 @@ public class PhotoProcessingService {
                 && !contentChanged
                 && !metadataChanged
                 && hasNoEffectiveMetadataChanges(
-                existingItemInventory.orElseThrow(),
-                itemInventory,
+                existingItem,
+                desiredItem,
                 existingLogicalPhoto.orElseThrow(),
                 primaryPhoto,
                 photoCaption
@@ -546,19 +549,38 @@ public class PhotoProcessingService {
         // INSERT OR UPDATE PROCESSED PHOTO ROW
         // =========================================================
 
+        ItemInventory itemInventory;
+
         try {
 
-            itemInventory = itemInventoryDao.upsert(itemInventory);
+          itemInventory = transactions.execute(transactionStatus -> {
+
+            // One writer per item: lock its row, then judge this photo against the photos stored right now.
+            // Two photos of one item can be processed at the same time by different consumers.
+            itemInventoryDao.lockForUpdate(existingItem.getItemInventoryId());
+            PhotoKeywordRules.Outcome lockedOutcome =
+                    keywordOutcome(existingItem, existingLogicalPhoto, metadata, originalFilename);
+            ItemInventory lockedItem =
+                    buildItemInventory(
+                            itemInventoryDao.findByItemInventoryId(existingItem.getItemInventoryId()).orElse(existingItem),
+                            metadata,
+                            lockedOutcome
+                    );
+
+            ItemInventory persistedItem = itemInventoryDao.upsert(lockedItem);
             itemInventoryExternalCatalogItemDao.upsert(ItemInventoryExternalCatalogItem.builder()
-                    .itemInventoryId(itemInventory.getItemInventoryId())
+                    .itemInventoryId(persistedItem.getItemInventoryId())
                     .externalCatalogItemId(externalCatalogItem.getExternalCatalogItemId())
                     .primary(true)
                     .build());
 
             log.info(
-                    "photo.db.inventory.upsert uuid={} id={}",
+                    "photo.db.inventory.upsert uuid={} id={} newOrUsed={} sealed={} builtOnce={}",
                     uuid,
-                    itemInventory.getItemInventoryId()
+                    persistedItem.getItemInventoryId(),
+                    persistedItem.getNewOrUsed(),
+                    persistedItem.getSealed(),
+                    persistedItem.getBuiltOnce()
             );
 
             if (replaceExistingPhoto) {
@@ -579,7 +601,7 @@ public class PhotoProcessingService {
             } else {
 
                 itemInventoryPhotoDao.insertPhoto(
-                        itemInventory.getItemInventoryId(),
+                        persistedItem.getItemInventoryId(),
                         md5,
                         metadataHash,
                         normalizedFileName,
@@ -594,10 +616,21 @@ public class PhotoProcessingService {
                 log.info(
                         "photo.db.photo.inserted md5={} itemInventoryId={} filename={}",
                         md5,
-                        itemInventory.getItemInventoryId(),
+                        persistedItem.getItemInventoryId(),
                         normalizedFileName
                 );
             }
+
+            // What this photo itself said, so later photos of the item can be judged against it.
+            itemInventoryPhotoDao.updateKeywordsByMd5(
+                    md5,
+                    metadata.sealedOptional().orElse(null),
+                    metadata.builtOnceOptional().orElse(null),
+                    metadata.keywords()
+            );
+
+            return persistedItem;
+          });
 
         } catch (Exception e) {
 
@@ -720,74 +753,90 @@ public class PhotoProcessingService {
     // HELPERS
     // =========================================================
 
+    /**
+     * The item as it should be after this photo: a copy of the stored item, changed only where the photo says
+     * so. Everything else (box number, completeness, costs, state, sale intent, the description typed at intake)
+     * stays as it is. A photo's caption belongs to the photo, not to the item's description.
+     */
     private ItemInventory buildItemInventory(
-            String uuid,
-            String description,
+            ItemInventory existingItem,
             ImageMetadata metadata,
-            Optional<ItemInventory> existingItemInventory
+            PhotoKeywordRules.Outcome keywordOutcome
     ) {
 
         ItemInventory itemInventory = new ItemInventory();
-
-        itemInventory.setUuid(uuid);
-
-        itemInventory.setDescription(
-                valueOrExisting(
-                        metadata.hasCaption(),
-                        description,
-                        existingItemInventory.map(ItemInventory::getDescription)
-                                .orElse(null)
-                )
-        );
-
-        itemInventory.setSealed(
-                valueOrExisting(
-                        metadata.hasSealed(),
-                        metadata.isSealed(),
-                        existingItemInventory.map(ItemInventory::getSealed)
-                                .orElse(false)
-                )
-        );
-
-        itemInventory.setBuiltOnce(
-                valueOrExisting(
-                        metadata.hasBuiltOnce(),
-                        metadata.isBuiltOnce(),
-                        existingItemInventory.map(ItemInventory::getBuiltOnce)
-                                .orElse(false)
-                )
-        );
+        BeanUtils.copyProperties(existingItem, itemInventory);
 
         itemInventory.setActive(true);
 
-        itemInventory.setItemConditionId(
-                metadata.itemConditionOptional()
-                        .map(this::conditionId)
-                        .orElseGet(() ->
-                                existingItemInventory.map(ItemInventory::getItemConditionId)
-                                        .orElse(null)
-                        )
-        );
+        if (keywordOutcome.sealed() != null) {
+            itemInventory.setSealed(keywordOutcome.sealed());
+        }
+        if (keywordOutcome.builtOnce() != null) {
+            itemInventory.setBuiltOnce(keywordOutcome.builtOnce());
+        }
+        if (keywordOutcome.newOrUsed() != null) {
+            itemInventory.setNewOrUsed(keywordOutcome.newOrUsed());
+        }
 
-        itemInventory.setBoxConditionId(
-                metadata.boxConditionOptional()
-                        .map(this::conditionId)
-                        .orElseGet(() ->
-                                existingItemInventory.map(ItemInventory::getBoxConditionId)
-                                        .orElse(null)
-                        )
-        );
+        metadata.itemConditionOptional()
+                .map(this::conditionId)
+                .ifPresent(itemInventory::setItemConditionId);
 
-        itemInventory.setInstructionsConditionId(
-                metadata.instructionsConditionOptional()
-                        .map(this::conditionId)
-                        .orElseGet(() ->
-                                existingItemInventory.map(ItemInventory::getInstructionsConditionId)
-                                        .orElse(null)
-                        )
-        );
+        metadata.boxConditionOptional()
+                .map(this::conditionId)
+                .ifPresent(itemInventory::setBoxConditionId);
+
+        metadata.instructionsConditionOptional()
+                .map(this::conditionId)
+                .ifPresent(itemInventory::setInstructionsConditionId);
 
         return itemInventory;
+    }
+
+    /**
+     * Applies the sealed and built-once rules to this photo against the item's other stored photos. A re-uploaded
+     * photo is not judged against its own earlier values. Throws a rejection when the photo conflicts.
+     */
+    private PhotoKeywordRules.Outcome keywordOutcome(
+            ItemInventory existingItem,
+            Optional<ItemInventoryPhoto> existingLogicalPhoto,
+            ImageMetadata metadata,
+            String originalFilename
+    ) {
+
+        Integer thisPhotoId =
+                existingLogicalPhoto.map(ItemInventoryPhoto::getItemInventoryPhotoId).orElse(null);
+
+        List<PhotoKeywordRules.OtherPhoto> otherPhotos =
+                Optional.ofNullable(itemInventoryPhotoDao.findByItemInventoryId(existingItem.getItemInventoryId()))
+                        .orElse(java.util.Set.of())
+                        .stream()
+                        .filter(photo -> !Objects.equals(photo.getItemInventoryPhotoId(), thisPhotoId))
+                        .sorted(java.util.Comparator.comparing(
+                                ItemInventoryPhoto::getFileName,
+                                java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
+                        .map(photo -> new PhotoKeywordRules.OtherPhoto(
+                                photo.getFileName(),
+                                photo.getSealedKeyword(),
+                                photo.getBuiltOnceKeyword()))
+                        .toList();
+
+        PhotoKeywordRules.Outcome outcome =
+                PhotoKeywordRules.evaluate(
+                        metadata.sealedOptional().orElse(null),
+                        metadata.builtOnceOptional().orElse(null),
+                        otherPhotos
+                );
+
+        if (outcome.rejected()) {
+            throw new RejectedPhotoUploadException(
+                    "Photo [%s] conflicts with the item's other photos: %s"
+                            .formatted(originalFilename, outcome.rejection())
+            );
+        }
+
+        return outcome;
     }
 
     private String buildKey(
@@ -1074,7 +1123,7 @@ public class PhotoProcessingService {
             String photoCaption
     ) {
 
-        return Objects.equals(existingItemInventory.getDescription(), itemInventory.getDescription())
+        return Objects.equals(existingItemInventory.getNewOrUsed(), itemInventory.getNewOrUsed())
                 && Objects.equals(existingItemInventory.getSealed(), itemInventory.getSealed())
                 && Objects.equals(existingItemInventory.getBuiltOnce(), itemInventory.getBuiltOnce())
                 && Objects.equals(existingItemInventory.getItemConditionId(), itemInventory.getItemConditionId())
@@ -1084,13 +1133,6 @@ public class PhotoProcessingService {
                 && Objects.equals(existingPhoto.getCaption(), photoCaption);
     }
 
-    private <T> T valueOrExisting(boolean hasMetadataValue, T metadataValue, T existingValue) {
-        if (hasMetadataValue) {
-            return metadataValue;
-        }
-
-        return existingValue;
-    }
 
     private static class RejectedPhotoUploadException extends RuntimeException {
 
