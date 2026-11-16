@@ -217,7 +217,7 @@ The only code that writes to BrickLink lots. It takes `PENDING` requests that ar
 | Type | What it does |
 | --- | --- |
 | `PRICE_UPDATE` | Reads the lot and checks safety, writes the price (and, outside PROD, the stockroom), reads it back. Only then does it move the local price and mark the decision `APPLIED`. |
-| `LISTING_CREATE` | Re-checks the draft locally. Searches the store for a lot that an earlier, lost response already created, and takes it over. Otherwise creates the lot and saves its id at once. Reads it back, checking ownership, stockroom and quantity 1, then marks the listing `ACTIVE`. A lot that fails the read-back is hidden in a stockroom (A in PROD, the environment's own elsewhere). |
+| `LISTING_CREATE` | Re-checks the draft locally. Reads the whole store and compares each lot's ownership block with the item's UUID (never the item number). A lot for this listing, left by an earlier lost response, is taken over. A lot for the same item under **another listing** blocks the create with `REMOTE_LOT_EXISTS_FOR_ITEM` (HOMELAB-100). The same item under another environment's block is only logged. Otherwise it creates the lot and saves its id at once. Reads it back, checking ownership, stockroom and quantity 1, then marks the listing `ACTIVE`. A lot that fails the read-back is hidden in a stockroom (A in PROD, the environment's own elsewhere). |
 | `DESCRIPTION_UPDATE` | Writes only the lot's Description, from the listing's description or else its title. The read-back must show the text and unchanged remarks (HOMELAB-80). BrickLink caps the REST Description at 255 characters. |
 | `LISTING_DELETE` | Seeded-item teardown (HOMELAB-40): deletes a lower-environment lot that is in this environment's stockroom and carries its ownership block. It is refused in PROD, and success is proven by the lot reading back as not found. The listing becomes `ENDED`. |
 
@@ -239,7 +239,9 @@ Safety-check codes you may see:
   `MISSING_BRICKLINK_COLOR_ID`, `REQUEST_PRICE_MISMATCH`, `NON_PROD_PUBLIC_VISIBILITY_FORBIDDEN`, `REMARKS_TOO_LONG`, …
 - **Remote checks:** `REMOTE_NOT_STOCKROOM`, `REMOTE_STOCKROOM_MISMATCH`, `REMOTE_SYSTEM_BLOCK_MISSING`,
   `REMOTE_SYSTEM_BLOCK_ENV_MISMATCH`, `REMOTE_SYSTEM_BLOCK_LISTING_MISMATCH`, `REMOTE_SYSTEM_BLOCK_INVENTORY_MISMATCH`.
-- **Read-back:** `REMOTE_PRICE_MISMATCH`, `REMOTE_QUANTITY_MISMATCH`, `DUPLICATE_REMOTE_INVENTORY`,
+- **Store search before a create:** `REMOTE_LOT_EXISTS_FOR_ITEM` (the item already has a lot under another
+  listing; the message names the lot and that listing), `DUPLICATE_REMOTE_INVENTORY` (several lots for this listing).
+- **Read-back:** `REMOTE_PRICE_MISMATCH`, `REMOTE_QUANTITY_MISMATCH`,
   `REMOTE_DESCRIPTION_MISMATCH`, `REMOTE_REMARKS_MISMATCH`.
 
 Mode `DRY_RUN` verifies and logs without claiming or writing. The `local` environment is always `DRY_RUN`.
