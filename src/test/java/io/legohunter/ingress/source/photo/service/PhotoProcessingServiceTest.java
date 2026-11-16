@@ -120,7 +120,7 @@ class PhotoProcessingServiceTest {
         when(metadataExtractorService.calculateMd5(scaledBytes))
                 .thenReturn("md5-1");
         when(itemInventoryDao.findByUuid("uuid-1"))
-                .thenReturn(Optional.empty());
+                .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
         when(itemInventoryPhotoDao.findByMd5("md5-1"))
                 .thenReturn(Optional.empty());
         when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
@@ -215,7 +215,7 @@ class PhotoProcessingServiceTest {
         when(metadataExtractorService.calculateMd5(scaledBytes))
                 .thenReturn("md5-2");
         when(itemInventoryDao.findByUuid("uuid-2"))
-                .thenReturn(Optional.empty());
+                .thenReturn(Optional.of(itemInventory(999, "uuid-2")));
         when(itemInventoryPhotoDao.findByMd5("md5-2"))
                 .thenReturn(Optional.empty());
         when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3002"))
@@ -567,7 +567,7 @@ class PhotoProcessingServiceTest {
         when(metadataExtractorService.calculateMd5(scaledBytes))
                 .thenReturn("duplicate-md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
-                .thenReturn(Optional.empty());
+                .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
         when(itemInventoryPhotoDao.findByMd5("duplicate-md5"))
                 .thenReturn(Optional.of(ItemInventoryPhoto.builder().build()));
 
@@ -630,6 +630,29 @@ class PhotoProcessingServiceTest {
     }
 
     @Test
+    void process_shouldRejectAPhotoWhoseUuidMatchesNoInventoryItem() {
+        // HOMELAB-97: an unknown uuid is a tagging mistake; it must not create a bare inventory item.
+        PhotoUploadEvent event = new PhotoUploadEvent("lego-uploads-sandbox", "photos/typo.jpg");
+        when(s3Service.getObject("lego-uploads-sandbox", "photos/typo.jpg"))
+                .thenReturn(new ByteArrayInputStream(originalBytes));
+        when(metadataExtractorService.extractMetadata(originalBytes))
+                .thenReturn(metadata("no-such-uuid", "3001", true, true, false, "Front view"));
+        when(imageScalingService.scale(originalBytes)).thenReturn(scaledBytes);
+        when(metadataExtractorService.calculateMd5(scaledBytes)).thenReturn("md5-1");
+        when(itemInventoryDao.findByUuid("no-such-uuid")).thenReturn(Optional.empty());
+
+        service.process(event);
+
+        verify(s3Service).copyObject("lego-uploads-sandbox", "photos/typo.jpg", "lego-uploads-sandbox", "photos/rejected/typo.jpg");
+        verify(s3Service).deleteObject("lego-uploads-sandbox", "photos/typo.jpg");
+        verify(itemInventoryDao, never()).upsert(any(ItemInventory.class));
+        verify(itemInventoryExternalCatalogItemDao, never()).upsert(any());
+        verify(itemInventoryPhotoDao, never()).insertPhoto(
+                any(), any(), any(), any(), any(), any(), anyLong(), anyBoolean(), any(), any(PhotoStatus.class));
+        verify(photoMetricsService).incrementFailed("event");
+    }
+
+    @Test
     void process_shouldMoveSourceToRejectedWhenExternalCatalogItemIsNotFound() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/photo.jpg");
 
@@ -642,7 +665,7 @@ class PhotoProcessingServiceTest {
         when(metadataExtractorService.calculateMd5(scaledBytes))
                 .thenReturn("md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
-                .thenReturn(Optional.empty());
+                .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
         when(itemInventoryPhotoDao.findByMd5("md5"))
                 .thenReturn(Optional.empty());
         when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "9999"))
@@ -682,7 +705,7 @@ class PhotoProcessingServiceTest {
         when(metadataExtractorService.calculateMd5(scaledBytes))
                 .thenReturn("md5-1");
         when(itemInventoryDao.findByUuid("uuid-1"))
-                .thenReturn(Optional.empty());
+                .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
         when(itemInventoryPhotoDao.findByMd5("md5-1"))
                 .thenReturn(Optional.empty());
         when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
@@ -710,7 +733,7 @@ class PhotoProcessingServiceTest {
         when(metadataExtractorService.calculateMd5(scaledBytes))
                 .thenReturn("md5-fail");
         when(itemInventoryDao.findByUuid("uuid-1"))
-                .thenReturn(Optional.empty());
+                .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
         when(itemInventoryPhotoDao.findByMd5("md5-fail"))
                 .thenReturn(Optional.empty());
         when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
@@ -752,7 +775,7 @@ class PhotoProcessingServiceTest {
         when(metadataExtractorService.calculateMd5(scaledBytes))
                 .thenReturn("md5-rollback");
         when(itemInventoryDao.findByUuid("uuid-1"))
-                .thenReturn(Optional.empty());
+                .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
         when(itemInventoryPhotoDao.findByMd5("md5-rollback"))
                 .thenReturn(Optional.empty());
         when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
@@ -795,7 +818,7 @@ class PhotoProcessingServiceTest {
         when(metadataExtractorService.calculateMd5(scaledBytes))
                 .thenReturn("md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
-                .thenReturn(Optional.empty());
+                .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
         when(itemInventoryPhotoDao.findByMd5("md5"))
                 .thenReturn(Optional.empty());
         when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
