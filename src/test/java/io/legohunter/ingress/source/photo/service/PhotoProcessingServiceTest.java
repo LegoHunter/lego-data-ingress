@@ -81,6 +81,10 @@ class PhotoProcessingServiceTest {
     @Mock
     private ItemInventoryExternalCatalogItemDao itemInventoryExternalCatalogItemDao;
 
+    @org.mockito.Spy
+    private org.springframework.transaction.support.TransactionOperations transactions =
+            org.springframework.transaction.support.TransactionOperations.withoutTransaction();
+
     @InjectMocks
     private PhotoProcessingService service;
 
@@ -143,7 +147,9 @@ class PhotoProcessingServiceTest {
                         ItemInventory::getInstructionsConditionId,
                         ItemInventory::getItemConditionId
                 )
-                .containsExactly("uuid-1", "Front view", true, false, true, 1, 2, 4);
+                .containsExactly("uuid-1", null, true, false, true, 1, 2, 4);
+        // Sealed on the photo: the item is New (HOMELAB-96).
+        assertThat(inventoryCaptor.getValue().getNewOrUsed()).isEqualTo("N");
 
         verify(s3Service).putObject(
                 eq("lego-photos-sandbox"),
@@ -295,7 +301,9 @@ class PhotoProcessingServiceTest {
                         ItemInventory::getSealed,
                         ItemInventory::getBuiltOnce
                 )
-                .containsExactly(999, "uuid-1", "Updated caption", false, true);
+                .containsExactly(999, "uuid-1", null, false, true);
+        // bo:true and not sealed: the item is Used (HOMELAB-96).
+        assertThat(inventoryCaptor.getValue().getNewOrUsed()).isEqualTo("U");
 
         verify(s3Service).putObject(
                 eq("lego-photos-sandbox"),
@@ -349,7 +357,7 @@ class PhotoProcessingServiceTest {
         when(s3Service.getObject("lego-uploads-sandbox", "photos/test.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
-                .thenReturn(metadata("uuid-1", "3001", false, true, true, "Metadata-only caption"));
+                .thenReturn(metadata("uuid-1", "3001", false, false, true, "Metadata-only caption"));
         when(imageScalingService.scale(originalBytes))
                 .thenReturn(scaledBytes);
         when(metadataExtractorService.calculateMd5(scaledBytes))
@@ -477,6 +485,8 @@ class PhotoProcessingServiceTest {
         PhotoUploadEvent event = new PhotoUploadEvent("lego-uploads-sandbox", "photos/DSC_9908.jpg");
         ItemInventory existingInventory = itemInventory(558, "e57aad1b8724d89bab9c0d5fccbb3a99");
         existingInventory.setDescription("Stickers applied except for astronaut torso and 4 NASA stickers.");
+        existingInventory.setNewOrUsed("U");
+        existingInventory.setActive(true);
         existingInventory.setSealed(false);
         existingInventory.setBuiltOnce(true);
         existingInventory.setBoxConditionId(2);
@@ -650,6 +660,146 @@ class PhotoProcessingServiceTest {
         verify(itemInventoryPhotoDao, never()).insertPhoto(
                 any(), any(), any(), any(), any(), any(), anyLong(), anyBoolean(), any(), any(PhotoStatus.class));
         verify(photoMetricsService).incrementFailed("event");
+    }
+
+    // ---- HOMELAB-96: sealed and built-once rules, and what a photo may change on its item ----
+
+    private ItemInventory intakeItem() {
+        ItemInventory item = itemInventory(999, "uuid-1");
+        item.setDescription("Main Street");
+        item.setBoxNumber(14);
+        item.setNewOrUsed("N");
+        item.setCompleteness("C");
+        item.setSealed(false);
+        item.setBuiltOnce(false);
+        item.setSaleIntentCode("SELLABLE");
+        item.setSaleIntentNote("Selling: duplicate");
+        return item;
+    }
+
+    private void arrangeNewPhoto(String key, ImageMetadata metadata, ItemInventory item) {
+        when(s3Service.getObject("lego-uploads-sandbox", key)).thenReturn(new ByteArrayInputStream(originalBytes));
+        when(metadataExtractorService.extractMetadata(originalBytes)).thenReturn(metadata);
+        when(imageScalingService.scale(originalBytes)).thenReturn(scaledBytes);
+        when(metadataExtractorService.calculateMd5(scaledBytes)).thenReturn("md5-new");
+        when(itemInventoryDao.findByUuid("uuid-1")).thenReturn(Optional.of(item));
+        lenient().when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
+                .thenReturn(Optional.of(externalCatalogItem(123)));
+    }
+
+    private ItemInventoryPhoto storedPhoto(int id, String fileName, Boolean sealedKeyword, Boolean builtOnceKeyword) {
+        ItemInventoryPhoto photo = photo(id, 999, "md5-" + id, fileName, "lego-photos-sandbox", "3001/uuid-1/md5-" + id + ".jpg");
+        photo.setSealedKeyword(sealedKeyword);
+        photo.setBuiltOnceKeyword(builtOnceKeyword);
+        return photo;
+    }
+
+    @Test
+    void process_builtOnceMakesTheItemUsedAndKeepsEverythingElseTheOwnerEntered() {
+        ItemInventory item = intakeItem();
+        ImageMetadata metadata = new ImageMetadata("uuid-1", "3001", null, null, true, null, null, null,
+                "Small crease on the lid.", "uuid:uuid-1; bl:3001; bo:true");
+        arrangeNewPhoto("photos/built.jpg", metadata, item);
+
+        service.process(new PhotoUploadEvent("lego-uploads-sandbox", "photos/built.jpg"));
+
+        ArgumentCaptor<ItemInventory> saved = ArgumentCaptor.forClass(ItemInventory.class);
+        verify(itemInventoryDao).upsert(saved.capture());
+        // The photo wins on New/Used and built once.
+        assertThat(saved.getValue().getNewOrUsed()).isEqualTo("U");
+        assertThat(saved.getValue().getBuiltOnce()).isTrue();
+        assertThat(saved.getValue().getSealed()).isFalse();
+        // The caption stays on the photo; the item keeps what was entered at intake.
+        assertThat(saved.getValue().getDescription()).isEqualTo("Main Street");
+        assertThat(saved.getValue().getBoxNumber()).isEqualTo(14);
+        assertThat(saved.getValue().getCompleteness()).isEqualTo("C");
+        assertThat(saved.getValue().getSaleIntentCode()).isEqualTo("SELLABLE");
+        assertThat(saved.getValue().getSaleIntentNote()).isEqualTo("Selling: duplicate");
+        // What this photo said is stored with it, under the item's row lock.
+        verify(itemInventoryDao).lockForUpdate(999);
+        verify(itemInventoryPhotoDao).updateKeywordsByMd5("md5-new", null, true, "uuid:uuid-1; bl:3001; bo:true");
+    }
+
+    @Test
+    void process_sealedMakesTheItemSealedAndNewEvenWhenIntakeSaidUsed() {
+        ItemInventory item = intakeItem();
+        item.setNewOrUsed("U");
+        item.setBuiltOnce(true);
+        arrangeNewPhoto("photos/sealed.jpg", metadata("uuid-1", "3001", null, true, null, null, null, null, null), item);
+
+        service.process(new PhotoUploadEvent("lego-uploads-sandbox", "photos/sealed.jpg"));
+
+        ArgumentCaptor<ItemInventory> saved = ArgumentCaptor.forClass(ItemInventory.class);
+        verify(itemInventoryDao).upsert(saved.capture());
+        assertThat(saved.getValue().getSealed()).isTrue();
+        assertThat(saved.getValue().getBuiltOnce()).isFalse();
+        assertThat(saved.getValue().getNewOrUsed()).isEqualTo("N");
+        verify(itemInventoryPhotoDao).updateKeywordsByMd5("md5-new", true, null, null);
+    }
+
+    @Test
+    void process_aPhotoWithoutSealedOrBuiltOnceLeavesNewOrUsedAsEntered() {
+        ItemInventory item = intakeItem();
+        item.setNewOrUsed("U");
+        arrangeNewPhoto("photos/plain.jpg", metadata("uuid-1", "3001", null, null, null, null, null, null, null), item);
+
+        service.process(new PhotoUploadEvent("lego-uploads-sandbox", "photos/plain.jpg"));
+
+        ArgumentCaptor<ItemInventory> saved = ArgumentCaptor.forClass(ItemInventory.class);
+        verify(itemInventoryDao).upsert(saved.capture());
+        assertThat(saved.getValue().getNewOrUsed()).isEqualTo("U");
+        assertThat(saved.getValue().getSealed()).isFalse();
+    }
+
+    @Test
+    void process_rejectsASealedPhotoWhenAnotherPhotoOfTheItemIsBuiltOnce() {
+        ItemInventory item = intakeItem();
+        arrangeNewPhoto("photos/sealed.jpg", metadata("uuid-1", "3001", null, true, null, null, null, null, null), item);
+        when(itemInventoryPhotoDao.findByItemInventoryId(999))
+                .thenReturn(java.util.Set.of(storedPhoto(10, "front.jpg", null, true)));
+
+        service.process(new PhotoUploadEvent("lego-uploads-sandbox", "photos/sealed.jpg"));
+
+        verify(s3Service).copyObject("lego-uploads-sandbox", "photos/sealed.jpg", "lego-uploads-sandbox", "photos/rejected/sealed.jpg");
+        verify(itemInventoryDao, never()).upsert(any(ItemInventory.class));
+        verify(s3Service, never()).putObject(any(), any(), any(), anyLong(), any());
+        verify(itemInventoryPhotoDao, never()).updateKeywordsByMd5(any(), any(), any(), any());
+    }
+
+    @Test
+    void process_rejectsASinglePhotoTaggedSealedAndBuiltOnce() {
+        ItemInventory item = intakeItem();
+        arrangeNewPhoto("photos/both.jpg", metadata("uuid-1", "3001", null, true, true, null, null, null, null), item);
+
+        service.process(new PhotoUploadEvent("lego-uploads-sandbox", "photos/both.jpg"));
+
+        verify(s3Service).copyObject("lego-uploads-sandbox", "photos/both.jpg", "lego-uploads-sandbox", "photos/rejected/both.jpg");
+        verify(itemInventoryDao, never()).upsert(any(ItemInventory.class));
+    }
+
+    @Test
+    void process_aReuploadedPhotoIsJudgedAgainstTheOtherPhotosNotItsOwnEarlierKeywords() {
+        // front.jpg was bo:true; it is uploaded again as sealed. Its own old bo:true must not reject it.
+        ItemInventory item = intakeItem();
+        item.setNewOrUsed("U");
+        item.setBuiltOnce(true);
+        ItemInventoryPhoto earlier = storedPhoto(10, "front.jpg", null, true);
+        arrangeNewPhoto("photos/front.jpg", metadata("uuid-1", "3001", null, true, null, null, null, null, null), item);
+        when(itemInventoryPhotoDao.findByItemInventoryIdAndFileName(999, "front.jpg")).thenReturn(Optional.of(earlier));
+        when(itemInventoryPhotoDao.findByItemInventoryId(999))
+                .thenReturn(java.util.Set.of(earlier, storedPhoto(11, "back.jpg", null, null)));
+        when(itemInventoryPhotoDao.replaceStoredObject(eq(10), any(), any(), any(), any(), any(), anyLong(), anyBoolean(), any(), any()))
+                .thenReturn(1);
+
+        service.process(new PhotoUploadEvent("lego-uploads-sandbox", "photos/front.jpg"));
+
+        ArgumentCaptor<ItemInventory> saved = ArgumentCaptor.forClass(ItemInventory.class);
+        verify(itemInventoryDao).upsert(saved.capture());
+        assertThat(saved.getValue().getSealed()).isTrue();
+        assertThat(saved.getValue().getBuiltOnce()).isFalse();
+        assertThat(saved.getValue().getNewOrUsed()).isEqualTo("N");
+        // The photo's stored keywords are replaced.
+        verify(itemInventoryPhotoDao).updateKeywordsByMd5("md5-new", true, null, null);
     }
 
     @Test

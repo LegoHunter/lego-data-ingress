@@ -277,7 +277,35 @@ Mode `DRY_RUN` verifies and logs without claiming or writing. The `local` enviro
 S3 upload events arrive on Kafka (one topic per upload type, per environment). A photo is filed by its `uuid`
 keyword onto an existing inventory item. A photo that cannot be filed is moved to `photos/rejected/` with the
 reason logged as `photo.process.rejected`: no `uuid` or `bl` keyword, a uuid that matches no inventory item
-(HOMELAB-97; it used to create a bare item), an unknown catalog number, or an unreadable image. Listeners process photos
+(HOMELAB-97; it used to create a bare item), an unknown catalog number, an unreadable image, or a conflict
+under the sealed / built-once rules below.
+
+**What a photo may change on its item (HOMELAB-96).** A photo changes only what its keywords say: the three
+condition grades (`item:`, `bc:`, `ic:`), and sealed, built once and New/Used under the rules below. Everything
+else on the item stays as entered, including its description: a caption is stored on the photo
+(`item_inventory_photo.caption`) and no longer overwrites `item_inventory.description`.
+
+**Sealed and built-once rules** (`PhotoKeywordRules`), across all photos of one item. The photos win over what was
+entered at intake. `sealed` alone means `sealed:true`.
+
+| Photos of the item say | Result |
+| --- | --- |
+| sealed on any photo, `bo:true` on none | Item sealed, built once false, New. The lot is created with BrickLink's Sealed indicator. |
+| no photo sealed, `bo:true` | Used |
+| no photo sealed, `bo:false` | New |
+| `sealed:false` | Not sealed; it may sit beside `bo:true` |
+| sealed on any photo and `bo:true` on any photo (the same one included) | Conflict |
+| two photos disagree (`bo:true` / `bo:false`, or `sealed:true` / `sealed:false`) | Conflict |
+| no sealed and no bo keyword on any photo | Nothing changes |
+
+A conflict rejects the photo being processed, which is the one that arrived second; the log line names the other
+photo. A re-uploaded photo is judged against the item's other photos, not its own earlier values, and its stored
+values are replaced. Each photo's own values are kept in `item_inventory_photo.sealed_keyword` and
+`built_once_keyword` (NULL = no such keyword), with its raw keyword list in `keywords`. The check runs again
+under the item's row lock when the photo is written, because several consumers can process one item's photos at
+once. A lot that is already live is not updated when New/Used changes.
+
+Listeners process photos
 (`PhotoUploadS3EventListener`, `PhotoDeletedS3EventListener`), split BrickLink catalog and category XML, and
 split Rebrickable catalog and theme CSVs into per-row topics. Per-row consumers upsert `external_catalog_item`
 and `external_category`. Topics and groups are in `kafka.topic-configuration.*` (`KafkaCustomProperties`).
