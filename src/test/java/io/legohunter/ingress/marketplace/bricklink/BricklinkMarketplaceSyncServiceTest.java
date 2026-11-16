@@ -1105,6 +1105,38 @@ class BricklinkMarketplaceSyncServiceTest {
     }
 
     @Test
+    void prodStillCreatesWhenALowerEnvironmentHoldsALotForTheSameItem() {
+        // HOMELAB-100: every environment shares one BrickLink store, so PROD's store read also returns SANDBOX and
+        // DEV lots. One of them carrying this item's UUID is another environment's lot, and never blocks PROD.
+        properties.setMode("APPLY");
+        properties.setEnvironmentCode("prod");
+        properties.setProduction(true);
+        MarketplaceListingSyncRequest request = claimedListingCreateRequest();
+        request.setRemoteVisibilityScopeCode("STOCKROOM");
+        request.setRemoteVisibilityContainerId("A");
+        BricklinkMarketplaceListing mapping = bricklinkDraftListing();
+        mapping.setStockRoomId("A");
+        arrangeListingCreate(request, mapping);
+        Inventory prodLot = createdInventory();
+        prodLot.setStock_room_id("A");
+        prodLot.setRemarks(prodLot.getRemarks().replace("LEGOHUNTER_ENV=sandbox", "LEGOHUNTER_ENV=prod"));
+        when(bricklinkRestClient.getInventories(anyMap())).thenReturn(lots(
+                lot(7L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=999; ITEM_INVENTORY_UUID=listing-create-uuid [SYSTEM_END]"),
+                lot(8L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=dev; MARKETPLACE_LISTING_ID=101; ITEM_INVENTORY_UUID=listing-create-uuid [SYSTEM_END]")));
+        when(bricklinkRestClient.createInventory(any(Inventory.class))).thenReturn(resource(prodLot));
+        when(bricklinkRestClient.getInventories(45678L)).thenReturn(resource(prodLot));
+        stubUpdates();
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isZero();
+        assertThat(request.getSyncRequestStatusCode()).isEqualTo("SUCCEEDED");
+        // A new lot, not either lower-environment lot taken over.
+        verify(bricklinkRestClient, times(1)).createInventory(any(Inventory.class));
+        assertThat(request.getRemoteInventoryId()).isEqualTo("45678");
+    }
+
+    @Test
     void reportsWhenHidingABlockedLotFails() {
         applyAsSandbox();
         MarketplaceListingSyncRequest request = claimedListingCreateRequest();
