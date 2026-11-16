@@ -120,6 +120,7 @@ class BricklinkPricingMetricsServiceTest {
                 0,
                 1,
                 1,
+                2,
                 125
         ));
 
@@ -129,6 +130,7 @@ class BricklinkPricingMetricsServiceTest {
         assertThat(counter("bricklink_marketplace_sync_request", "result", "remote_updated")).isEqualTo(3.0d);
         assertThat(counter("bricklink_marketplace_sync_request", "result", "blocked")).isEqualTo(1.0d);
         assertThat(counter("bricklink_marketplace_sync_request", "result", "failed")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_marketplace_sync_request", "result", "outage_deferred")).isEqualTo(2.0d);
         assertThat(gauge("bricklink_marketplace_sync_request_current", "state", "pending")).isEqualTo(4.0d);
         assertThat(gauge("bricklink_marketplace_sync_request_current", "state", "due")).isEqualTo(2.0d);
         assertThat(gauge("bricklink_marketplace_sync_request_current", "state", "claimed")).isEqualTo(1.0d);

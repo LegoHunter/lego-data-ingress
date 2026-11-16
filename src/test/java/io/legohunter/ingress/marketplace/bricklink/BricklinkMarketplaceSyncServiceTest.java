@@ -1,5 +1,9 @@
 package io.legohunter.ingress.marketplace.bricklink;
 
+import com.bricklink.api.rest.exception.BricklinkServerException;
+
+import com.bricklink.api.rest.exception.BricklinkClientException;
+
 import com.bricklink.api.rest.client.BricklinkRestClient;
 import com.bricklink.api.rest.model.v1.BricklinkResource;
 import com.bricklink.api.rest.model.v1.Inventory;
@@ -416,6 +420,175 @@ class BricklinkMarketplaceSyncServiceTest {
     void handlesOnlyBricklinkListings() {
         assertThat(service.handles(2)).isTrue();
         assertThat(service.handles(3)).isFalse();
+    }
+
+    // HOMELAB-81: a BrickLink outage does not use up a request's attempts.
+
+    private static BricklinkClientException maintenanceRedirect() {
+        return new BricklinkClientException(302, "PUT https://api.bricklink.com/api/store/v1/inventories/12345",
+                "Unexpected redirect to [https://maintenance.bricklink.com/]. Response body: []");
+    }
+
+    private void bricklinkIsDown() {
+        when(bricklinkRestClient.getColor(BricklinkMarketplaceSyncService.OUTAGE_PROBE_COLOR_ID)).thenThrow(maintenanceRedirect());
+    }
+
+    @Test
+    void aMaintenanceRedirectLeavesTheRequestPendingWithItsAttemptGivenBack() {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class))).thenThrow(maintenanceRedirect());
+        bricklinkIsDown();
+        ZonedDateTime before = ZonedDateTime.now(java.time.ZoneOffset.UTC);
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("OUTAGE");
+        assertThat(result.outageDeferred()).isOne();
+        assertThat(result.failed()).isZero();
+        MarketplaceListingSyncRequest deferred = lastRequestUpdate();
+        assertThat(deferred.getSyncRequestStatusCode()).isEqualTo("PENDING");
+        // The claim took attempt 1; the outage gives it back.
+        assertThat(deferred.getAttemptCount()).isZero();
+        assertThat(deferred.getClaimedAt()).isNull();
+        assertThat(deferred.getNextAttemptAt()).isAfterOrEqualTo(before.plus(properties.effectiveRetryBackoff()));
+        assertThat(deferred.getLastErrorMessage()).startsWith("BrickLink outage, attempt not counted");
+        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+        verify(marketplaceListingDao, never()).update(any());
+    }
+
+    @Test
+    void anOutageOnTheLastAttemptDoesNotFailTheRequestOrItsDecision() {
+        applyPriceUpdateAsSandbox();
+        MarketplaceListingSyncRequest lastAttempt = claimedRequest();
+        lastAttempt.setAttemptCount(3);
+        when(marketplaceListingSyncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(lastAttempt));
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class))).thenThrow(maintenanceRedirect());
+        bricklinkIsDown();
+
+        service.runOnce();
+
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("PENDING");
+        assertThat(lastRequestUpdate().getAttemptCount()).isEqualTo(2);
+        verify(pricingDecisionDao, never()).transitionStatus(any(), any(), any(), any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.MethodSource("outageFailures")
+    void serverErrorsRateLimitsAuthAndTimeoutsAreOutages(String name, RuntimeException failure) {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class))).thenThrow(failure);
+        when(bricklinkRestClient.getColor(BricklinkMarketplaceSyncService.OUTAGE_PROBE_COLOR_ID)).thenThrow(failure);
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("OUTAGE");
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("PENDING");
+        assertThat(lastRequestUpdate().getAttemptCount()).isZero();
+    }
+
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> outageFailures() {
+        return java.util.stream.Stream.of(
+                org.junit.jupiter.params.provider.Arguments.of("5xx", new BricklinkServerException(503, "Service Unavailable")),
+                org.junit.jupiter.params.provider.Arguments.of("429", new BricklinkClientException(429, "Too Many Requests", "")),
+                org.junit.jupiter.params.provider.Arguments.of("401 token IP mismatch", new BricklinkClientException(401, "BAD_OAUTH_REQUEST", "TOKEN_IP_MISMATCHED")),
+                org.junit.jupiter.params.provider.Arguments.of("timeout", new org.springframework.web.client.ResourceAccessException(
+                        "I/O error", new java.net.SocketTimeoutException("Read timed out")))
+        );
+    }
+
+    @Test
+    void anOutageStopsTheRunBeforeClaimingAnotherRequest() {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        MarketplaceListingSyncRequest second = request();
+        second.setMarketplaceListingSyncRequestId(901L);
+        when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
+                eq("PENDING"), any(), any(ZonedDateTime.class), eq(5)))
+                .thenReturn(Set.of(request(), second));
+        MarketplaceListingSyncRequest secondClaimed = claimedRequest();
+        secondClaimed.setMarketplaceListingSyncRequestId(901L);
+        when(marketplaceListingSyncRequestDao.claim(eq(901L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(secondClaimed));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class))).thenThrow(maintenanceRedirect());
+        bricklinkIsDown();
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.requestsSelected()).isEqualTo(2);
+        assertThat(result.requestsClaimed()).isOne();
+        verify(marketplaceListingSyncRequestDao, org.mockito.Mockito.times(1)).claim(any(), any(), any(), any());
+    }
+
+    @Test
+    void aRedirectWhileBricklinkAnswersTheProbeSpendsTheAttempt() {
+        // A malformed request URL is also answered with a redirect: that request's own failure.
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class)))
+                .thenThrow(new BricklinkClientException(302, "PUT", "Unexpected redirect to [https://www.bricklink.com/error.page]"));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.failed()).isOne();
+        assertThat(result.outageDeferred()).isZero();
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("PENDING");
+        assertThat(lastRequestUpdate().getAttemptCount()).isOne();
+        verify(bricklinkRestClient).getColor(BricklinkMarketplaceSyncService.OUTAGE_PROBE_COLOR_ID);
+    }
+
+    @Test
+    void aValidationRejectionStillFailsTheRequestAfterItsLastAttempt() {
+        applyPriceUpdateAsSandbox();
+        MarketplaceListingSyncRequest lastAttempt = claimedRequest();
+        lastAttempt.setAttemptCount(3);
+        when(marketplaceListingSyncRequestDao.claim(eq(900L), eq("PENDING"), eq("CLAIMED"), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(lastAttempt));
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class)))
+                .thenThrow(new BricklinkClientException(400, "PARAMETER_MISSING_OR_INVALID", "unit_price"));
+        when(pricingDecisionDao.transitionStatus(500L, "ACCEPTED", "SYNC_FAILED", null))
+                .thenReturn(Optional.of(PricingDecision.builder().pricingDecisionId(500L).decisionStatusCode("SYNC_FAILED").build()));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.failed()).isOne();
+        assertThat(lastRequestUpdate().getSyncRequestStatusCode()).isEqualTo("FAILED");
+        verify(pricingDecisionDao).transitionStatus(500L, "ACCEPTED", "SYNC_FAILED", null);
+        // A 400 is never an outage, so BrickLink is not even probed.
+        verify(bricklinkRestClient, never()).getColor(any());
+    }
+
+    @Test
+    void anOutageDuringTheRepriceHandOffLeavesTheRequestPendingForTheJob() {
+        applyPriceUpdateAsSandbox();
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        when(marketplaceListingSyncRequestDao.findByMarketplaceListingSyncRequestId(900L)).thenReturn(Optional.of(request()));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class))).thenThrow(maintenanceRedirect());
+        bricklinkIsDown();
+
+        io.legohunter.ingress.marketplace.MarketplaceSyncPort.HandOff handOff = service.processNow(900L);
+
+        assertThat(handOff.requestStatus()).isEqualTo("PENDING");
+        assertThat(lastRequestUpdate().getAttemptCount()).isZero();
+    }
+
+    @Test
+    void anOutageInDryRunChangesNothing() {
+        properties.setMode("DRY_RUN");
+        properties.setEnvironmentCode("sandbox");
+        arrangeRequestAndContext(remoteInventory("Human notes " + systemBlock()));
+        when(bricklinkRestClient.getInventories(12345L)).thenThrow(new BricklinkServerException(503, "down"));
+        when(bricklinkRestClient.getColor(BricklinkMarketplaceSyncService.OUTAGE_PROBE_COLOR_ID))
+                .thenThrow(new BricklinkServerException(503, "down"));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("OUTAGE");
+        verify(marketplaceListingSyncRequestDao, never()).update(any());
     }
 
     private void applyPriceUpdateAsSandbox() {
