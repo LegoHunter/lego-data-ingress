@@ -353,6 +353,15 @@ public class PhotoProcessingService {
         Optional<ItemInventory> existingItemInventory =
                 itemInventoryDao.findByUuid(uuid);
 
+        // A photo is filed by its uuid keyword, and the item is always added to inventory first. An unknown uuid
+        // is a tagging mistake: reject the photo instead of creating a bare inventory item for it.
+        if (existingItemInventory.isEmpty()) {
+            throw new RejectedPhotoUploadException(
+                    "No inventory item has the uuid [%s] tagged on photo [%s]; add the item first or correct the uuid keyword"
+                            .formatted(uuid, originalFilename)
+            );
+        }
+
         Optional<ItemInventoryPhoto> existingLogicalPhoto =
                 existingItemInventory
                         .map(ItemInventory::getItemInventoryId)

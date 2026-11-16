@@ -274,7 +274,10 @@ Mode `DRY_RUN` verifies and logs without claiming or writing. The `local` enviro
 
 ## Photos, catalog and image hosting
 
-S3 upload events arrive on Kafka (one topic per upload type, per environment). Listeners process photos
+S3 upload events arrive on Kafka (one topic per upload type, per environment). A photo is filed by its `uuid`
+keyword onto an existing inventory item. A photo that cannot be filed is moved to `photos/rejected/` with the
+reason logged as `photo.process.rejected`: no `uuid` or `bl` keyword, a uuid that matches no inventory item
+(HOMELAB-97; it used to create a bare item), an unknown catalog number, or an unreadable image. Listeners process photos
 (`PhotoUploadS3EventListener`, `PhotoDeletedS3EventListener`), split BrickLink catalog and category XML, and
 split Rebrickable catalog and theme CSVs into per-row topics. Per-row consumers upsert `external_catalog_item`
 and `external_category`. Topics and groups are in `kafka.topic-configuration.*` (`KafkaCustomProperties`).
