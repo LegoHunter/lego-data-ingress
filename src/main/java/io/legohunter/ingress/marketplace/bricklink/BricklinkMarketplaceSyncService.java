@@ -53,6 +53,8 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
     private static final String LISTING_STATUS_ACTIVE = "ACTIVE";
     static final String LISTING_STATUS_ENDED = "ENDED";
     static final String SAFETY_REMOTE_DELETED = "REMOTE_DELETED";
+    /** The store already has a lot for this inventory item (same UUID) under another marketplace listing. */
+    static final String SAFETY_REMOTE_LOT_EXISTS_FOR_ITEM = "REMOTE_LOT_EXISTS_FOR_ITEM";
     /** Run outcome when a BrickLink outage stopped the run (HOMELAB-81). */
     static final String OUTCOME_OUTAGE = "OUTAGE";
     /** White: a catalog color that always exists. Reading it is the outage probe: cheap and read-only. */
@@ -651,7 +653,32 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
                     remoteInventoryId
             );
         } else {
-            List<Long> ownedLots = ownedLotIds(context);
+            StoreLots storeLots = lotsForThisItem(context);
+            if (!storeLots.otherListingLots().isEmpty()) {
+                // The same physical item, already on BrickLink under another listing: creating would list it twice.
+                counters.blocked++;
+                markBlocked(request, SAFETY_REMOTE_LOT_EXISTS_FOR_ITEM,
+                        "BrickLink already has a lot for this inventory item under another marketplace listing: "
+                                + String.join(", ", storeLots.otherListingLots())
+                                + "; remove that lot or bring it back under its listing before creating another");
+                log.warn(
+                        "bricklink.marketplace_sync.listing_create_item_already_listed marketplaceListingSyncRequestId={} marketplaceListingId={} existingLots={}",
+                        request.getMarketplaceListingSyncRequestId(),
+                        request.getMarketplaceListingId(),
+                        storeLots.otherListingLots()
+                );
+                return;
+            }
+            if (!storeLots.otherEnvironmentLots().isEmpty()) {
+                // Another environment's lot for the same item (a seeded copy in its stockroom): reported, not blocked.
+                log.warn(
+                        "bricklink.marketplace_sync.listing_create_item_in_other_environment marketplaceListingSyncRequestId={} marketplaceListingId={} existingLots={}",
+                        request.getMarketplaceListingSyncRequestId(),
+                        request.getMarketplaceListingId(),
+                        storeLots.otherEnvironmentLots()
+                );
+            }
+            List<Long> ownedLots = storeLots.ownedLotIds();
             if (ownedLots.size() > 1) {
                 counters.blocked++;
                 markBlocked(request, "DUPLICATE_REMOTE_INVENTORY",
@@ -954,28 +981,54 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
     }
 
     /**
-     * The ids of every lot in the store whose system remarks block names this environment, listing
-     * and inventory item: lots an earlier attempt created without saving the id. A failed search
-     * throws, so nothing is created while an existing lot cannot be ruled out.
+     * One read of the whole store, sorted into the lots that matter before a create. BrickLink cannot filter by
+     * remarks, and matching by item number would be wrong: several copies of one set can be for sale at once. So
+     * every lot's system remarks block is compared with this inventory item's UUID:
+     * <ul>
+     *   <li>owned: this environment, this listing, this UUID. An earlier attempt created the lot without saving
+     *       its id; it is taken over;</li>
+     *   <li>other listing: this environment and this UUID, but another marketplace listing id. The item is
+     *       already on BrickLink, so the create is blocked;</li>
+     *   <li>other environment: this UUID under another environment's block. Reported only: a lower environment's
+     *       stockroom copy of a seeded item must not stop PROD from listing the real one.</li>
+     * </ul>
+     * An item without a UUID is matched as before (owned lots only). A failed search throws, so nothing is created
+     * while an existing lot cannot be ruled out.
      */
-    private List<Long> ownedLotIds(SyncContext context) {
+    private StoreLots lotsForThisItem(SyncContext context) {
         List<Inventory> lots = data(bricklinkRestClient.getInventories(Map.of()));
         if (lots == null) {
             throw new IllegalStateException("BrickLink inventory search returned no data, so an existing lot cannot be ruled out");
         }
         String environmentCode = properties.effectiveEnvironmentCode();
         String marketplaceListingId = String.valueOf(context.listing().getMarketplaceListingId());
-        String itemInventoryUuid = context.itemInventory().getUuid() == null ? "" : context.itemInventory().getUuid();
-        return lots.stream()
-                .filter(lot -> BricklinkInventorySystemRemarks.parse(lot.getRemarks())
-                        .map(block -> environmentCode.equalsIgnoreCase(trim(block.value(BricklinkInventorySystemRemarks.ENV_KEY)))
-                                && marketplaceListingId.equals(trim(block.value(BricklinkInventorySystemRemarks.MARKETPLACE_LISTING_ID_KEY)))
-                                && itemInventoryUuid.equals(trim(block.value(BricklinkInventorySystemRemarks.ITEM_INVENTORY_UUID_KEY))))
-                        .orElse(false))
-                .map(Inventory::getInventory_id)
-                .filter(Objects::nonNull)
-                .sorted()
-                .toList();
+        String itemInventoryUuid = context.itemInventory().getUuid() == null ? "" : context.itemInventory().getUuid().trim();
+        List<Long> owned = new java.util.ArrayList<>();
+        List<String> otherListing = new java.util.ArrayList<>();
+        List<String> otherEnvironment = new java.util.ArrayList<>();
+        lots.stream()
+                .filter(lot -> lot.getInventory_id() != null)
+                .sorted(java.util.Comparator.comparing(Inventory::getInventory_id))
+                .forEach(lot -> BricklinkInventorySystemRemarks.parse(lot.getRemarks()).ifPresent(block -> {
+                    String lotEnvironment = trim(block.value(BricklinkInventorySystemRemarks.ENV_KEY));
+                    String lotListingId = trim(block.value(BricklinkInventorySystemRemarks.MARKETPLACE_LISTING_ID_KEY));
+                    String lotUuid = trim(block.value(BricklinkInventorySystemRemarks.ITEM_INVENTORY_UUID_KEY));
+                    if (!itemInventoryUuid.equals(lotUuid)) {
+                        return;
+                    }
+                    boolean sameEnvironment = environmentCode.equalsIgnoreCase(lotEnvironment);
+                    if (sameEnvironment && marketplaceListingId.equals(lotListingId)) {
+                        owned.add(lot.getInventory_id());
+                    } else if (!itemInventoryUuid.isEmpty()) {
+                        String description = "lot " + lot.getInventory_id() + " (environment " + lotEnvironment
+                                + ", marketplace listing " + lotListingId + ")";
+                        (sameEnvironment ? otherListing : otherEnvironment).add(description);
+                    }
+                }));
+        return new StoreLots(List.copyOf(owned), List.copyOf(otherListing), List.copyOf(otherEnvironment));
+    }
+
+    private record StoreLots(List<Long> ownedLotIds, List<String> otherListingLots, List<String> otherEnvironmentLots) {
     }
 
     /**

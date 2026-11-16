@@ -825,12 +825,13 @@ class BricklinkMarketplaceSyncServiceTest {
     }
 
     @Test
-    void ignoresLotsOwnedByOtherListingsOrEnvironments() {
+    void ignoresLotsOfOtherItemsAndOnlyReportsAnotherEnvironmentsCopy() {
+        // Lot 2 is DEV's stockroom copy of the same item (same UUID): reported, but it must not stop this create.
         applyAsSandbox();
         MarketplaceListingSyncRequest request = claimedListingCreateRequest();
         arrangeListingCreate(request, bricklinkDraftListing());
         when(bricklinkRestClient.getInventories(anyMap())).thenReturn(lots(
-                lot(1L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=999; ITEM_INVENTORY_UUID=listing-create-uuid [SYSTEM_END]"),
+                lot(1L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=999; ITEM_INVENTORY_UUID=some-other-item [SYSTEM_END]"),
                 lot(2L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=dev; MARKETPLACE_LISTING_ID=101; ITEM_INVENTORY_UUID=listing-create-uuid [SYSTEM_END]"),
                 lot(3L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=101; ITEM_INVENTORY_UUID=another-uuid [SYSTEM_END]"),
                 lot(4L, "Human notes only"),
@@ -841,6 +842,49 @@ class BricklinkMarketplaceSyncServiceTest {
 
         assertThat(service.runOnce().remoteUpdated()).isOne();
         verify(bricklinkRestClient, times(1)).createInventory(any(Inventory.class));
+    }
+
+    // HOMELAB-100: the same inventory item (UUID) must never get a second lot.
+
+    @Test
+    void refusesToCreateWhenTheItemAlreadyHasALotUnderAnotherListing() {
+        applyAsSandbox();
+        MarketplaceListingSyncRequest request = claimedListingCreateRequest();
+        arrangeListingCreate(request, bricklinkDraftListing());
+        when(bricklinkRestClient.getInventories(anyMap())).thenReturn(lots(
+                lot(7L, "Human notes [SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=999; ITEM_INVENTORY_UUID=listing-create-uuid [SYSTEM_END]"),
+                lot(8L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=999; ITEM_INVENTORY_UUID=another-uuid [SYSTEM_END]")));
+        stubUpdates();
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isOne();
+        verify(bricklinkRestClient, never()).createInventory(any(Inventory.class));
+        MarketplaceListingSyncRequest blocked = lastRequestUpdate();
+        assertThat(blocked.getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        assertThat(blocked.getLastErrorMessage())
+                .startsWith("REMOTE_LOT_EXISTS_FOR_ITEM")
+                .contains("lot 7", "marketplace listing 999")
+                .doesNotContain("lot 8");
+        // The other listing's lot is not taken over.
+        assertThat(blocked.getRemoteInventoryId()).isNull();
+    }
+
+    @Test
+    void anotherListingsLotBlocksEvenWhenThisListingAlsoOwnsOne() {
+        applyAsSandbox();
+        MarketplaceListingSyncRequest request = claimedListingCreateRequest();
+        arrangeListingCreate(request, bricklinkDraftListing());
+        when(bricklinkRestClient.getInventories(anyMap())).thenReturn(lots(
+                lot(6L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=101; ITEM_INVENTORY_UUID=listing-create-uuid [SYSTEM_END]"),
+                lot(7L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=999; ITEM_INVENTORY_UUID=listing-create-uuid [SYSTEM_END]")));
+        stubUpdates();
+
+        assertThat(service.runOnce().blocked()).isOne();
+
+        verify(bricklinkRestClient, never()).createInventory(any(Inventory.class));
+        assertThat(lastRequestUpdate().getLastErrorMessage()).startsWith("REMOTE_LOT_EXISTS_FOR_ITEM");
+        assertThat(lastRequestUpdate().getRemoteInventoryId()).isNull();
     }
 
     @Test
@@ -1058,6 +1102,38 @@ class BricklinkMarketplaceSyncServiceTest {
         assertThat(request.getRemoteVisibilityScopeCode()).isEqualTo("STOCKROOM");
         assertThat(request.getRemoteVisibilityContainerId()).isEqualTo("A");
         assertThat(request.getRemoteIsPubliclyAvailable()).isFalse();
+    }
+
+    @Test
+    void prodStillCreatesWhenALowerEnvironmentHoldsALotForTheSameItem() {
+        // HOMELAB-100: every environment shares one BrickLink store, so PROD's store read also returns SANDBOX and
+        // DEV lots. One of them carrying this item's UUID is another environment's lot, and never blocks PROD.
+        properties.setMode("APPLY");
+        properties.setEnvironmentCode("prod");
+        properties.setProduction(true);
+        MarketplaceListingSyncRequest request = claimedListingCreateRequest();
+        request.setRemoteVisibilityScopeCode("STOCKROOM");
+        request.setRemoteVisibilityContainerId("A");
+        BricklinkMarketplaceListing mapping = bricklinkDraftListing();
+        mapping.setStockRoomId("A");
+        arrangeListingCreate(request, mapping);
+        Inventory prodLot = createdInventory();
+        prodLot.setStock_room_id("A");
+        prodLot.setRemarks(prodLot.getRemarks().replace("LEGOHUNTER_ENV=sandbox", "LEGOHUNTER_ENV=prod"));
+        when(bricklinkRestClient.getInventories(anyMap())).thenReturn(lots(
+                lot(7L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=999; ITEM_INVENTORY_UUID=listing-create-uuid [SYSTEM_END]"),
+                lot(8L, "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=dev; MARKETPLACE_LISTING_ID=101; ITEM_INVENTORY_UUID=listing-create-uuid [SYSTEM_END]")));
+        when(bricklinkRestClient.createInventory(any(Inventory.class))).thenReturn(resource(prodLot));
+        when(bricklinkRestClient.getInventories(45678L)).thenReturn(resource(prodLot));
+        stubUpdates();
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isZero();
+        assertThat(request.getSyncRequestStatusCode()).isEqualTo("SUCCEEDED");
+        // A new lot, not either lower-environment lot taken over.
+        verify(bricklinkRestClient, times(1)).createInventory(any(Inventory.class));
+        assertThat(request.getRemoteInventoryId()).isEqualTo("45678");
     }
 
     @Test
