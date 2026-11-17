@@ -13,6 +13,8 @@ import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncMetricsService;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.description.GeneratedDescriptionComposer;
+import io.legohunter.egress.imagehosting.description.GeneratedItemDescription;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlResult;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlService;
@@ -21,6 +23,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumCreateRequest;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
+import io.legohunter.imaging.model.HostedAlbumMetadataUpdate;
 import io.legohunter.imaging.model.PhotoMetaDataV1;
 import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceRequest;
@@ -90,6 +93,9 @@ class DefaultImageHostingSyncPlanExecutorTest {
     @Mock
     private ImageHostingShortUrlService shortUrlService;
 
+    @Mock
+    private GeneratedDescriptionComposer descriptionComposer;
+
     private SimpleMeterRegistry meterRegistry;
     private DefaultImageHostingSyncPlanExecutor executor;
 
@@ -111,7 +117,8 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 new ImageHostingRetryTemplate(properties),
                 new ImageHostingPublishingPolicy(properties),
                 shortUrlService,
-                new ImageHostingSyncMetricsService(meterRegistry)
+                new ImageHostingSyncMetricsService(meterRegistry),
+                descriptionComposer
         );
     }
 
@@ -407,6 +414,11 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 .build()));
         when(shortUrlService.generateShortUrl("https://flickr.example/albums/album-100"))
                 .thenReturn(shortUrlResult(ImageHostingShortUrlStatus.GENERATED_NEW, "https://bit.ly/album-100"));
+        when(imageHostingService.updateAlbumMembership(any())).thenReturn(response(null));
+        when(descriptionComposer.compose(any())).thenReturn(GeneratedItemDescription.builder()
+                .description("Generated album description\n\nPhotos: https://bit.ly/album-100")
+                .build());
+        when(imageHostingService.updateAlbumMetadata(any())).thenReturn(response(null));
 
         SyncReport report = executor.execute(SyncPlan.builder()
                 .planId("plan-1")
@@ -437,6 +449,35 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 .containsExactly("4558-1 - Metroliner", "Generated album description", "photo-11");
         assertThat(requestCaptor.getValue().get().getPhotoIds()).containsExactly("photo-11", "photo-12");
         assertThat(pendingAlbum.getShortUrl()).isEqualTo("https://bit.ly/album-100");
+
+        // The provider creates an album from its cover photo alone: every photo is then put into it.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<PhotoServiceRequest<HostedAlbumMembershipRequest>> membershipCaptor =
+                ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).updateAlbumMembership(membershipCaptor.capture());
+        assertThat(membershipCaptor.getValue().get())
+                .extracting(HostedAlbumMembershipRequest::getAlbumId, HostedAlbumMembershipRequest::getPrimaryPhotoId)
+                .containsExactly("album-100", "photo-11");
+        assertThat(membershipCaptor.getValue().get().getPhotoIds()).containsExactly("photo-11", "photo-12");
+        verify(externalImageAlbumImageDao, times(2)).upsert(any());
+
+        // The description is written again once the short link exists, and keeps the item reference.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<PhotoServiceRequest<HostedAlbumMetadataUpdate>> metadataCaptor =
+                ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).updateAlbumMetadata(metadataCaptor.capture());
+        assertThat(metadataCaptor.getValue().get())
+                .extracting(
+                        HostedAlbumMetadataUpdate::getAlbumId,
+                        HostedAlbumMetadataUpdate::getTitle,
+                        HostedAlbumMetadataUpdate::getDescription
+                )
+                .containsExactly(
+                        "album-100",
+                        "4558-1 - Metroliner",
+                        "Generated album description\n\nPhotos: https://bit.ly/album-100\n\nItem reference: inventory-uuid"
+                );
+        assertThat(pendingAlbum.getSyncStatus()).isEqualTo(SYNCED);
         assertThat(meterRegistry.counter(
                 "image_hosting_album_creation",
                 "provider", "flickr",
@@ -448,6 +489,65 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 "operation", "generate",
                 "result", "generated"
         ).count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void executeKeepsTheNewAlbumButMarksItFailedWhenPhotosCannotBeAdded() {
+        ItemInventoryPhoto primaryPhoto = photo(11, true);
+        ItemInventoryPhoto detailPhoto = photo(12, false);
+        ExternalImageAlbum pendingAlbum = ExternalImageAlbum.builder()
+                .externalImageAlbumId(301L)
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .itemInventoryId(100)
+                .title("4558-1 - Metroliner")
+                .build();
+        ItemInventory inventory = new ItemInventory();
+        inventory.setItemInventoryId(100);
+        inventory.setUuid("inventory-uuid");
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(externalImageAlbumDao.findByExternalServiceIdAndItemInventoryId(FLICKR_SERVICE_ID, 100))
+                .thenReturn(Optional.of(pendingAlbum));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(detailPhoto, primaryPhoto));
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.of(externalImage(201L, 11, "photo-11")));
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 12))
+                .thenReturn(Optional.of(externalImage(202L, 12, "photo-12")));
+        when(imageHostingService.createAlbum(any())).thenReturn(response(HostedAlbum.builder()
+                .id("album-100")
+                .url("https://flickr.example/albums/album-100")
+                .build()));
+        when(shortUrlService.generateShortUrl("https://flickr.example/albums/album-100"))
+                .thenReturn(shortUrlResult(ImageHostingShortUrlStatus.GENERATED_NEW, "https://bit.ly/album-100"));
+        when(imageHostingService.updateAlbumMembership(any()))
+                .thenReturn(errorResponse(PhotoServiceErrorType.UNKNOWN, 1, "Photoset not found"));
+        when(descriptionComposer.compose(any())).thenReturn(GeneratedItemDescription.builder()
+                .description("Generated album description")
+                .build());
+
+        SyncReport report = executor.execute(SyncPlan.builder()
+                .planId("plan-1")
+                .action(SyncAction.builder()
+                        .actionId("001-create-album")
+                        .type(SyncActionType.CREATE_ALBUM)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .attribute("provider", "flickr")
+                        .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
+                        .attribute("itemInventoryId", "100")
+                        .attribute("desiredTitle", "4558-1 - Metroliner")
+                        .attribute("desiredDescription", "Generated album description\n\nItem reference: inventory-uuid")
+                        .build())
+                .build(), false);
+
+        assertThat(report.getResults().getFirst().getStatus()).isEqualTo(SyncActionStatus.FAILED);
+        assertThat(report.getResults().getFirst().getMessage())
+                .startsWith("Created Flickr album, but it is incomplete: photos were not added to the album");
+        // The album id is kept, so the next run repairs this album instead of creating another one.
+        assertThat(pendingAlbum.getExternalAlbumId()).isEqualTo("album-100");
+        assertThat(pendingAlbum.getSyncStatus()).isEqualTo(FAILED);
+        // Membership is recorded only when the provider holds it.
+        verify(externalImageAlbumImageDao, never()).upsert(any());
+        // The description had not changed, so it was not written again.
+        verify(imageHostingService, never()).updateAlbumMetadata(any());
     }
 
     @Test

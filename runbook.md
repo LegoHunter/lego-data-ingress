@@ -322,6 +322,16 @@ set has the same title. The item's UUID tells the copies apart (`ImageHostingAlb
 - No album carries the UUID: a new album is created, even when another album has the same title.
 - Several albums carry the UUID: the plan is blocked as ambiguous. Remove or re-describe the duplicate on Flickr.
 
+**Creating an album takes three calls.** Flickr creates an album from its cover photo alone, so the system then
+puts every photo into it, and writes the description again once the short link exists (the first description
+cannot hold the link). If either follow-up fails, the album keeps its id and is marked `FAILED`; the next job run
+compares it with Flickr and repairs it. To check one album by hand:
+`GET /internal/image-hosting/remote/albums/{albumId}/snapshot` shows what Flickr holds, and
+`GET /internal/image-hosting/item-inventories/{id}/sync-plan` shows what would be repaired.
+
+The job picks its work from database state. An album the database believes is in sync but Flickr holds
+differently is not revisited on its own; apply the item's sync plan.
+
 ## Operating
 
 **Deploy.**

@@ -287,11 +287,8 @@ public class ImageHostingReconciliationPlanner {
     }
 
     private boolean sameText(String left, String right) {
-        return Objects.equals(normalizeText(left), normalizeText(right));
-    }
-
-    private String normalizeText(String value) {
-        return hasText(value) ? value.trim() : "";
+        // The provider returns web addresses as HTML links and some characters as entities.
+        return HostedTextComparison.sameText(left, right);
     }
 
     private String value(Object value) {
