@@ -91,6 +91,10 @@ accepting the risk described by the action.
 | `GET` | `/item-inventories/{itemInventoryId}/repair-plan` | Build a dry-run DB repair plan from Flickr state. | No | No |
 | `POST` | `/item-inventories/{itemInventoryId}/repair-plan/apply` | Build and apply a DB repair plan. | Usually no Flickr writes; may update membership for safe repair actions | Yes |
 | `POST` | `/item-inventories/{itemInventoryId}/sync` | Legacy direct sync workflow. Prefer sync-plan endpoints for Phase 3. | Yes when `dryRun=false` | Yes when `dryRun=false` |
+| `GET` | `/item-inventories/{itemInventoryId}/hosted-content` | List what removing the item's photos and album would delete. Lower environments only (403 in production). | No | No |
+| `POST` | `/item-inventories/{itemInventoryId}/hosted-content/purge` | Remove the item's photos from Flickr, the photo bucket and the database, and its album rows. Lower environments only. | Yes, deletes photos | Yes |
+| `GET` | `/orphans` | List photos and albums on the account that no inventory item owns. Lower environments only. | No | No |
+| `POST` | `/orphans/delete` | Delete the photos no item owns, up to `maxDeletes` (default 200) per call. Lower environments only. | Yes, deletes photos | No |
 
 ## Generated Description
 

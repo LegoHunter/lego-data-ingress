@@ -1,5 +1,6 @@
 package io.legohunter.ingress.source.photo.service;
 
+import io.legohunter.egress.imagehosting.removal.HostedContentRemovalService;
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
 import io.legohunter.ingress.config.storage.S3BucketProperties;
 import lombok.RequiredArgsConstructor;
@@ -9,6 +10,7 @@ import io.legohunter.data.dto.ItemInventoryPhoto;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
@@ -22,6 +24,7 @@ public class PhotoDeletionService {
 
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
     private final S3BucketProperties s3BucketProperties;
+    private final HostedContentRemovalService hostedContentRemovalService;
 
     public void process(ObjectDeletedEvent event) {
 
@@ -67,6 +70,11 @@ public class PhotoDeletionService {
             return;
         }
 
+        // The database is the system of record and the image host holds a copy: a photo that leaves the database
+        // leaves the host too. The published copy and its link rows go first, because those rows reference the
+        // photo row. If the host refuses, this throws, the photo row is kept and the event is retried.
+        List<String> unpublished = hostedContentRemovalService.unpublishPhoto(photo);
+
         int deleted =
                 itemInventoryPhotoDao.deleteByMd5AndStorage(
                         md5,
@@ -74,12 +82,15 @@ public class PhotoDeletionService {
                         key
                 );
 
+        hostedContentRemovalService.reconcileAlbumAfterRemoval(photo.getItemInventoryId());
+
         log.info(
-                "photo.delete.db.deleted md5={} bucket={} key={} rows={}",
+                "photo.delete.db.deleted md5={} bucket={} key={} rows={} hostedPhotosRemoved={}",
                 md5,
                 bucket,
                 key,
-                deleted
+                deleted,
+                unpublished.size()
         );
     }
 
