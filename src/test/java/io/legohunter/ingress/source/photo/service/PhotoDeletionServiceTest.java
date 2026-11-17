@@ -1,5 +1,6 @@
 package io.legohunter.ingress.source.photo.service;
 
+import io.legohunter.egress.imagehosting.removal.HostedContentRemovalService;
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
 import io.legohunter.ingress.config.storage.S3BucketProperties;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
@@ -8,13 +9,17 @@ import io.legohunter.data.enums.PhotoStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -30,11 +35,14 @@ class PhotoDeletionServiceTest {
     @Mock
     private ItemInventoryPhotoDao itemInventoryPhotoDao;
 
+    @Mock
+    private HostedContentRemovalService hostedContentRemovalService;
+
     private PhotoDeletionService service;
 
     @BeforeEach
     void setUp() {
-        service = new PhotoDeletionService(itemInventoryPhotoDao, s3BucketProperties(BUCKET));
+        service = new PhotoDeletionService(itemInventoryPhotoDao, s3BucketProperties(BUCKET), hostedContentRemovalService);
     }
 
     @Test
@@ -51,6 +59,36 @@ class PhotoDeletionServiceTest {
     }
 
     @Test
+    void process_removesThePublishedCopyBeforeThePhotoRowAndThenReconcilesTheAlbum() {
+        ItemInventoryPhoto photo = photo(BUCKET, KEY);
+        when(itemInventoryPhotoDao.findByMd5(MD5)).thenReturn(Optional.of(photo));
+        when(hostedContentRemovalService.unpublishPhoto(photo)).thenReturn(List.of("flickr-photo-1"));
+        when(itemInventoryPhotoDao.deleteByMd5AndStorage(MD5, BUCKET, KEY)).thenReturn(1);
+
+        service.process(deleteEvent(BUCKET, KEY));
+
+        // The link rows reference the photo row, so the published copy goes first.
+        InOrder order = inOrder(hostedContentRemovalService, itemInventoryPhotoDao);
+        order.verify(hostedContentRemovalService).unpublishPhoto(photo);
+        order.verify(itemInventoryPhotoDao).deleteByMd5AndStorage(MD5, BUCKET, KEY);
+        order.verify(hostedContentRemovalService).reconcileAlbumAfterRemoval(100);
+    }
+
+    @Test
+    void process_keepsThePhotoRowWhenTheImageHostRefusesTheDeletion() {
+        ItemInventoryPhoto photo = photo(BUCKET, KEY);
+        when(itemInventoryPhotoDao.findByMd5(MD5)).thenReturn(Optional.of(photo));
+        when(hostedContentRemovalService.unpublishPhoto(photo))
+                .thenThrow(new IllegalStateException("Image host refused to delete photo [flickr-photo-1]: unavailable"));
+
+        assertThatThrownBy(() -> service.process(deleteEvent(BUCKET, KEY)))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(itemInventoryPhotoDao, never()).deleteByMd5AndStorage(MD5, BUCKET, KEY);
+        verify(hostedContentRemovalService, never()).reconcileAlbumAfterRemoval(any());
+    }
+
+    @Test
     void process_isIdempotentWhenPhotoRowDoesNotExist() {
         when(itemInventoryPhotoDao.findByMd5(MD5))
                 .thenReturn(Optional.empty());
@@ -59,6 +97,7 @@ class PhotoDeletionServiceTest {
 
         verify(itemInventoryPhotoDao, never())
                 .deleteByMd5AndStorage(MD5, BUCKET, KEY);
+        verifyNoInteractions(hostedContentRemovalService);
     }
 
     @Test
@@ -70,6 +109,7 @@ class PhotoDeletionServiceTest {
 
         verify(itemInventoryPhotoDao, never())
                 .deleteByMd5AndStorage(MD5, BUCKET, KEY);
+        verifyNoInteractions(hostedContentRemovalService);
     }
 
     @Test

@@ -332,6 +332,27 @@ compares it with Flickr and repairs it. To check one album by hand:
 The job picks its work from database state. An album the database believes is in sync but Flickr holds
 differently is not revisited on its own; apply the item's sync plan.
 
+**Removing photos.** A photo that leaves the database leaves Flickr too (`HostedContentRemovalService`).
+
+- **Delete one photo (every environment):** remove its object from the final-photo bucket
+  (`lego-photos-<env>/<item>/<uuid>/<md5>.jpg`). The system deletes the photo on Flickr, the rows that link it,
+  and the photo row, then brings the album back in step (its description lists captions). When that was the
+  item's last photo, Flickr drops the empty album itself and the album row is removed. If Flickr refuses the
+  deletion, nothing is removed and the event is retried; the log line is `image_hosting.removal.*` or
+  `photo.delete.*`. Deleting the cover photo leaves the item without one: tag another photo `primary`.
+- **Remove all of an item's photos (lower environments only):**
+  `GET /internal/image-hosting/item-inventories/{id}/hosted-content` lists what would go;
+  `POST .../hosted-content/purge` removes the photos from Flickr, the photo bucket and the database, and the
+  album rows. Run it before a seeded-item teardown, which refuses an item that still has photos or an album.
+  It can be repeated if it stops part-way.
+- **Photos no item owns (lower environments only):** `GET /internal/image-hosting/orphans` lists every photo and
+  album on the account that the database does not know; `POST /internal/image-hosting/orphans/delete`
+  (`maxDeletes`, default 200) deletes those photos. Run it after a database reset. An album listed with
+  `knownPhotos` above zero holds photos an item does own: look at it before deleting.
+
+The two lower-environment operations answer 403 in production. The production account holds albums made by the
+legacy system that this database does not know yet; a sweep there would call them all orphans.
+
 ## Operating
 
 **Deploy.**
