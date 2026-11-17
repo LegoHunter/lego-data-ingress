@@ -314,6 +314,18 @@ and `external_category`. Topics and groups are in `kafka.topic-configuration.*` 
 lego-imaging. Manual endpoints are under `/internal/image-hosting/item-inventories/{id}/`: `sync-plan`,
 `sync-plan/apply`, `repair-plan`, `repair-plan/apply` and `generated-description`. Prefer a plan, then apply it.
 
+**The database is the system of record; Flickr is a published copy** (owner decision 2026-11-17).
+- What Flickr should hold (photos, cover, album title and description) is computed from the database and the
+  final-photo bucket.
+- Repairs go from the database to Flickr. A change made directly on Flickr is drift: a sync plan reverses it.
+- Only linkage is read back from Flickr. When an existing album belongs to the item, `repair-plan` records the
+  album and photo ids, which of the item's photos the album already holds, and the album's current title. That
+  records what Flickr has; it does not decide what Flickr should have. The next sync plan still brings the
+  album to the database's state.
+- Each environment has its own Flickr account (PROD: the Pro account; SANDBOX and DEV: one free account each).
+  A free account holds 1,000 items and Flickr deletes the oldest above that. Do not repair those deletions:
+  re-uploading puts the account over the limit again. Free space instead.
+
 **Which album belongs to which item.** An album's title is `<item number> - <item name>`, so every copy of one
 set has the same title. The item's UUID tells the copies apart (`ImageHostingAlbumIdentity`):
 - Every album description the system writes ends with `Item reference: <uuid>`.
