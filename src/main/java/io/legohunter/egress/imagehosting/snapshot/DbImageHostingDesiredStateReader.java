@@ -14,6 +14,7 @@ import io.legohunter.data.dto.ExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventoryExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
+import io.legohunter.egress.imagehosting.ImageHostingAlbumIdentity;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.description.GeneratedDescriptionComposer;
 import lombok.RequiredArgsConstructor;
@@ -95,13 +96,16 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
 
         return DesiredImageHostingAlbum.builder()
                 .desiredTitle(albumTitle(inventory, externalCatalogItem))
-                .desiredDescription(descriptionComposer.compose(
-                        provider,
-                        inventory,
-                        externalCatalogItem,
-                        externalAlbum,
-                        photos
-                ).getDescription())
+                .desiredDescription(ImageHostingAlbumIdentity.withItemReference(
+                        descriptionComposer.compose(
+                                provider,
+                                inventory,
+                                externalCatalogItem,
+                                externalAlbum,
+                                photos
+                        ).getDescription(),
+                        inventory.getUuid()
+                ))
                 .externalAlbum(externalAlbum)
                 .build();
     }

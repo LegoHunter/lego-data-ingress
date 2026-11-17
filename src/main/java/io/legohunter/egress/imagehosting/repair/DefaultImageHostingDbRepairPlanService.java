@@ -2,6 +2,7 @@ package io.legohunter.egress.imagehosting.repair;
 
 import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
+import io.legohunter.egress.imagehosting.ImageHostingAlbumIdentity;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncMetricsService;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
@@ -84,7 +85,7 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
 
         RemoteRecoveryState remote;
         try {
-            remote = readRemoteState(desiredAlbum, request);
+            remote = readRemoteState(desiredAlbum, itemUuid(desiredState), request);
         } catch (RemoteRecoveryException e) {
             remote = RemoteRecoveryState.failed(e.getMessage());
         }
@@ -308,6 +309,7 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
 
     private RemoteRecoveryState readRemoteState(
             DesiredImageHostingAlbum desiredAlbum,
+            String itemUuid,
             ImageHostingDbRepairPlanRequest request
     ) {
         List<HostedAlbum> albums = listAlbums(request);
@@ -324,25 +326,28 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
                 );
             }
         } else {
-            List<HostedAlbum> titleMatches = albums.stream()
-                    .filter(album -> sameText(desiredAlbum.getDesiredTitle(), album.getTitle()))
+            // An album belongs to this item only when its description carries the item's UUID. The title is the
+            // item number and name, which every copy of the same set shares, so a title match alone never adopts.
+            List<HostedAlbum> uuidMatches = albums.stream()
+                    .filter(album -> ImageHostingAlbumIdentity.carries(album.getDescription(), itemUuid))
                     .toList();
-            if (titleMatches.isEmpty()) {
+            if (uuidMatches.isEmpty()) {
                 return RemoteRecoveryState.notFound();
             }
-            if (titleMatches.size() > 1) {
+            if (uuidMatches.size() > 1) {
                 return RemoteRecoveryState.blocked(
-                        "Multiple remote Flickr albums match the desired DB album title; repair is ambiguous",
+                        "Multiple remote Flickr albums carry this item's UUID; repair is ambiguous",
                         adoptionAttributes(REMOTE_ADOPTION_AMBIGUOUS, Map.of(
                                 "desiredTitle", value(desiredAlbum.getDesiredTitle()),
-                                "matchingRemoteAlbumIds", titleMatches.stream()
+                                "itemUuid", value(itemUuid),
+                                "matchingRemoteAlbumIds", uuidMatches.stream()
                                         .map(HostedAlbum::getId)
                                         .filter(this::hasText)
                                         .collect(Collectors.joining(","))
                         ))
                 );
             }
-            remoteAlbum = Optional.of(titleMatches.getFirst());
+            remoteAlbum = Optional.of(uuidMatches.getFirst());
         }
 
         HostedAlbum album = remoteAlbum.orElseThrow();
@@ -577,6 +582,10 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
                     default -> status == null || status.isBlank() ? "unknown" : status.toLowerCase();
                 }
         );
+    }
+
+    private String itemUuid(ImageHostingDesiredStateSnapshot desiredState) {
+        return desiredState.getInventory() == null ? null : desiredState.getInventory().getUuid();
     }
 
     private String providerTag(ImageHostingDesiredStateSnapshot desiredState) {

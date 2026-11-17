@@ -314,6 +314,14 @@ and `external_category`. Topics and groups are in `kafka.topic-configuration.*` 
 lego-imaging. Manual endpoints are under `/internal/image-hosting/item-inventories/{id}/`: `sync-plan`,
 `sync-plan/apply`, `repair-plan`, `repair-plan/apply` and `generated-description`. Prefer a plan, then apply it.
 
+**Which album belongs to which item.** An album's title is `<item number> - <item name>`, so every copy of one
+set has the same title. The item's UUID tells the copies apart (`ImageHostingAlbumIdentity`):
+- Every album description the system writes ends with `Item reference: <uuid>`.
+- An item with no album id is linked to an existing album only when that album's description carries the item's
+  UUID. Legacy albums, whose whole description is the UUID, are recognised.
+- No album carries the UUID: a new album is created, even when another album has the same title.
+- Several albums carry the UUID: the plan is blocked as ambiguous. Remove or re-describe the duplicate on Flickr.
+
 ## Operating
 
 **Deploy.**

@@ -65,7 +65,8 @@ class DefaultImageHostingDbRepairPlanServiceTest {
     void planRepairsMissingAlbumPhotoIdsAndMembershipFromUniqueRemoteMatches() {
         when(desiredStateReader.read(any())).thenReturn(desiredStateWithoutExternalIds());
         when(imageHostingService.listAlbums(any())).thenReturn(response(HostedAlbumPage.builder()
-                .album(remoteAlbum("album-100", "4558-1 - Metroliner"))
+                .album(remoteAlbum("album-099", "4558-1 - Metroliner"))
+                .album(remoteAlbum("album-100", "4558-1 - Metroliner", "Generated.\n\nItem reference: inventory-uuid"))
                 .page(1)
                 .pages(1)
                 .build()));
@@ -109,11 +110,54 @@ class DefaultImageHostingDbRepairPlanServiceTest {
     }
 
     @Test
-    void planBlocksWhenMissingAlbumIdHasAmbiguousRemoteTitleMatch() {
+    void planAdoptsALegacyAlbumWhoseDescriptionIsTheItemUuid() {
         when(desiredStateReader.read(any())).thenReturn(desiredStateWithoutExternalIds());
         when(imageHostingService.listAlbums(any())).thenReturn(response(HostedAlbumPage.builder()
-                .album(remoteAlbum("album-100", "4558-1 - Metroliner"))
-                .album(remoteAlbum("album-101", "4558-1 - Metroliner"))
+                .album(remoteAlbum("album-100", "A title the legacy system chose", "inventory-uuid"))
+                .page(1)
+                .pages(1)
+                .build()));
+        when(imageHostingService.listAlbumPhotos(any())).thenReturn(response(HostedPhotoPage.builder()
+                .page(1)
+                .pages(1)
+                .build()));
+
+        SyncPlan plan = service.plan(ImageHostingDbRepairPlanRequest.builder()
+                .itemInventoryId(100)
+                .build());
+
+        assertThat(plan.getActions().getFirst())
+                .extracting(action -> action.getType(), action -> action.getSafety())
+                .containsExactly(SyncActionType.REPAIR_ALBUM_ID, SyncActionSafety.SAFE_AUTOMATIC);
+        assertThat(plan.getActions().getFirst().getAttributes()).containsEntry("remoteAlbumId", "album-100");
+    }
+
+    @Test
+    void planDoesNotAdoptAnAlbumThatOnlySharesTheTitle() {
+        // Another copy of the same set already has an album: same title, another item's UUID.
+        when(desiredStateReader.read(any())).thenReturn(desiredStateWithoutExternalIds());
+        when(imageHostingService.listAlbums(any())).thenReturn(response(HostedAlbumPage.builder()
+                .album(remoteAlbum("album-100", "4558-1 - Metroliner", "Generated.\n\nItem reference: other-copy-uuid"))
+                .album(remoteAlbum("album-101", "4558-1 - Metroliner", "inventory-uuid-of-a-third-copy"))
+                .page(1)
+                .pages(1)
+                .build()));
+
+        SyncPlan plan = service.plan(ImageHostingDbRepairPlanRequest.builder()
+                .itemInventoryId(100)
+                .build());
+
+        assertThat(plan.getActions()).hasSize(1);
+        assertThat(plan.getActions().getFirst().getAttributes())
+                .containsEntry(REMOTE_ADOPTION_STATUS, REMOTE_ADOPTION_NOT_FOUND);
+    }
+
+    @Test
+    void planBlocksWhenSeveralRemoteAlbumsCarryTheItemUuid() {
+        when(desiredStateReader.read(any())).thenReturn(desiredStateWithoutExternalIds());
+        when(imageHostingService.listAlbums(any())).thenReturn(response(HostedAlbumPage.builder()
+                .album(remoteAlbum("album-100", "4558-1 - Metroliner", "inventory-uuid"))
+                .album(remoteAlbum("album-101", "Renamed album", "Generated.\n\nItem reference: inventory-uuid"))
                 .page(1)
                 .pages(1)
                 .build()));
@@ -132,7 +176,7 @@ class DefaultImageHostingDbRepairPlanServiceTest {
                 .containsExactly(
                         SyncActionType.REPAIR_ALBUM_ID,
                         SyncActionSafety.BLOCKED,
-                        "Multiple remote Flickr albums match the desired DB album title; repair is ambiguous"
+                        "Multiple remote Flickr albums carry this item's UUID; repair is ambiguous"
                 );
         assertThat(plan.getActions().getFirst().getAttributes())
                 .containsEntry("matchingRemoteAlbumIds", "album-100,album-101")
@@ -227,11 +271,15 @@ class DefaultImageHostingDbRepairPlanServiceTest {
     }
 
     private static HostedAlbum remoteAlbum(String id, String title) {
+        return remoteAlbum(id, title, "Remote description");
+    }
+
+    private static HostedAlbum remoteAlbum(String id, String title, String description) {
         return HostedAlbum.builder()
                 .id(id)
                 .url("https://flickr.example/albums/" + id)
                 .title(title)
-                .description("Remote description")
+                .description(description)
                 .primaryPhotoId("photo-11")
                 .build();
     }
