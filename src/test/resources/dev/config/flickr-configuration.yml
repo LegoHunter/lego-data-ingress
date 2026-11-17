@@ -1,7 +1,5 @@
 flickr:
    userId: 99999999@N08
    secrets:
-     key: 1111111111111
-     secret: 111111111111
      token: 111111111111111111111
      tokenSecret: 11111111111111111111

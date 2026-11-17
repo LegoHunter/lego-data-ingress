@@ -3,6 +3,7 @@ spring:
     import:
       - classpath:/dev/config/bitly-configuration.yml
       - classpath:/dev/config/database-configuration.yml
+      - classpath:/dev/config/flickr-api-keys.yml
       - classpath:/dev/config/flickr-configuration.yml
       - classpath:/dev/config/kafka-configuration.yml
       - classpath:/dev/config/s3-configuration.yml
