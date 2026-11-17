@@ -333,6 +333,11 @@ that writes, start with `mode: DRY_RUN` (or `apply: false`), read the logs and d
 environment plus the shared `global` environment, which holds the BrickLink API keys; HOMELAB-76). Locally they come
 from `/dev/config`. A missing file fails startup.
 
+Flickr uses two files. `flickr-api-keys.yml` (Global) holds the API application's `flickr.secrets.key` and
+`flickr.secrets.secret`, one copy for every environment. `flickr-configuration.yml` (per environment) holds that
+environment's Flickr account: `flickr.userId`, `flickr.secrets.token` and `flickr.secrets.tokenSecret`. SANDBOX,
+DEV and PROD each publish to their own Flickr account.
+
 **Endpoints.** All are internal and behind cluster access. OpenAPI is at `/swagger-ui/index.html`.
 
 | Endpoint | Does |
