@@ -131,7 +131,9 @@ class DbImageHostingDesiredStateReaderTest {
 
                                 Caption 11 Caption 12
 
-                                Photos: https://flic.kr/s/a100""",
+                                Photos: https://flic.kr/s/a100
+
+                                Item reference: inventory-uuid""",
                         301L,
                         "flickr-album-100"
                 );

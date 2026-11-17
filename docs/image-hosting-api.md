@@ -98,7 +98,8 @@ accepting the risk described by the action.
 
 Preview the generated item description from durable DB state. This is useful
 before syncing because the generated description is used as the desired album
-description in the DB-backed sync flow.
+description in the DB-backed sync flow. The album description has one more
+line that this preview does not show: `Item reference: <uuid>`.
 
 The description is composed from:
 
@@ -187,11 +188,14 @@ current Flickr remote state and lists actions that would bring Flickr into line
 with the DB-backed desired state.
 
 When the DB does not yet have a Flickr album id, normal sync first attempts
-safe remote adoption before planning a new album. If exactly one existing
-Flickr album matches the DB desired title, the plan contains DB repair actions
-that link the album, photos, and membership rows back to the item inventory. If
-multiple remote albums match, the plan is blocked as ambiguous. If no remote
-album matches, the planner falls back to `CREATE_ALBUM`.
+safe remote adoption before planning a new album. An existing Flickr album
+belongs to the item only when its description carries the item's UUID: either
+the `Item reference: <uuid>` line the system writes, or the bare UUID that
+legacy albums have as their description. The title is not used, because every
+copy of one set has the same title. If exactly one album carries the UUID, the
+plan contains DB repair actions that link the album, photos, and membership
+rows back to the item inventory. If several do, the plan is blocked as
+ambiguous. If none does, the planner falls back to `CREATE_ALBUM`.
 
 This endpoint is read-only. It does not upload photos, update Flickr metadata,
 update album membership, or write repair information to the DB.

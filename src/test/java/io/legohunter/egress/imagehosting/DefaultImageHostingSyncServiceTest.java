@@ -462,7 +462,11 @@ class DefaultImageHostingSyncServiceTest {
                         HostedAlbumMetadataUpdate::getTitle,
                         HostedAlbumMetadataUpdate::getDescription
                 )
-                .containsExactly("flickr-album-100", "4558-1 - Metroliner", "4558-1 - Metroliner.");
+                .containsExactly(
+                        "flickr-album-100",
+                        "4558-1 - Metroliner",
+                        "4558-1 - Metroliner.\n\nItem reference: inventory-uuid"
+                );
         verify(externalImageAlbumDao, atLeastOnce()).update(album);
         assertThat(album.getTitle()).isEqualTo("4558-1 - Metroliner");
     }

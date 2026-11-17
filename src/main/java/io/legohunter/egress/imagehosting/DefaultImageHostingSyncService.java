@@ -915,13 +915,16 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             ExternalImageAlbum album,
             List<ItemInventoryPhoto> photos
     ) {
-        return descriptionComposer.compose(
-                provider,
-                inventory,
-                bricklinkExternalCatalogItem(inventory).orElse(null),
-                album,
-                photos
-        ).getDescription();
+        return ImageHostingAlbumIdentity.withItemReference(
+                descriptionComposer.compose(
+                        provider,
+                        inventory,
+                        bricklinkExternalCatalogItem(inventory).orElse(null),
+                        album,
+                        photos
+                ).getDescription(),
+                inventory.getUuid()
+        );
     }
 
     private Optional<ExternalCatalogItem> bricklinkExternalCatalogItem(ItemInventory inventory) {
