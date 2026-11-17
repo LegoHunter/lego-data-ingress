@@ -10,6 +10,9 @@ spring:
       - file:${import-path}/flickr-configuration.yml
       - file:${import-path}/bitly-configuration.yml
       - file:${import-path}/bricklink-client-api-keys.yml
+      # The caller token of this environment's BrickLink web gateway (HOMELAB-92). Optional: without
+      # it the lot image sync reports GATEWAY_NOT_CONFIGURED and sends nothing.
+      - optional:file:${import-path}/bricklink-web-gateway-caller.yml
       # ShipStation is PROD-only (HOMELAB-57/59): lower environments hold no ShipStation credentials,
       # so the file is optional here and the fulfillment sync below is off.
       - optional:file:${import-path}/shipstation-configuration.yml
@@ -128,6 +131,14 @@ lego:
         initial-delay-ms: 300000
         lock-at-most-for: 10m
         lock-at-least-for: 0s
+    # Lot image sync (HOMELAB-92). The gateway is the Service of the same namespace. DRY_RUN first:
+    # it checks and logs what it would send, and writes nothing.
+    lot-image-sync:
+      enabled: true
+      mode: DRY_RUN
+      gateway-base-url: http://bricklink-web-gateway:8080
+      scheduled:
+        enabled: true
     inventory-reconciliation:
       enabled: true
       scheduled:
