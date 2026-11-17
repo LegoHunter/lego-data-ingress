@@ -15,6 +15,8 @@ import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncMetricsService;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.description.GeneratedDescriptionComposer;
+import io.legohunter.egress.imagehosting.headroom.HeadroomDecision;
+import io.legohunter.egress.imagehosting.headroom.ImageHostingHeadroomGuard;
 import io.legohunter.egress.imagehosting.description.GeneratedDescriptionRequest;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlResult;
@@ -38,6 +40,7 @@ import io.legohunter.imaging.service.sync.model.SyncPlanMode;
 import io.legohunter.imaging.service.sync.model.SyncReport;
 import io.legohunter.ingress.s3.api.S3Service;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -63,6 +66,7 @@ import static io.legohunter.data.enums.ExternalSyncStatus.FAILED;
 import static io.legohunter.data.enums.ExternalSyncStatus.PENDING;
 import static io.legohunter.data.enums.ExternalSyncStatus.SYNCED;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlanExecutor {
@@ -81,6 +85,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     private final ImageHostingShortUrlService shortUrlService;
     private final ImageHostingSyncMetricsService metricsService;
     private final GeneratedDescriptionComposer descriptionComposer;
+    private final ImageHostingHeadroomGuard headroomGuard;
 
     @Override
     public SyncReport execute(SyncPlan plan, boolean allowReviewRequired) {
@@ -90,8 +95,14 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
 
         LocalDateTime startedAt = LocalDateTime.now();
         List<SyncActionResult> results = new ArrayList<>();
+        Optional<String> noHeadroom = headroomRefusal(plan);
         for (SyncAction action : plan.getActions()) {
-            results.add(executeAction(action, allowReviewRequired));
+            // A plan that would publish new photos past the account's limit is held back whole: nothing is
+            // uploaded, nothing is marked failed, and the item is picked up again once there is room. SKIPPED,
+            // not BLOCKED: a report counts BLOCKED as a failure, and a full account is not a failed sync.
+            results.add(noHeadroom.isPresent()
+                    ? result(action, SyncActionStatus.SKIPPED, noHeadroom.get(), startedAt, null, null)
+                    : executeAction(action, allowReviewRequired));
         }
 
         return SyncReport.builder()
@@ -102,6 +113,36 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 .finishedAt(LocalDateTime.now())
                 .results(results)
                 .build();
+    }
+
+    /** The reason this plan may not publish its new photos now, or empty when it may. */
+    private Optional<String> headroomRefusal(SyncPlan plan) {
+        int newPhotos = (int) plan.getActions().stream()
+                .filter(action -> SyncActionType.UPLOAD_PHOTO.equals(action.getType()))
+                .filter(action -> !action.isBlocked())
+                .count();
+        if (newPhotos == 0) {
+            return Optional.empty();
+        }
+        HeadroomDecision decision = headroomGuard.reserve(newPhotos);
+        if (decision.allowed()) {
+            return Optional.empty();
+        }
+        String provider = plan.getActions().stream()
+                .map(action -> action.getAttributes().get("provider"))
+                .filter(this::hasText)
+                .findFirst()
+                .orElse(null);
+        metricsService.recordHeadroomBlocked(provider, newPhotos);
+        log.warn(
+                "image_hosting.headroom.blocked planId={} newPhotos={} itemCount={} itemLimit={} publishCeiling={}",
+                plan.getPlanId(),
+                newPhotos,
+                decision.headroom().itemCount(),
+                decision.headroom().itemLimit(),
+                decision.headroom().publishCeiling()
+        );
+        return Optional.of(decision.message());
     }
 
     private SyncActionResult executeAction(SyncAction action, boolean allowReviewRequired) {

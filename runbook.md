@@ -365,6 +365,25 @@ differently is not revisited on its own; apply the item's sync plan.
 The two lower-environment operations answer 403 in production. The production account holds albums made by the
 legacy system that this database does not know yet; a sweep there would call them all orphans.
 
+**Staying under the account's item limit.** A free Flickr account (SANDBOX, DEV) holds 1,000 items and Flickr
+deletes the oldest above that. Putting deleted photos back only makes Flickr delete others, so the system stops
+before the limit (`ImageHostingHeadroomGuard`).
+
+- Before a plan uploads new photos, the account's count and limit are read (and kept for
+  `cache-seconds`). When the count plus the plan's new photos would pass `limit - reserve-items` (default
+  1,000 - 100 = 900), the whole plan is held back: its actions come back `SKIPPED` with the reason, nothing is
+  uploaded and nothing is marked failed. The item stays a candidate and is published once there is room.
+- Updates to photos already on Flickr, album changes and deletions are never held back.
+- An account with no limit (PROD's Pro account) is never held back. If the account cannot be read, publishing
+  goes ahead and `image_hosting.headroom.unreadable` is logged.
+- See where the account stands: `GET /internal/image-hosting/account-usage`. Log lines:
+  `image_hosting.headroom.account_usage` (each reading) and `image_hosting.headroom.blocked` (a plan held back);
+  metric `image_hosting_headroom_blocked`.
+- To free space: delete photos no item owns (`/orphans/delete`), or remove the photos of items no longer needed
+  (`/hosted-content/purge`).
+- Settings: `lego.image-hosting.sync.headroom.enabled`, `reserve-items`, `cache-seconds`.
+- Not covered: the legacy direct sync endpoint (`POST .../sync`), which is not used by the scheduled job.
+
 ## Operating
 
 **Deploy.**

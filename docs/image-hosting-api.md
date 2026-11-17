@@ -95,6 +95,7 @@ accepting the risk described by the action.
 | `POST` | `/item-inventories/{itemInventoryId}/hosted-content/purge` | Remove the item's photos from Flickr, the photo bucket and the database, and its album rows. Lower environments only. | Yes, deletes photos | Yes |
 | `GET` | `/orphans` | List photos and albums on the account that no inventory item owns. Lower environments only. | No | No |
 | `POST` | `/orphans/delete` | Delete the photos no item owns, up to `maxDeletes` (default 200) per call. Lower environments only. | Yes, deletes photos | No |
+| `GET` | `/account-usage` | The account's item count, its limit, and how many new photos may still be published before the headroom guard holds plans back. | No | No |
 
 ## Generated Description
 
