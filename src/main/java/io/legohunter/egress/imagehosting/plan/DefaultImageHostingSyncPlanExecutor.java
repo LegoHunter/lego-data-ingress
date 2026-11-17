@@ -10,9 +10,12 @@ import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
+import io.legohunter.egress.imagehosting.ImageHostingAlbumIdentity;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncMetricsService;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.description.GeneratedDescriptionComposer;
+import io.legohunter.egress.imagehosting.description.GeneratedDescriptionRequest;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlResult;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlService;
@@ -77,6 +80,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     private final ImageHostingPublishingPolicy publishingPolicy;
     private final ImageHostingShortUrlService shortUrlService;
     private final ImageHostingSyncMetricsService metricsService;
+    private final GeneratedDescriptionComposer descriptionComposer;
 
     @Override
     public SyncReport execute(SyncPlan plan, boolean allowReviewRequired) {
@@ -213,8 +217,22 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         album.setErrorMessage(null);
         album.setLastSyncedAt(ZonedDateTime.now());
         externalImageAlbumDao.update(album);
-        persistAlbumMembership(album, syncedPhotos);
         metricsService.recordAlbumCreation(providerTag(action), "created");
+
+        // The provider creates an album from its cover photo alone, and the description was written before the
+        // album had a link. Finish both here. The album id is already saved, so a failure in either step marks
+        // the album FAILED and the next job run repairs it from the provider's real state; it never creates a
+        // second album.
+        List<String> unfinished = new ArrayList<>();
+        completeAlbumMembership(hostedAlbum.getId(), createRequest)
+                .ifPresentOrElse(unfinished::add, () -> persistAlbumMembership(album, syncedPhotos));
+        completeAlbumDescription(hostedAlbum.getId(), createRequest, inventory, externalServiceId)
+                .ifPresent(unfinished::add);
+        if (!unfinished.isEmpty()) {
+            String message = "Created Flickr album, but it is incomplete: %s".formatted(String.join("; ", unfinished));
+            markAlbumFailed(album, message);
+            return result(action, SyncActionStatus.FAILED, message, startedAt, hostedAlbum.getId(), null, attemptedResponse);
+        }
         return result(
                 action,
                 SyncActionStatus.SUCCEEDED,
@@ -224,6 +242,61 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 null,
                 attemptedResponse
         );
+    }
+
+    /** Puts every photo into the new album, in order. Returns the failure message, or empty when done. */
+    private Optional<String> completeAlbumMembership(String albumId, HostedAlbumCreateRequest createRequest) {
+        if (createRequest.getPhotoIds().size() < 2) {
+            return Optional.empty();
+        }
+        PhotoServiceResponse<Void> response = retryTemplate.execute(
+                "updateAlbumMembership",
+                () -> imageHostingService().updateAlbumMembership(new SimplePhotoServiceRequest<>(
+                        HostedAlbumMembershipRequest.builder()
+                                .albumId(albumId)
+                                .primaryPhotoId(createRequest.getPrimaryPhotoId())
+                                .photoIds(new LinkedHashSet<>(createRequest.getPhotoIds()))
+                                .build()
+                ))
+        ).response();
+        return response.isError()
+                ? Optional.of("photos were not added to the album (%s)".formatted(responseMessage(response)))
+                : Optional.empty();
+    }
+
+    /**
+     * Writes the album description again now that the album and its short link exist, so it carries the photo
+     * link. Returns the failure message, or empty when done or when nothing changed.
+     */
+    private Optional<String> completeAlbumDescription(
+            String albumId,
+            HostedAlbumCreateRequest createRequest,
+            ItemInventory inventory,
+            Integer externalServiceId
+    ) {
+        String description = ImageHostingAlbumIdentity.withItemReference(
+                descriptionComposer.compose(GeneratedDescriptionRequest.builder()
+                        .itemInventoryId(inventory.getItemInventoryId())
+                        .externalServiceId(externalServiceId)
+                        .build()).getDescription(),
+                inventory.getUuid()
+        );
+        if (!hasText(description) || Objects.equals(description, createRequest.getDescription())) {
+            return Optional.empty();
+        }
+        PhotoServiceResponse<Void> response = retryTemplate.execute(
+                "updateAlbumMetadata",
+                () -> imageHostingService().updateAlbumMetadata(new SimplePhotoServiceRequest<>(
+                        HostedAlbumMetadataUpdate.builder()
+                                .albumId(albumId)
+                                .title(createRequest.getTitle())
+                                .description(description)
+                                .build()
+                ))
+        ).response();
+        return response.isError()
+                ? Optional.of("the description was not updated with the photo link (%s)".formatted(responseMessage(response)))
+                : Optional.empty();
     }
 
     private SyncActionResult updatePhotoMetadata(SyncAction action, LocalDateTime startedAt) {
