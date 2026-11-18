@@ -196,6 +196,15 @@ lego:
         enabled: true
         reserve-items: 100
         cache-seconds: 60
+      # Once a night: compare every album the database knows with Flickr and report the differences. Report
+      # only; nothing is repaired. Every album's photo list is read once in full-check-days nights.
+      difference-report:
+        enabled: false
+        cron: "0 30 3 * * *"
+        zone: America/New_York
+        full-check-days: 7
+        lock-at-most-for: 60m
+        lock-at-least-for: 1m
       scheduled:
         enabled: false
         batch-size: 25

@@ -23,6 +23,13 @@ class ImageHostingKubernetesConfigurationTest {
                 .containsEntry("lego.image-hosting.readiness.require-scheduled-sync-enabled", true);
     }
 
+    @Test
+    void kubernetesProfileEnablesTheNightlyDifferenceReport() {
+        Properties properties = load("application-kubernetes.yml");
+
+        assertThat(properties).containsEntry("lego.image-hosting.sync.difference-report.enabled", true);
+    }
+
     private static Properties load(String resourceName) {
         YamlPropertiesFactoryBean factory = new YamlPropertiesFactoryBean();
         factory.setResources(new ClassPathResource(resourceName));

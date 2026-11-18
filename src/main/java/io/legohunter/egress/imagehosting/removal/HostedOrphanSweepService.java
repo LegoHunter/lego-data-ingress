@@ -4,13 +4,9 @@ import io.legohunter.data.dao.ExternalImageAlbumDao;
 import io.legohunter.data.dao.ExternalImageDao;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.remote.HostedAccountListing;
 import io.legohunter.imaging.model.HostedAlbum;
-import io.legohunter.imaging.model.HostedAlbumPage;
-import io.legohunter.imaging.model.HostedAlbumPhotoSearchRequest;
-import io.legohunter.imaging.model.HostedAlbumSearchRequest;
 import io.legohunter.imaging.model.HostedPhoto;
-import io.legohunter.imaging.model.HostedPhotoPage;
-import io.legohunter.imaging.model.HostedPhotoSearchRequest;
 import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.model.SimplePhotoServiceRequest;
@@ -25,7 +21,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.IntFunction;
 
 /**
  * Finds, and on request deletes, what a lower environment's image host account holds that no inventory item owns
@@ -44,9 +39,8 @@ import java.util.function.IntFunction;
 @Service
 @RequiredArgsConstructor
 public class HostedOrphanSweepService {
-    private static final int PAGE_SIZE = 500;
-
     private final Optional<ImageHostingService> imageHostingService;
+    private final HostedAccountListing accountListing;
     private final ExternalImageDao externalImageDao;
     private final ExternalImageAlbumDao externalImageAlbumDao;
     private final ImageHostingSyncProperties properties;
@@ -68,26 +62,15 @@ public class HostedOrphanSweepService {
         );
         Integer externalServiceId = properties.resolveProvider(null, null).externalServiceId();
 
-        // Read the whole account before deleting anything: deleting while paging would shift the pages.
+        // Read the whole account before deleting anything: deleting while paging would shift the pages. A
+        // listing that fails part-way throws, so nothing is deleted on a partial view of the account.
         Map<String, OrphanSweepReport.OrphanPhoto> orphans = new LinkedHashMap<>();
         List<OrphanSweepReport.UnknownAlbum> unknownAlbums = new ArrayList<>();
         int photosSeen = 0;
 
-        List<HostedAlbum> albums = readAll(
-                page -> hosting.listAlbums(new SimplePhotoServiceRequest<>(
-                        HostedAlbumSearchRequest.builder().page(page).perPage(PAGE_SIZE).build())),
-                "listAlbums",
-                HostedAlbumPage::getAlbums,
-                HostedAlbumPage::getPages
-        );
+        List<HostedAlbum> albums = accountListing.albums();
         for (HostedAlbum album : albums) {
-            List<HostedPhoto> photos = readAll(
-                    page -> hosting.listAlbumPhotos(new SimplePhotoServiceRequest<>(
-                            HostedAlbumPhotoSearchRequest.builder().albumId(album.getId()).page(page).perPage(PAGE_SIZE).build())),
-                    "listAlbumPhotos",
-                    HostedPhotoPage::getPhotos,
-                    HostedPhotoPage::getPages
-            );
+            List<HostedPhoto> photos = accountListing.albumPhotos(album.getId());
             photosSeen += photos.size();
             int known = 0;
             for (HostedPhoto photo : photos) {
@@ -103,13 +86,7 @@ public class HostedOrphanSweepService {
             }
         }
 
-        List<HostedPhoto> loosePhotos = readAll(
-                page -> hosting.listPhotosNotInAlbum(new SimplePhotoServiceRequest<>(
-                        HostedPhotoSearchRequest.builder().page(page).perPage(PAGE_SIZE).build())),
-                "listPhotosNotInAlbum",
-                HostedPhotoPage::getPhotos,
-                HostedPhotoPage::getPages
-        );
+        List<HostedPhoto> loosePhotos = accountListing.photosNotInAlbum();
         photosSeen += loosePhotos.size();
         for (HostedPhoto photo : loosePhotos) {
             if (!isKnown(externalServiceId, photo.getId())) {
@@ -163,35 +140,5 @@ public class HostedOrphanSweepService {
 
     private boolean isKnown(Integer externalServiceId, String hostedPhotoId) {
         return externalImageDao.findByExternalServiceIdAndExternalServiceImageId(externalServiceId, hostedPhotoId).isPresent();
-    }
-
-    private <P, T> List<T> readAll(
-            IntFunction<PhotoServiceResponse<P>> readPage,
-            String operation,
-            java.util.function.Function<P, List<T>> items,
-            java.util.function.Function<P, Integer> pages
-    ) {
-        List<T> all = new ArrayList<>();
-        int page = 1;
-        while (true) {
-            int currentPage = page;
-            PhotoServiceResponse<P> response = retryTemplate.execute(operation, () -> readPage.apply(currentPage)).response();
-            if (response.isError()) {
-                // A partial listing would make known photos look like orphans, so stop without deleting anything.
-                throw new IllegalStateException(
-                        "Image host listing failed (%s, page %s): %s".formatted(operation, page, response.responseMessage())
-                );
-            }
-            P body = response.get();
-            if (body == null) {
-                return all;
-            }
-            all.addAll(Optional.ofNullable(items.apply(body)).orElse(List.of()));
-            int totalPages = Optional.ofNullable(pages.apply(body)).orElse(0);
-            if (totalPages <= page) {
-                return all;
-            }
-            page++;
-        }
     }
 }

@@ -59,6 +59,25 @@ public class ImageHostingSyncProperties {
         private Scheduled scheduled = new Scheduled();
         private Retry retry = new Retry();
         private Headroom headroom = new Headroom();
+        private DifferenceReport differenceReport = new DifferenceReport();
+    }
+
+    /**
+     * The nightly comparison of the database's albums with the image host. It reports and repairs nothing.
+     */
+    @Getter
+    @Setter
+    public static class DifferenceReport {
+        private boolean enabled = false;
+        private String cron = "0 30 3 * * *";
+        private String zone = "America/New_York";
+        /**
+         * Every album's photo list is read once in this many nights, on top of the albums the host's album
+         * listing already shows as different. One reads every album every night.
+         */
+        private int fullCheckDays = 7;
+        private String lockAtMostFor = "60m";
+        private String lockAtLeastFor = "1m";
     }
 
     /**

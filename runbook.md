@@ -342,7 +342,7 @@ compares it with Flickr and repairs it. To check one album by hand:
 `GET /internal/image-hosting/item-inventories/{id}/sync-plan` shows what would be repaired.
 
 The job picks its work from database state. An album the database believes is in sync but Flickr holds
-differently is not revisited on its own; apply the item's sync plan.
+differently is not revisited by the job; the nightly difference report (below) finds it.
 
 **Removing photos.** A photo that leaves the database leaves Flickr too (`HostedContentRemovalService`).
 
@@ -383,6 +383,42 @@ before the limit (`ImageHostingHeadroomGuard`).
   (`/hosted-content/purge`).
 - Settings: `lego.image-hosting.sync.headroom.enabled`, `reserve-items`, `cache-seconds`.
 - Not covered: the legacy direct sync endpoint (`POST .../sync`), which is not used by the scheduled job.
+
+**Nightly difference report.** Once a night (03:30 Eastern) every album the database knows is compared with
+Flickr (`ImageHostingDifferenceReportService`). It reports and repairs nothing: no change on Flickr, none in the
+database.
+
+- **Read it:** `GET /internal/image-hosting/differences` returns the last report (204 when none has run since the
+  service started; reports are kept in memory, so a restart clears it). `POST /internal/image-hosting/differences/run`
+  compares now and returns the report. Log lines: `image_hosting.difference_report.completed` (the counts),
+  `.album_differs` (one per album, at WARN), `.album_pending`, `.failed`. Metrics: `image_hosting_difference_report`
+  (runs, by `outcome`), `image_hosting_difference_report_albums_checked` and `..._albums_different` (last
+  complete run).
+- **How it compares:** the album listing is read once for the whole account and gives each album's title,
+  description, cover and photo count. An album's photo list is read only when the listing shows something off, or
+  when it is the album's turn: every album is read in full once in `full-check-days` nights (default 7), because
+  Flickr's photo count is a hint, not proof. `albumsReadInFull` says how many were read that night. What counts
+  as a difference is decided by the same planner as an item's sync plan.
+- **A finding and what to do.** Each finding carries `whatToDo`.
+
+  | Finding | Meaning | What to do |
+  | --- | --- | --- |
+  | `TITLE`, `DESCRIPTION`, `COVER`, `PHOTO_ORDER`, `PHOTOS_NOT_IN_ALBUM` | Changed on Flickr; the photos are still there. | `POST /internal/image-hosting/item-inventories/{id}/sync-plan/apply` |
+  | `EXTRA_PHOTOS` | The album holds photos the database does not list for the item. | Look at them, then apply the sync plan with `allowReviewRequired=true`. |
+  | `PHOTOS_DELETED` | Flickr no longer has the photo, in the album or anywhere on the account. | The sync plan cannot bring it back. Lower environments: purge the item's hosted content and upload the photos again. Production: no procedure yet. |
+  | `ALBUM_MISSING` | The album is gone. The detail says how many of its photos are left on the account. | As for `PHOTOS_DELETED`. |
+  | `PHOTOS_NOT_PUBLISHED`, `PHOTO_METADATA_PENDING` | Work the database already shows as outstanding. | Nothing; the sync job does it. If it stays night after night, look at the job (headroom, failures). |
+  | `CHECK_FAILED` | The album could not be compared. | Read the detail; the next run tries again. |
+
+- **`accountLimitLikely`** on `PHOTOS_DELETED` or `ALBUM_MISSING` means the account is limited and at or past
+  the count where publishing stops, so Flickr deleting its oldest items is the likely cause. Putting those photos
+  back would only make Flickr delete others: free space first (see above).
+- **`complete: false`** means the album listing could not be read; nothing is reported as missing on a partial
+  view. `message` says why.
+- `albumsOnHostUnknown` counts albums on the account the database does not know. In production those are the
+  legacy system's albums; in a lower environment see the orphan list.
+- Settings: `lego.image-hosting.sync.difference-report.enabled` (on under the `kubernetes` profile), `cron`,
+  `zone`, `full-check-days`.
 
 ## Operating
 

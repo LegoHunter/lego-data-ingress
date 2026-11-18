@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
  * HTML entities. Compared as plain strings, a description with a photo link would differ from Flickr's on every
  * run and be rewritten forever. Both sides are therefore reduced to the same plain form first.
  */
-final class HostedTextComparison {
+public final class HostedTextComparison {
     private static final Pattern LINK = Pattern.compile(
             "<a\\s[^>]*?href\\s*=\\s*\"([^\"]*)\"[^>]*>.*?</a>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL
@@ -20,12 +20,12 @@ final class HostedTextComparison {
     private HostedTextComparison() {
     }
 
-    static boolean sameText(String left, String right) {
+    public static boolean sameText(String left, String right) {
         return Objects.equals(plain(left), plain(right));
     }
 
     /** The text with links reduced to their address, entities decoded, line ends unified and ends trimmed. */
-    static String plain(String value) {
+    public static String plain(String value) {
         if (value == null || value.isBlank()) {
             return "";
         }
