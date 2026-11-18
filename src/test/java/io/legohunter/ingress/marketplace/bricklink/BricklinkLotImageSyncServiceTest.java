@@ -110,6 +110,8 @@ class BricklinkLotImageSyncServiceTest {
         assertThat(queued.getValue().getRemoteInventoryId()).isEqualTo("12345");
         assertThat(queued.getValue().getRemoteVisibilityContainerId()).isEqualTo("C");
         assertThat(queued.getValue().getEnvironmentCode()).isEqualTo("sandbox");
+        // Due at once: no fraction of a second for the database to round up past "now".
+        assertThat(queued.getValue().getNextAttemptAt().getNano()).isZero();
 
         verify(gateway).putLotImage(LOT, "lot-12345.jpg", JPEG);
         verify(bricklinkMarketplaceListingDao).updateLotImage(eq(100), eq(MD5_A), any(ZonedDateTime.class));

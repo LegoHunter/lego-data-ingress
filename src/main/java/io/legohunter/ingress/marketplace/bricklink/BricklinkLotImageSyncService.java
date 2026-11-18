@@ -26,6 +26,7 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Set;
 
@@ -152,7 +153,9 @@ public class BricklinkLotImageSyncService {
                 .createdByJobName(CREATED_BY)
                 .attemptCount(0)
                 .maxAttempts(properties.effectiveMaxAttempts())
-                .nextAttemptAt(now())
+                // Whole seconds: the column has no fractions and MySQL rounds half up, which would make a
+                // request queued in the second half of a second not yet due in the run that queued it.
+                .nextAttemptAt(now().truncatedTo(ChronoUnit.SECONDS))
                 .build());
         counters.queued++;
         log.info("bricklink.lot_image.queued marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={}",
