@@ -36,6 +36,13 @@ public class BricklinkLotImageSyncProperties {
     private Duration requestTimeout = Duration.ofMinutes(3);
     /** A stored photo above this is scaled down before it is sent. BrickLink turns away large files. */
     private long maxImageBytes = 2_000_000L;
+    /**
+     * How long a request waits when it could not be sent through no fault of its own: the gateway is
+     * signed out or unreachable, or the BrickLink API is down. Much shorter than the retry backoff
+     * after a failure, so a gateway restart does not hold lot images back for hours. A retry against
+     * a gateway that still cannot work is one cheap refused call, and the run stops there.
+     */
+    private Duration deferralDelay = Duration.ofMinutes(30);
     private Scheduled scheduled = new Scheduled();
 
     public BricklinkMarketplaceSyncMode effectiveMode(BricklinkMarketplaceSyncMode marketplaceSyncMode) {
@@ -55,6 +62,10 @@ public class BricklinkLotImageSyncProperties {
 
     public int effectiveMaxAttempts() {
         return Math.max(1, maxAttempts);
+    }
+
+    public Duration effectiveDeferralDelay() {
+        return deferralDelay == null || deferralDelay.isNegative() || deferralDelay.isZero() ? Duration.ofMinutes(30) : deferralDelay;
     }
 
     public boolean gatewayConfigured() {

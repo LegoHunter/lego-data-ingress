@@ -159,6 +159,8 @@ lego:
       connect-timeout: 5s
       request-timeout: 3m
       max-image-bytes: 2000000
+      # Wait after "could not be sent" (gateway signed out or unreachable, BrickLink API down).
+      deferral-delay: 30m
       scheduled:
         enabled: false
         fixed-delay-ms: 600000
