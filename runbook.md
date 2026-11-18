@@ -277,8 +277,22 @@ Mode `DRY_RUN` verifies and logs without claiming or writing. The `local` enviro
 S3 upload events arrive on Kafka (one topic per upload type, per environment). A photo is filed by its `uuid`
 keyword onto an existing inventory item. A photo that cannot be filed is moved to `photos/rejected/` with the
 reason logged as `photo.process.rejected`: no `uuid` or `bl` keyword, a uuid that matches no inventory item
-(HOMELAB-97; it used to create a bare item), an unknown catalog number, an unreadable image, or a conflict
-under the sealed / built-once rules below.
+(HOMELAB-97; it used to create a bare item), an unknown catalog number, an unreadable image, a file that is
+not a JPEG, a file over the upload limit, or a conflict under the sealed / built-once rules below.
+
+**A photo is stored exactly as uploaded (HOMELAB-99).** Ingestion no longer scales or re-encodes a photo: the
+bytes exported from the photo editor are the bytes kept in `lego-photos-<env>` and published to the image
+host. It used to re-encode every photo as a 75%-quality JPEG of at most 2 MB.
+
+- The photo's fingerprint (`item_inventory_photo.md5`) is now the fingerprint of the uploaded file. A photo
+  stored before this change keeps its old fingerprint, so re-uploading the same export counts as new pixels:
+  the stored file is replaced, and the published photo with it (see "A re-uploaded photo" below).
+- The size is decided by the export, so the export must carry the agreed size cap. An upload larger than
+  `lego.photos.max-upload-bytes` (default 10,000,000; zero or less turns the limit off) is rejected.
+- Only JPEG is accepted; nothing converts another format any more.
+- The only scaled copy is made when the lot image is sent to BrickLink: the lot image sync scales the
+  primary photo down in memory when it is over `lot-image.max-image-bytes` (2,000,000). That copy is not
+  stored.
 
 **What a photo may change on its item (HOMELAB-96).** A photo changes only what its keywords say: the three
 condition grades (`item:`, `bc:`, `ic:`), and sealed, built once and New/Used under the rules below. Everything
