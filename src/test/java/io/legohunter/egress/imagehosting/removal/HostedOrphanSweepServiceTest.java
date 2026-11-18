@@ -6,6 +6,7 @@ import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.remote.HostedAccountListing;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumPage;
 import io.legohunter.imaging.model.HostedPhoto;
@@ -59,6 +60,7 @@ class HostedOrphanSweepServiceTest {
         environment.setCode("sandbox");
         service = new HostedOrphanSweepService(
                 Optional.of(imageHostingService),
+                new HostedAccountListing(Optional.of(imageHostingService), new ImageHostingRetryTemplate(properties)),
                 externalImageDao,
                 externalImageAlbumDao,
                 properties,

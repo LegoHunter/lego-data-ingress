@@ -7,7 +7,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 @RequiredArgsConstructor
@@ -20,6 +23,7 @@ public class ImageHostingSyncMetricsService {
     private static final String OPERATION_TAG = "operation";
 
     private final MeterRegistry meterRegistry;
+    private final Map<String, AtomicInteger> differenceGauges = new ConcurrentHashMap<>();
 
     public void recordSync(ImageHostingSyncResult result, String providerTag, long elapsedMillis) {
         Counter.builder("image_hosting_sync")
@@ -75,6 +79,34 @@ public class ImageHostingSyncMetricsService {
                 .tag(PROVIDER_TAG, providerTag(providerTag))
                 .register(meterRegistry)
                 .increment(newPhotos);
+    }
+
+    /**
+     * One difference report run. The gauges hold the last complete run: albums compared, and albums where the
+     * image host differs from the database.
+     */
+    public void recordDifferenceReport(String providerTag, boolean complete, int albumsChecked, int albumsWithDifferences) {
+        String provider = providerTag(providerTag);
+        Counter.builder("image_hosting_difference_report")
+                .tag(PROVIDER_TAG, provider)
+                .tag(OUTCOME_TAG, complete ? "completed" : "failed")
+                .register(meterRegistry)
+                .increment();
+        if (!complete) {
+            return;
+        }
+        differenceGauge("image_hosting_difference_report_albums_checked", provider).set(albumsChecked);
+        differenceGauge("image_hosting_difference_report_albums_different", provider).set(albumsWithDifferences);
+    }
+
+    private AtomicInteger differenceGauge(String name, String provider) {
+        return differenceGauges.computeIfAbsent(name + "|" + provider, key -> {
+            AtomicInteger value = new AtomicInteger();
+            io.micrometer.core.instrument.Gauge.builder(name, value, AtomicInteger::get)
+                    .tag(PROVIDER_TAG, provider)
+                    .register(meterRegistry);
+            return value;
+        });
     }
 
     public void recordAlbumAdoption(String providerTag, String result) {

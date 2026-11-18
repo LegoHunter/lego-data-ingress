@@ -96,6 +96,8 @@ accepting the risk described by the action.
 | `GET` | `/orphans` | List photos and albums on the account that no inventory item owns. Lower environments only. | No | No |
 | `POST` | `/orphans/delete` | Delete the photos no item owns, up to `maxDeletes` (default 200) per call. Lower environments only. | Yes, deletes photos | No |
 | `GET` | `/account-usage` | The account's item count, its limit, and how many new photos may still be published before the headroom guard holds plans back. | No | No |
+| `GET` | `/differences` | The last nightly report of where Flickr differs from the database. 204 when none has run since the service started. | No | No |
+| `POST` | `/differences/run` | Compare every album the database knows with Flickr now and return the report. Report only; see the runbook for the findings. | No | No |
 
 ## Generated Description
 
@@ -676,6 +678,9 @@ Prometheus endpoint. The Phase 4.5 adoption-specific counters are:
 | `image_hosting_album_creation` | `provider`, `result` | Counts successful album creation. `result=created` means a new Flickr album was created and persisted. |
 | `image_hosting_album_adoption` | `provider`, `result` | Counts DB adoption outcomes for existing remote albums. Expected results include `adopted`, `ambiguous`, `no_match`, `blocked`, and `failed`. |
 | `image_hosting_short_url` | `provider`, `operation`, `result` | Counts Bitly short URL recovery/generation outcomes. `operation` is `recover` or `generate`; expected results include `recovered`, `generated`, `lookup_miss`, `disabled`, and `failed`. |
+| `image_hosting_difference_report` | `provider`, `outcome` | Counts difference report runs. `outcome` is `completed` or `failed` (the album listing could not be read). |
+| `image_hosting_difference_report_albums_checked` | `provider` | Gauge: albums compared in the last complete run. |
+| `image_hosting_difference_report_albums_different` | `provider` | Gauge: albums where Flickr differed from the database in the last complete run. Alert on above zero. |
 
 The same events also emit structured logs using:
 
@@ -684,6 +689,10 @@ The same events also emit structured logs using:
 | `image_hosting.album_creation` | Album creation outcome. |
 | `image_hosting.album_adoption` | Adoption outcome, including ambiguity and no-match cases. |
 | `image_hosting.short_url` | Bitly recovery/generation outcome. |
+| `image_hosting.difference_report.completed` | Counts of one difference report run. |
+| `image_hosting.difference_report.album_differs` | One album where Flickr differs from the database, with the finding types (WARN). |
+| `image_hosting.difference_report.album_pending` | One album whose only findings are work the sync job has yet to do. |
+| `image_hosting.difference_report.failed` | The run could not read the album listing. |
 
 Publishing template variables:
 

@@ -36,6 +36,8 @@ lego:
           fixed-delay-ms: 180000
   image-hosting:
     sync:
+      difference-report:
+        enabled: true
       scheduled:
         enabled: true
         apply: true
