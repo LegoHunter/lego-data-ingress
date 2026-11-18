@@ -377,17 +377,17 @@ public class BricklinkLotImageSyncService {
         syncRequestDao.update(request);
     }
 
-    /** Back to PENDING, due after the retry backoff, with the attempt its claim took given back. */
+    /** Back to PENDING, due after the deferral delay, with the attempt its claim took given back. */
     private void defer(MarketplaceListingSyncRequest request, String message) {
         int attempts = request.getAttemptCount() == null ? 0 : request.getAttemptCount();
         request.setAttemptCount(Math.max(0, attempts - 1));
         request.setClaimedAt(null);
         request.setLastErrorMessage(shortMessage("Not sent, attempt not counted: " + message));
         request.setSyncRequestStatusCode(STATUS_PENDING);
-        request.setNextAttemptAt(now().plus(syncProperties.effectiveRetryBackoff()));
+        request.setNextAttemptAt(now().plus(properties.effectiveDeferralDelay()));
         syncRequestDao.update(request);
         log.warn("bricklink.lot_image.deferred marketplaceListingSyncRequestId={} marketplaceListingId={} retryAfter={} message={}",
-                request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), syncProperties.effectiveRetryBackoff(), message);
+                request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), properties.effectiveDeferralDelay(), message);
     }
 
     private static String shortMessage(String message) {

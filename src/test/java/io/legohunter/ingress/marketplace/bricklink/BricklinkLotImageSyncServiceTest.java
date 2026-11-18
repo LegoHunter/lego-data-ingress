@@ -161,7 +161,9 @@ class BricklinkLotImageSyncServiceTest {
         MarketplaceListingSyncRequest deferred = lastUpdate();
         assertThat(deferred.getSyncRequestStatusCode()).isEqualTo("PENDING");
         assertThat(deferred.getAttemptCount()).isZero();
-        assertThat(deferred.getNextAttemptAt()).isAfter(ZonedDateTime.now().plusHours(5));
+        // The deferral delay (30 minutes), not the 6-hour retry backoff of a failure.
+        assertThat(deferred.getNextAttemptAt()).isAfter(ZonedDateTime.now().plusMinutes(25));
+        assertThat(deferred.getNextAttemptAt()).isBefore(ZonedDateTime.now().plusMinutes(35));
         assertThat(deferred.getLastErrorMessage()).contains("SESSION_SIGNED_OUT");
         assertThat(result.outcome()).isEqualTo("DEFERRED");
         assertThat(result.deferred()).isOne();
