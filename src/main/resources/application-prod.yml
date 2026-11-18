@@ -10,6 +10,9 @@ spring:
       - file:${import-path}/flickr-configuration.yml
       - file:${import-path}/bitly-configuration.yml
       - file:${import-path}/bricklink-client-api-keys.yml
+      # The caller token of this environment's BrickLink web gateway (HOMELAB-92). Optional: this
+      # environment has no gateway yet, and the lot image sync is off here.
+      - optional:file:${import-path}/bricklink-web-gateway-caller.yml
       - file:${import-path}/shipstation-configuration.yml
   datasource:
     database-key-name: rasppi5-01-lego-prod

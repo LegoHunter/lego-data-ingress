@@ -36,6 +36,8 @@ class SpringProfileEnvironmentTest {
             "file:${import-path}/flickr-configuration.yml",
             "file:${import-path}/bitly-configuration.yml",
             "file:${import-path}/bricklink-client-api-keys.yml",
+            // Optional everywhere: the gateway's caller token, where the environment has a gateway (HOMELAB-92).
+            "optional:file:${import-path}/bricklink-web-gateway-caller.yml",
             "file:${import-path}/shipstation-configuration.yml");
 
     /** Lower environments: the same files, but ShipStation is optional because it is PROD-only (HOMELAB-57/59). */
@@ -47,6 +49,8 @@ class SpringProfileEnvironmentTest {
             "file:${import-path}/flickr-configuration.yml",
             "file:${import-path}/bitly-configuration.yml",
             "file:${import-path}/bricklink-client-api-keys.yml",
+            // Optional everywhere: the gateway's caller token, where the environment has a gateway (HOMELAB-92).
+            "optional:file:${import-path}/bricklink-web-gateway-caller.yml",
             "optional:file:${import-path}/shipstation-configuration.yml");
 
     @ParameterizedTest
@@ -71,6 +75,24 @@ class SpringProfileEnvironmentTest {
 
         assertThat(effective.getProperty("import-path")).isEqualTo("/etc/.credentials");
         assertThat(imports(effective)).containsExactlyElementsOf("prod".equals(env) ? CREDENTIAL_IMPORTS : NON_PROD_CREDENTIAL_IMPORTS);
+    }
+
+    @Test
+    void theLotImageSyncRunsInSandboxOnlyAndStartsInDryRun() {
+        // HOMELAB-92: only SANDBOX has a BrickLink web gateway. The token is never in committed configuration.
+        Properties sandbox = podConfiguration("sandbox");
+        assertThat(String.valueOf(sandbox.get("lego.bricklink.lot-image-sync.enabled"))).isEqualTo("true");
+        assertThat(String.valueOf(sandbox.get("lego.bricklink.lot-image-sync.scheduled.enabled"))).isEqualTo("true");
+        assertThat(String.valueOf(sandbox.get("lego.bricklink.lot-image-sync.mode"))).isEqualTo("APPLY");
+        assertThat(String.valueOf(sandbox.get("lego.bricklink.lot-image-sync.gateway-base-url"))).isEqualTo("http://bricklink-web-gateway:8080");
+        for (String env : List.of("sandbox", "dev", "prod")) {
+            Properties effective = podConfiguration(env);
+            assertThat(String.valueOf(effective.get("lego.bricklink.lot-image-sync.caller-token")))
+                    .as(env).isEqualTo("${bricklink.web-gateway.caller-token:}");
+            if (!"sandbox".equals(env)) {
+                assertThat(String.valueOf(effective.get("lego.bricklink.lot-image-sync.enabled"))).as(env).isEqualTo("false");
+            }
+        }
     }
 
     @ParameterizedTest

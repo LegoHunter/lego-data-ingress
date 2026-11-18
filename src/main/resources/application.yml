@@ -144,6 +144,27 @@ lego:
         initial-delay-ms: 60000
         lock-at-most-for: 10m
         lock-at-least-for: 0s
+    # Lot image sync (HOMELAB-92): sets each lot's custom image to the item's primary photo, through
+    # the BrickLink web gateway. Off by default. It writes only when its own mode and the
+    # marketplace-sync mode are both APPLY. The caller token comes from the environment's
+    # bricklink-web-gateway-caller.yml (key bricklink.web-gateway.caller-token); it is never set here.
+    lot-image-sync:
+      enabled: false
+      mode: DRY_RUN
+      gateway-base-url: ""
+      caller-token: ${bricklink.web-gateway.caller-token:}
+      queue-limit: 25
+      batch-size: 3
+      max-attempts: 3
+      connect-timeout: 5s
+      request-timeout: 3m
+      max-image-bytes: 2000000
+      scheduled:
+        enabled: false
+        fixed-delay-ms: 600000
+        initial-delay-ms: 90000
+        lock-at-most-for: 20m
+        lock-at-least-for: 0s
     orders:
       sync:
         marketplace-code: BRICKLINK
