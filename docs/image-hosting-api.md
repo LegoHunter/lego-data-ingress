@@ -232,6 +232,7 @@ The plan may contain these action types:
 | --- | --- | --- |
 | `UPLOAD_PHOTO` | DB has a processed photo without a Flickr photo id; applying uploads the S3 image to Flickr and stores the returned id. | `SAFE_AUTOMATIC` |
 | `CREATE_ALBUM` | DB desired state has no hosted album id and no existing matching Flickr album was found; applying creates a Flickr album/photoset. | `SAFE_AUTOMATIC`, or `BLOCKED` when desired album state is missing |
+| `REPLACE_PHOTO` | The photo's stored file is no longer the one that was uploaded (`item_inventory_photo.md5` differs from `external_image.md5_at_upload`): it was re-uploaded with new pixels. Applying puts the new file on Flickr; see "Replacing a photo's file" below. | `SAFE_AUTOMATIC` |
 | `UPDATE_PHOTO_METADATA` | Photo metadata hash changed since the last sync; applying updates Flickr title/description/tags. | `SAFE_AUTOMATIC` |
 | `UPDATE_ALBUM_METADATA` | Desired album title or description differs from Flickr. | `SAFE_AUTOMATIC` |
 | `UPDATE_ALBUM_MEMBERSHIP` | Flickr album membership/order differs from DB desired photo ids. | `SAFE_AUTOMATIC` when no unexpected remote-only photos would be removed; otherwise `REQUIRES_REVIEW` |
@@ -336,6 +337,7 @@ POST /internal/image-hosting/item-inventories/335/sync-plan/apply?allowReviewReq
 The executor supports these action types:
 
 - `UPLOAD_PHOTO`
+- `REPLACE_PHOTO`
 - `CREATE_ALBUM`
 - `UPDATE_PHOTO_METADATA`
 - `UPDATE_ALBUM_METADATA`
@@ -345,6 +347,31 @@ The executor supports these action types:
 - `REPAIR_PHOTO_ID`
 
 Unsupported or legacy action types are skipped.
+
+##### Replacing a photo's file
+
+`REPLACE_PHOTO` puts a re-uploaded photo's new file on Flickr. There are two ways, chosen by
+`lego.image-hosting.sync.photo-replacement.mode` (default `AUTO`):
+
+- **In place** (`AUTO` on an account with no item limit, so PROD's Pro account): Flickr's replace call swaps
+  the file. The photo keeps its id, so the album, its order and its cover are untouched. Flickr allows this
+  on Pro accounts only.
+- **Upload and swap** (`AUTO` on a limited account, so SANDBOX and DEV): the new file is uploaded as a new
+  photo, the album is rewritten with the new photo exactly where the old one was (and as the cover if the old
+  one was), the database records the new photo id, and the old photo is deleted. The account holds one extra
+  photo for a moment, so the headroom guard is asked for room for one; with no room the action is `SKIPPED`.
+
+In both ways `external_image.md5_at_upload` changes only once the new file is on Flickr, so a failed
+attempt is planned again on the next run. Other results:
+
+- `SKIPPED` when `AUTO` cannot read the account (the way to replace is not known) or the plan is stale and
+  Flickr already has the file.
+- `FAILED` when the upload or the album rewrite fails. After a failed album rewrite the new photo is deleted
+  again and the old photo stays the published one.
+- `SUCCEEDED` with a note when everything worked except deleting the old photo. That photo is then on the
+  account in no album; the orphan sweep finds it in lower environments.
+
+A caption or keyword change alone never plans `REPLACE_PHOTO`; it stays `UPDATE_PHOTO_METADATA`.
 
 For album lifecycle actions, the executor also maintains `external_image_album.short_url`
 where possible:
@@ -678,6 +705,7 @@ Prometheus endpoint. The Phase 4.5 adoption-specific counters are:
 | `image_hosting_album_creation` | `provider`, `result` | Counts successful album creation. `result=created` means a new Flickr album was created and persisted. |
 | `image_hosting_album_adoption` | `provider`, `result` | Counts DB adoption outcomes for existing remote albums. Expected results include `adopted`, `ambiguous`, `no_match`, `blocked`, and `failed`. |
 | `image_hosting_short_url` | `provider`, `operation`, `result` | Counts Bitly short URL recovery/generation outcomes. `operation` is `recover` or `generate`; expected results include `recovered`, `generated`, `lookup_miss`, `disabled`, and `failed`. |
+| `image_hosting_photo_replace` | `provider`, `outcome` | Counts photo replacements. `outcome` is `in_place`, `swapped`, `skipped` or `failed`. |
 | `image_hosting_difference_report` | `provider`, `outcome` | Counts difference report runs. `outcome` is `completed` or `failed` (the album listing could not be read). |
 | `image_hosting_difference_report_albums_checked` | `provider` | Gauge: albums compared in the last complete run. |
 | `image_hosting_difference_report_albums_different` | `provider` | Gauge: albums where Flickr differed from the database in the last complete run. Alert on above zero. |
@@ -689,6 +717,10 @@ The same events also emit structured logs using:
 | `image_hosting.album_creation` | Album creation outcome. |
 | `image_hosting.album_adoption` | Adoption outcome, including ambiguity and no-match cases. |
 | `image_hosting.short_url` | Bitly recovery/generation outcome. |
+| `image_hosting.photo_replace.completed` | A photo's file was replaced on Flickr; `outcome` is `in_place` or `swapped`, with the old and new photo id. |
+| `image_hosting.photo_replace.skipped` | A replacement was not attempted, with the reason. |
+| `image_hosting.photo_replace.failed` | A replacement failed (WARN); the next run tries again. |
+| `image_hosting.photo_replace.old_photo_not_removed` | After a swap the old photo could not be deleted (WARN). |
 | `image_hosting.difference_report.completed` | Counts of one difference report run. |
 | `image_hosting.difference_report.album_differs` | One album where Flickr differs from the database, with the finding types (WARN). |
 | `image_hosting.difference_report.album_pending` | One album whose only findings are work the sync job has yet to do. |

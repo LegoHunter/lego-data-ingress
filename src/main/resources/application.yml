@@ -219,6 +219,11 @@ lego:
         enabled: true
         reserve-items: 100
         cache-seconds: 60
+      # A published photo whose stored file changed (re-uploaded with new pixels) is replaced on Flickr.
+      # AUTO: in place on an account with no item limit (Flickr allows replace on Pro accounts only), and
+      # upload-and-swap on a limited account. IN_PLACE and UPLOAD_AND_SWAP force one way.
+      photo-replacement:
+        mode: AUTO
       # Once a night: compare every album the database knows with Flickr and report the differences. Report
       # only; nothing is repaired. Every album's photo list is read once in full-check-days nights.
       difference-report:

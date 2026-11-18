@@ -140,6 +140,28 @@ public class ImageHostingReconciliationPlanner {
                 continue;
             }
 
+            if (requiresReplacement(desiredPhoto)) {
+                Map<String, String> attributes = new LinkedHashMap<>();
+                attributes.put("externalServiceImageId", photoId);
+                attributes.put("md5", value(md5(desiredPhoto)));
+                attributes.put("md5AtUpload", value(md5AtUpload(desiredPhoto)));
+                attributes.put("desiredTitle", photoTitle(desiredPhoto));
+                attributes.put("desiredDescription", photoDescription(desiredPhoto));
+                // The album as the host has it now. A replacement that gives the photo a new id puts the new
+                // photo exactly where the old one was, so the order and the cover stay as they are.
+                if (remote.isAlbumFound()) {
+                    attributes.put("remotePhotoIds", String.join(",", remotePhotoIds(remote.getPhotos())));
+                    attributes.put("remotePrimaryPhotoId", value(remote.getAlbum().getPrimaryPhotoId()));
+                }
+                actions.addPhotoAction(
+                        SyncActionType.REPLACE_PHOTO,
+                        SyncActionSafety.SAFE_AUTOMATIC,
+                        desiredPhoto,
+                        "Replace Flickr photo because the stored file changed since it was uploaded",
+                        attributes
+                );
+            }
+
             if (requiresMetadataUpdate(desiredPhoto)) {
                 actions.addPhotoAction(
                         SyncActionType.UPDATE_PHOTO_METADATA,
@@ -260,6 +282,28 @@ public class ImageHostingReconciliationPlanner {
     private boolean requiresMetadataUpdate(DesiredImageHostingPhoto desiredPhoto) {
         String metadataHash = metadataHash(desiredPhoto);
         return hasText(metadataHash) && !Objects.equals(metadataHash, metadataHashAtSync(desiredPhoto));
+    }
+
+    /**
+     * True when the stored file is no longer the one that was uploaded. Both hashes must be known: without the
+     * hash recorded at upload there is no telling what the host holds.
+     */
+    private boolean requiresReplacement(DesiredImageHostingPhoto desiredPhoto) {
+        String md5 = md5(desiredPhoto);
+        String md5AtUpload = md5AtUpload(desiredPhoto);
+        return hasText(md5) && hasText(md5AtUpload) && !md5.equals(md5AtUpload);
+    }
+
+    private String md5(DesiredImageHostingPhoto desiredPhoto) {
+        return Optional.ofNullable(desiredPhoto.getInventoryPhoto())
+                .map(ItemInventoryPhoto::getMd5)
+                .orElse(null);
+    }
+
+    private String md5AtUpload(DesiredImageHostingPhoto desiredPhoto) {
+        return desiredPhoto.externalImageOptional()
+                .map(ExternalImage::getMd5AtUpload)
+                .orElse(null);
     }
 
     private String metadataHash(DesiredImageHostingPhoto desiredPhoto) {

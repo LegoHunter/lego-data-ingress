@@ -59,6 +59,7 @@ public class ImageHostingSyncProperties {
         private Scheduled scheduled = new Scheduled();
         private Retry retry = new Retry();
         private Headroom headroom = new Headroom();
+        private PhotoReplacement photoReplacement = new PhotoReplacement();
         private DifferenceReport differenceReport = new DifferenceReport();
     }
 
@@ -92,6 +93,22 @@ public class ImageHostingSyncProperties {
         private int reserveItems = 100;
         /** How long one reading of the account is used before it is read again. */
         private int cacheSeconds = 60;
+    }
+
+    /** How a published photo whose stored file changed is replaced on the image host. */
+    @Getter
+    @Setter
+    public static class PhotoReplacement {
+        private Mode mode = Mode.AUTO;
+
+        public enum Mode {
+            /** In place on an account with no item limit; upload and swap on a limited account. */
+            AUTO,
+            /** Always the provider's replace call: the photo keeps its id. Flickr allows it on Pro accounts only. */
+            IN_PLACE,
+            /** Always upload the new file, put it in the old photo's place in the album, remove the old photo. */
+            UPLOAD_AND_SWAP
+        }
     }
 
     @Getter

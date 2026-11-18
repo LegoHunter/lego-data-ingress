@@ -74,6 +74,15 @@ public class ImageHostingSyncMetricsService {
         );
     }
 
+    /** One photo replacement: {@code in_place}, {@code swapped}, {@code skipped} or {@code failed}. */
+    public void recordPhotoReplacement(String providerTag, String outcome) {
+        Counter.builder("image_hosting_photo_replace")
+                .tag(PROVIDER_TAG, providerTag(providerTag))
+                .tag("outcome", outcome)
+                .register(meterRegistry)
+                .increment();
+    }
+
     public void recordHeadroomBlocked(String providerTag, int newPhotos) {
         Counter.builder("image_hosting_headroom_blocked")
                 .tag(PROVIDER_TAG, providerTag(providerTag))

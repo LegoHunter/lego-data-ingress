@@ -21,7 +21,7 @@ public record ImageHostingScheduledSyncResult(
         syncedItemInventoryIds = List.copyOf(syncedItemInventoryIds);
         failedItemInventoryIds = List.copyOf(failedItemInventoryIds);
         candidateCounts = candidateCounts == null
-                ? new ImageHostingScheduledSyncCandidateCounts(0, 0, 0, 0, 0, 0)
+                ? new ImageHostingScheduledSyncCandidateCounts(0, 0, 0, 0, 0, 0, 0)
                 : candidateCounts;
     }
 }

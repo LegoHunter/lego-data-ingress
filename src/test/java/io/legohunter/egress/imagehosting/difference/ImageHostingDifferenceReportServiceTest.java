@@ -301,6 +301,24 @@ class ImageHostingDifferenceReportServiceTest {
     }
 
     @Test
+    void aPhotoWhoseNewFileIsNotOnTheHostYetIsPendingWorkNotADifference() {
+        databaseAlbum(NOT_DUE, 100, "album-1");
+        DesiredImageHostingPhoto changed = photo(11, true, "p1");
+        changed.getInventoryPhoto().setMd5("md5-new");
+        changed.getExternalImage().setMd5AtUpload("md5-old");
+        desired(100, "album-1", changed);
+        hostAlbums(hostAlbum("album-1", TITLE, DESCRIPTION, "p1", 1));
+        albumPhotos("album-1", "p1");
+
+        HostedDifferenceReport report = service.run();
+
+        assertThat(report.albumsWithDifferences()).isZero();
+        assertThat(report.albumsWithPendingWorkOnly()).isEqualTo(1);
+        assertThat(only(report.albums().getFirst(), HostedDifferenceType.PHOTO_REPLACEMENT_PENDING).hostedPhotoIds())
+                .containsExactly("p1");
+    }
+
+    @Test
     void albumsNotPublishedYetAndAlbumsOfAnotherHostAreNotCompared() {
         when(externalImageAlbumDao.findAll()).thenReturn(new LinkedHashSet<>(List.of(
                 ExternalImageAlbum.builder().externalImageAlbumId(1L).externalServiceId(FLICKR).itemInventoryId(100).build(),

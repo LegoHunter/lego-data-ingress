@@ -11,7 +11,8 @@ public record ImageHostingScheduledSyncCandidateCounts(
         int missingAlbumMembership,
         int failedSync,
         int pendingSync,
-        int metadataChanged
+        int metadataChanged,
+        int contentChanged
 ) {
     public static ImageHostingScheduledSyncCandidateCounts from(List<ImageHostingSyncCandidate> candidates) {
         return new ImageHostingScheduledSyncCandidateCounts(
@@ -20,7 +21,8 @@ public record ImageHostingScheduledSyncCandidateCounts(
                 count(candidates, ImageHostingSyncCandidateReason.MISSING_ALBUM_MEMBERSHIP),
                 count(candidates, ImageHostingSyncCandidateReason.FAILED_SYNC),
                 count(candidates, ImageHostingSyncCandidateReason.PENDING_SYNC),
-                count(candidates, ImageHostingSyncCandidateReason.METADATA_CHANGED)
+                count(candidates, ImageHostingSyncCandidateReason.METADATA_CHANGED),
+                count(candidates, ImageHostingSyncCandidateReason.CONTENT_CHANGED)
         );
     }
 
