@@ -190,6 +190,12 @@ lego:
         initial-backoff-ms: 500
         backoff-multiplier: 2.0
         max-backoff-ms: 5000
+      # A limited (free) Flickr account holds 1,000 items and deletes the oldest above that. Publishing new
+      # photos stops once the account holds its limit less reserve-items. No effect on an account with no limit.
+      headroom:
+        enabled: true
+        reserve-items: 100
+        cache-seconds: 60
       scheduled:
         enabled: false
         batch-size: 25

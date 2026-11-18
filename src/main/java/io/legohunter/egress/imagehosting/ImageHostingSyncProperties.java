@@ -58,6 +58,21 @@ public class ImageHostingSyncProperties {
         private Path tempDirectory = Path.of(System.getProperty("java.io.tmpdir"), "lego-data-ingress-image-hosting");
         private Scheduled scheduled = new Scheduled();
         private Retry retry = new Retry();
+        private Headroom headroom = new Headroom();
+    }
+
+    /**
+     * Keeps a limited image host account below its item limit: publishing new photos stops once the account
+     * holds {@code limit - reserveItems}. An account with no limit is never held back.
+     */
+    @Getter
+    @Setter
+    public static class Headroom {
+        private boolean enabled = true;
+        /** Items kept free below the account's limit. */
+        private int reserveItems = 100;
+        /** How long one reading of the account is used before it is read again. */
+        private int cacheSeconds = 60;
     }
 
     @Getter

@@ -15,6 +15,9 @@ import io.legohunter.egress.imagehosting.ImageHostingSyncMetricsService;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.description.GeneratedDescriptionComposer;
 import io.legohunter.egress.imagehosting.description.GeneratedItemDescription;
+import io.legohunter.egress.imagehosting.headroom.AccountHeadroom;
+import io.legohunter.egress.imagehosting.headroom.HeadroomDecision;
+import io.legohunter.egress.imagehosting.headroom.ImageHostingHeadroomGuard;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlResult;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlService;
@@ -55,6 +58,8 @@ import static io.legohunter.data.enums.ExternalSyncStatus.FAILED;
 import static io.legohunter.data.enums.ExternalSyncStatus.SYNCED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -96,6 +101,9 @@ class DefaultImageHostingSyncPlanExecutorTest {
     @Mock
     private GeneratedDescriptionComposer descriptionComposer;
 
+    @Mock
+    private ImageHostingHeadroomGuard headroomGuard;
+
     private SimpleMeterRegistry meterRegistry;
     private DefaultImageHostingSyncPlanExecutor executor;
 
@@ -118,8 +126,10 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 new ImageHostingPublishingPolicy(properties),
                 shortUrlService,
                 new ImageHostingSyncMetricsService(meterRegistry),
-                descriptionComposer
+                descriptionComposer,
+                headroomGuard
         );
+        lenient().when(headroomGuard.reserve(anyInt())).thenReturn(new HeadroomDecision(true, null, null));
     }
 
     @Test
@@ -168,6 +178,63 @@ class DefaultImageHostingSyncPlanExecutorTest {
                         metadata -> metadata.getSafetyLevel()
                 )
                 .containsExactly("Front caption", "Front caption", true, "safe");
+    }
+
+    @Test
+    void executeHoldsBackAPlanWhoseNewPhotosWouldPassTheAccountLimit() {
+        when(headroomGuard.reserve(2)).thenReturn(new HeadroomDecision(
+                false,
+                "The image host account holds 899 of 1000 items",
+                new AccountHeadroom(true, 899, 1000, true, 100, 900, 1, null)
+        ));
+
+        SyncReport report = executor.execute(SyncPlan.builder()
+                .planId("plan-1")
+                .action(uploadAction("001-upload-photo", 11))
+                .action(uploadAction("002-upload-photo", 12))
+                .action(SyncAction.builder()
+                        .actionId("003-create-album")
+                        .type(SyncActionType.CREATE_ALBUM)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .attribute("provider", "flickr")
+                        .build())
+                .build(), false);
+
+        // The whole plan waits: an album created without its photos would only fail.
+        assertThat(report.getResults())
+                .extracting(SyncActionResult::getStatus)
+                .containsExactly(SyncActionStatus.SKIPPED, SyncActionStatus.SKIPPED, SyncActionStatus.SKIPPED);
+        assertThat(report.getResults().getFirst().getMessage()).contains("899 of 1000");
+        // A full account is not a failed sync: the job must not count the item as failed.
+        assertThat(report.hasFailures()).isFalse();
+        // Nothing was uploaded and nothing was recorded as failed.
+        verifyNoInteractions(imageHostingService, s3Service, externalImageDao, externalImageAlbumDao);
+        assertThat(meterRegistry.counter("image_hosting_headroom_blocked", "provider", "flickr").count()).isEqualTo(2.0);
+    }
+
+    @Test
+    void executeDoesNotAskForHeadroomWhenThePlanPublishesNoNewPhoto() {
+        executor.execute(SyncPlan.builder()
+                .planId("plan-1")
+                .action(SyncAction.builder()
+                        .actionId("001-write-manifest")
+                        .type(SyncActionType.WRITE_MANIFEST)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .build())
+                .build(), false);
+
+        verifyNoInteractions(headroomGuard);
+    }
+
+    private static SyncAction uploadAction(String actionId, int itemInventoryPhotoId) {
+        return SyncAction.builder()
+                .actionId(actionId)
+                .type(SyncActionType.UPLOAD_PHOTO)
+                .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                .attribute("provider", "flickr")
+                .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
+                .attribute("itemInventoryPhotoId", Integer.toString(itemInventoryPhotoId))
+                .build();
     }
 
     @Test

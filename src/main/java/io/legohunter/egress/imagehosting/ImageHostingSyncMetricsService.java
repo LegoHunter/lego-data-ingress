@@ -70,6 +70,13 @@ public class ImageHostingSyncMetricsService {
         );
     }
 
+    public void recordHeadroomBlocked(String providerTag, int newPhotos) {
+        Counter.builder("image_hosting_headroom_blocked")
+                .tag(PROVIDER_TAG, providerTag(providerTag))
+                .register(meterRegistry)
+                .increment(newPhotos);
+    }
+
     public void recordAlbumAdoption(String providerTag, String result) {
         Counter.builder("image_hosting_album_adoption")
                 .tag(PROVIDER_TAG, providerTag(providerTag))
