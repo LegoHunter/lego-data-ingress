@@ -135,7 +135,7 @@ lego:
     # it checks and logs what it would send, and writes nothing.
     lot-image-sync:
       enabled: true
-      mode: DRY_RUN
+      mode: APPLY
       gateway-base-url: http://bricklink-web-gateway:8080
       scheduled:
         enabled: true
