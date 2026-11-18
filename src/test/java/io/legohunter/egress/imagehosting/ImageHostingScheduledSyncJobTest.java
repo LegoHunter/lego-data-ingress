@@ -106,7 +106,8 @@ class ImageHostingScheduledSyncJobTest {
                                 103,
                                 Set.of(
                                         ImageHostingSyncCandidateReason.MISSING_ALBUM_MEMBERSHIP,
-                                        ImageHostingSyncCandidateReason.METADATA_CHANGED
+                                        ImageHostingSyncCandidateReason.METADATA_CHANGED,
+                                        ImageHostingSyncCandidateReason.CONTENT_CHANGED
                                 )
                         )
                 ));
@@ -126,9 +127,10 @@ class ImageHostingScheduledSyncJobTest {
                         ImageHostingScheduledSyncCandidateCounts::missingAlbumLink,
                         ImageHostingScheduledSyncCandidateCounts::missingPhotoLink,
                         ImageHostingScheduledSyncCandidateCounts::missingAlbumMembership,
-                        ImageHostingScheduledSyncCandidateCounts::metadataChanged
+                        ImageHostingScheduledSyncCandidateCounts::metadataChanged,
+                        ImageHostingScheduledSyncCandidateCounts::contentChanged
                 )
-                .containsExactly(1, 1, 1, 1);
+                .containsExactly(1, 1, 1, 1, 1);
         verify(syncPlanService, times(3)).plan(any());
         verifyNoInteractions(syncPlanExecutor);
     }

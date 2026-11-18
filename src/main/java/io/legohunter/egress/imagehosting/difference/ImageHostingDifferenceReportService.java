@@ -280,6 +280,7 @@ public class ImageHostingDifferenceReportService {
         List<Finding> findings = new ArrayList<>();
         List<String> notPublished = new ArrayList<>();
         List<String> metadataPending = new ArrayList<>();
+        List<String> replacementPending = new ArrayList<>();
         for (SyncAction action : plan.getActions()) {
             Map<String, String> attributes = action.getAttributes();
             switch (action.getType()) {
@@ -300,6 +301,7 @@ public class ImageHostingDifferenceReportService {
                 case UPDATE_ALBUM_MEMBERSHIP, FIX_PRIMARY_PHOTO -> addMembershipFindings(findings, attributes, run);
                 case UPLOAD_PHOTO -> notPublished.add(Optional.ofNullable(action.getFilename()).orElse("?"));
                 case UPDATE_PHOTO_METADATA -> metadataPending.add(action.getPhotoId());
+                case REPLACE_PHOTO -> replacementPending.add(action.getPhotoId());
                 default -> findings.add(finding(HostedDifferenceType.CHECK_FAILED,
                         "%s: %s".formatted(action.getType(), action.getDescription()), List.of(), false));
             }
@@ -308,6 +310,11 @@ public class ImageHostingDifferenceReportService {
             findings.add(finding(HostedDifferenceType.PHOTOS_NOT_PUBLISHED,
                     "%s photo(s) not published: %s".formatted(notPublished.size(), String.join(", ", notPublished)),
                     List.of(), false));
+        }
+        if (!replacementPending.isEmpty()) {
+            findings.add(finding(HostedDifferenceType.PHOTO_REPLACEMENT_PENDING,
+                    "%s photo(s) with a new file not sent yet".formatted(replacementPending.size()),
+                    replacementPending, false));
         }
         if (!metadataPending.isEmpty()) {
             findings.add(finding(HostedDifferenceType.PHOTO_METADATA_PENDING,

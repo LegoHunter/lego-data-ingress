@@ -26,6 +26,9 @@ public enum HostedDifferenceType {
             "The album description on the image host is not the database's. Apply the item's sync plan."),
     PHOTOS_NOT_PUBLISHED(true,
             "These photos have not been published yet. The sync job publishes them; check it if this stays."),
+    PHOTO_REPLACEMENT_PENDING(true,
+            "These photos were re-uploaded with a new file that is not on the image host yet. The sync job "
+                    + "replaces them; check it if this stays."),
     PHOTO_METADATA_PENDING(true,
             "These photos' title or caption changed and has not been sent yet. The sync job sends it."),
     CHECK_FAILED(false,

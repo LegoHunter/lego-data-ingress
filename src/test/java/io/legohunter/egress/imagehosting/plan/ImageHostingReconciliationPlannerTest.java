@@ -162,6 +162,84 @@ class ImageHostingReconciliationPlannerTest {
     }
 
     @Test
+    void planReplacesAPhotoWhoseStoredFileChangedSinceUpload() {
+        ImageHostingDesiredStateSnapshot desiredState = desiredState(
+                album("album-100"),
+                List.of(
+                        uploadedPhoto(11, true, "photo-11", "md5-new", "md5-old", "metadata-11"),
+                        uploadedPhoto(12, false, "photo-12", "md5-12", "md5-12", "metadata-12")
+                )
+        );
+        ImageHostingRemoteSnapshot remoteSnapshot = remoteSnapshot(
+                hostedAlbum("album-100", "Desired album", "Inventory item [inventory-uuid]", "photo-11"),
+                List.of(hostedPhoto("photo-11"), hostedPhoto("photo-12"))
+        );
+
+        SyncPlan plan = planner.plan(desiredState, remoteSnapshot);
+
+        // Only the changed photo, and nothing for the album: its order and cover are already right.
+        assertThat(plan.getActions())
+                .extracting(SyncAction::getType)
+                .containsExactly(SyncActionType.REPLACE_PHOTO);
+        SyncAction replace = plan.getActions().getFirst();
+        assertThat(replace.getSafety()).isEqualTo(SyncActionSafety.SAFE_AUTOMATIC);
+        assertThat(replace.getPhotoId()).isEqualTo("photo-11");
+        assertThat(replace.getAlbumId()).isEqualTo("album-100");
+        assertThat(replace.getAttributes())
+                .containsEntry("itemInventoryPhotoId", "11")
+                .containsEntry("md5", "md5-new")
+                .containsEntry("md5AtUpload", "md5-old")
+                // The album as the host has it, so a new photo id can take the old one's exact place.
+                .containsEntry("remotePhotoIds", "photo-11,photo-12")
+                .containsEntry("remotePrimaryPhotoId", "photo-11");
+    }
+
+    @Test
+    void planDoesNotReplaceAPhotoWhoseFileIsUnchanged() {
+        ImageHostingDesiredStateSnapshot desiredState = desiredState(
+                album("album-100"),
+                List.of(
+                        uploadedPhoto(11, true, "photo-11", "md5-11", "md5-11", "metadata-11"),
+                        // No hash recorded at upload: what the host holds is unknown, so nothing is replaced.
+                        uploadedPhoto(12, false, "photo-12", "md5-12", null, "metadata-12")
+                )
+        );
+        ImageHostingRemoteSnapshot remoteSnapshot = remoteSnapshot(
+                hostedAlbum("album-100", "Desired album", "Inventory item [inventory-uuid]", "photo-11"),
+                List.of(hostedPhoto("photo-11"), hostedPhoto("photo-12"))
+        );
+
+        assertThat(planner.plan(desiredState, remoteSnapshot).getActions()).isEmpty();
+    }
+
+    @Test
+    void planKeepsACaptionOnlyChangeOnTheMetadataPathAndPlansBothWhenBothChanged() {
+        ImageHostingDesiredStateSnapshot desiredState = desiredState(
+                album("album-100"),
+                List.of(
+                        // Caption changed, file unchanged.
+                        uploadedPhoto(11, true, "photo-11", "md5-11", "md5-11", "metadata-old"),
+                        // File and caption both changed.
+                        uploadedPhoto(12, false, "photo-12", "md5-new", "md5-old", "metadata-old")
+                )
+        );
+        ImageHostingRemoteSnapshot remoteSnapshot = remoteSnapshot(
+                hostedAlbum("album-100", "Desired album", "Inventory item [inventory-uuid]", "photo-11"),
+                List.of(hostedPhoto("photo-11"), hostedPhoto("photo-12"))
+        );
+
+        SyncPlan plan = planner.plan(desiredState, remoteSnapshot);
+
+        assertThat(plan.getActions())
+                .extracting(SyncAction::getType, SyncAction::getPhotoId)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(SyncActionType.UPDATE_PHOTO_METADATA, "photo-11"),
+                        org.assertj.core.groups.Tuple.tuple(SyncActionType.REPLACE_PHOTO, "photo-12"),
+                        org.assertj.core.groups.Tuple.tuple(SyncActionType.UPDATE_PHOTO_METADATA, "photo-12")
+                );
+    }
+
+    @Test
     void planBlocksWhenRemoteSnapshotFailed() {
         ImageHostingDesiredStateSnapshot desiredState = desiredState(
                 album("album-100"),
@@ -251,6 +329,27 @@ class ImageHostingReconciliationPlannerTest {
                 .externalImage(externalImage)
                 .albumMembership(membership)
                 .build();
+    }
+
+    /** A published photo: its stored file's hash, the hash recorded at upload, and metadata last sent. */
+    private static DesiredImageHostingPhoto uploadedPhoto(
+            Integer itemInventoryPhotoId,
+            boolean primary,
+            String externalServiceImageId,
+            String md5,
+            String md5AtUpload,
+            String metadataHashAtSync
+    ) {
+        DesiredImageHostingPhoto photo = desiredPhoto(
+                itemInventoryPhotoId,
+                primary,
+                externalServiceImageId,
+                "metadata-" + itemInventoryPhotoId,
+                metadataHashAtSync
+        );
+        photo.getInventoryPhoto().setMd5(md5);
+        photo.getExternalImage().setMd5AtUpload(md5AtUpload);
+        return photo;
     }
 
     private static ImageHostingRemoteSnapshot remoteSnapshot(HostedAlbum album, List<HostedPhoto> photos) {

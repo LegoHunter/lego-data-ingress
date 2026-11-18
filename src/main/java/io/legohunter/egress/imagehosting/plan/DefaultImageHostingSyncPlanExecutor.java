@@ -15,6 +15,7 @@ import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncMetricsService;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.description.GeneratedDescriptionComposer;
+import io.legohunter.egress.imagehosting.headroom.AccountHeadroom;
 import io.legohunter.egress.imagehosting.headroom.HeadroomDecision;
 import io.legohunter.egress.imagehosting.headroom.ImageHostingHeadroomGuard;
 import io.legohunter.egress.imagehosting.description.GeneratedDescriptionRequest;
@@ -28,6 +29,7 @@ import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
 import io.legohunter.imaging.model.HostedAlbumMetadataUpdate;
 import io.legohunter.imaging.model.HostedPhotoMetadataUpdate;
 import io.legohunter.imaging.model.PhotoMetaDataV1;
+import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.model.SimplePhotoServiceRequest;
 import io.legohunter.imaging.service.hosting.api.ImageHostingService;
@@ -52,6 +54,7 @@ import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -96,13 +99,16 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         LocalDateTime startedAt = LocalDateTime.now();
         List<SyncActionResult> results = new ArrayList<>();
         Optional<String> noHeadroom = headroomRefusal(plan);
+        // Photos given a new id by a replacement in this run, old id to new id. Later actions of the same plan
+        // were planned with the old id.
+        Map<String, String> replacedPhotoIds = new HashMap<>();
         for (SyncAction action : plan.getActions()) {
             // A plan that would publish new photos past the account's limit is held back whole: nothing is
             // uploaded, nothing is marked failed, and the item is picked up again once there is room. SKIPPED,
             // not BLOCKED: a report counts BLOCKED as a failure, and a full account is not a failed sync.
             results.add(noHeadroom.isPresent()
                     ? result(action, SyncActionStatus.SKIPPED, noHeadroom.get(), startedAt, null, null)
-                    : executeAction(action, allowReviewRequired));
+                    : executeAction(action, allowReviewRequired, replacedPhotoIds));
         }
 
         return SyncReport.builder()
@@ -145,7 +151,11 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         return Optional.of(decision.message());
     }
 
-    private SyncActionResult executeAction(SyncAction action, boolean allowReviewRequired) {
+    private SyncActionResult executeAction(
+            SyncAction action,
+            boolean allowReviewRequired,
+            Map<String, String> replacedPhotoIds
+    ) {
         LocalDateTime startedAt = LocalDateTime.now();
         if (action == null) {
             return result(null, SyncActionStatus.FAILED, "Action is required", startedAt, null, null);
@@ -160,10 +170,11 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         try {
             return switch (action.getType()) {
                 case UPLOAD_PHOTO -> uploadPhoto(action, startedAt);
+                case REPLACE_PHOTO -> replacePhoto(action, startedAt, replacedPhotoIds);
                 case CREATE_ALBUM -> createAlbum(action, startedAt);
-                case UPDATE_PHOTO_METADATA -> updatePhotoMetadata(action, startedAt);
+                case UPDATE_PHOTO_METADATA -> updatePhotoMetadata(action, startedAt, replacedPhotoIds);
                 case UPDATE_ALBUM_METADATA -> updateAlbumMetadata(action, startedAt);
-                case UPDATE_ALBUM_MEMBERSHIP, FIX_PRIMARY_PHOTO -> updateAlbumMembership(action, startedAt);
+                case UPDATE_ALBUM_MEMBERSHIP, FIX_PRIMARY_PHOTO -> updateAlbumMembership(action, startedAt, replacedPhotoIds);
                 case REPAIR_ALBUM_ID -> repairAlbumId(action, startedAt);
                 case REPAIR_PHOTO_ID -> repairPhotoId(action, startedAt);
                 default -> result(action, SyncActionStatus.SKIPPED, "Action type [%s] is not supported by the apply executor".formatted(action.getType()), startedAt, null, null);
@@ -213,6 +224,271 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         } finally {
             deleteTempFile(photoMetaData);
         }
+    }
+
+    /**
+     * Puts the photo's current file on the image host in place of the one uploaded earlier.
+     *
+     * <p>Two ways, chosen by {@link #replacesInPlace}. In place: the provider swaps the file and the photo keeps
+     * its id, so the album is untouched. Upload and swap, for accounts where the provider refuses that (Flickr
+     * allows replace on Pro accounts only): upload the new file as a new photo, put it where the old one was in
+     * the album, record the new id, then remove the old photo.
+     *
+     * <p>The hash recorded at upload changes only once the new file is on the host, so a failed attempt is
+     * planned again on the next run.
+     */
+    private SyncActionResult replacePhoto(
+            SyncAction action,
+            LocalDateTime startedAt,
+            Map<String, String> replacedPhotoIds
+    ) {
+        Integer itemInventoryPhotoId = requiredInteger(action, "itemInventoryPhotoId");
+        ItemInventoryPhoto photo = itemInventoryPhotoDao.findByItemInventoryPhotoId(itemInventoryPhotoId)
+                .orElseThrow(() -> new IllegalArgumentException("No item inventory photo found for id [%s]".formatted(itemInventoryPhotoId)));
+        ExternalImage image = findImage(action);
+        String oldPhotoId = image.getExternalServiceImageId();
+        if (!hasText(oldPhotoId)) {
+            return replaceSkipped(action, startedAt, "The photo has no id on the image host; it is uploaded as a new photo instead");
+        }
+        if (Objects.equals(photo.getMd5(), image.getMd5AtUpload())) {
+            return replaceSkipped(action, startedAt, "The image host already has the photo's current file");
+        }
+
+        Optional<Boolean> inPlace = replacesInPlace();
+        if (inPlace.isEmpty()) {
+            return replaceSkipped(action, startedAt,
+                    "The image host account could not be read, so how to replace the photo is not known; the next run tries again");
+        }
+        try {
+            return inPlace.get()
+                    ? replacePhotoInPlace(action, startedAt, photo, image, oldPhotoId)
+                    : replacePhotoBySwap(action, startedAt, photo, image, oldPhotoId, replacedPhotoIds);
+        } catch (IOException e) {
+            return replaceFailed(action, startedAt, image, e.getMessage(), null);
+        }
+    }
+
+    /** True: replace in place. False: upload and swap. Empty: AUTO, and the account could not be read. */
+    private Optional<Boolean> replacesInPlace() {
+        return switch (properties.getSync().getPhotoReplacement().getMode()) {
+            case IN_PLACE -> Optional.of(true);
+            case UPLOAD_AND_SWAP -> Optional.of(false);
+            case AUTO -> Optional.ofNullable(headroomGuard.current())
+                    .filter(AccountHeadroom::known)
+                    // A limited account is a free one, and the provider keeps replace for paying accounts.
+                    .map(account -> !account.limited());
+        };
+    }
+
+    private SyncActionResult replacePhotoInPlace(
+            SyncAction action,
+            LocalDateTime startedAt,
+            ItemInventoryPhoto photo,
+            ExternalImage image,
+            String oldPhotoId
+    ) throws IOException {
+        PhotoMetaDataV1 photoMetaData = null;
+        try {
+            photoMetaData = loadPhotoMetaData(photo);
+            photoMetaData.setPhotoId(oldPhotoId);
+            PhotoMetaDataV1 loaded = photoMetaData;
+            ImageHostingRetryTemplate.AttemptedResponse<String> attemptedResponse = retryTemplate.execute(
+                    "replacePhoto",
+                    () -> imageHostingService().replacePhoto(new SimplePhotoServiceRequest<>(loaded))
+            );
+            PhotoServiceResponse<String> response = attemptedResponse.response();
+            if (response.isError()) {
+                return replaceFailed(action, startedAt, image, responseMessage(response), attemptedResponse);
+            }
+
+            String photoId = Optional.ofNullable(response.get()).filter(this::hasText).orElse(oldPhotoId);
+            image.setExternalServiceImageId(photoId);
+            saveReplacedImage(image, photo, false);
+            return replaceSucceeded(action, startedAt, "in_place", "Replaced the photo's file on Flickr", photoId, attemptedResponse);
+        } finally {
+            deleteTempFile(photoMetaData);
+        }
+    }
+
+    private SyncActionResult replacePhotoBySwap(
+            SyncAction action,
+            LocalDateTime startedAt,
+            ItemInventoryPhoto photo,
+            ExternalImage image,
+            String oldPhotoId,
+            Map<String, String> replacedPhotoIds
+    ) throws IOException {
+        // For a moment the account holds both the old and the new photo.
+        HeadroomDecision headroom = headroomGuard.reserve(1);
+        if (headroom != null && !headroom.allowed()) {
+            return replaceSkipped(action, startedAt, headroom.message());
+        }
+
+        PhotoMetaDataV1 photoMetaData = null;
+        try {
+            photoMetaData = loadPhotoMetaData(photo);
+            PhotoMetaDataV1 loaded = photoMetaData;
+            ImageHostingRetryTemplate.AttemptedResponse<String> attemptedResponse = retryTemplate.execute(
+                    "uploadPhoto",
+                    () -> imageHostingService().uploadPhoto(new SimplePhotoServiceRequest<>(loaded))
+            );
+            PhotoServiceResponse<String> response = attemptedResponse.response();
+            if (response.isError()) {
+                return replaceFailed(action, startedAt, image, responseMessage(response), attemptedResponse);
+            }
+            String newPhotoId = response.get();
+
+            // Album first, database second: if this stops between the two, the database still names the old
+            // photo with the old hash, and the next run replaces it again.
+            Optional<String> albumFailure = swapInAlbum(action, oldPhotoId, newPhotoId);
+            if (albumFailure.isPresent()) {
+                String removed = removeHostedPhoto(newPhotoId)
+                        .map(message -> " The new photo [%s] could not be removed again (%s).".formatted(newPhotoId, message))
+                        .orElse("");
+                return replaceFailed(action, startedAt, image,
+                        "The new photo could not take the old one's place in the album (%s).%s".formatted(albumFailure.get(), removed),
+                        attemptedResponse);
+            }
+
+            image.setExternalServiceImageId(newPhotoId);
+            image.setUploadedAt(ZonedDateTime.now());
+            saveReplacedImage(image, photo, true);
+            replacedPhotoIds.put(oldPhotoId, newPhotoId);
+
+            Optional<String> oldNotRemoved = removeHostedPhoto(oldPhotoId);
+            oldNotRemoved.ifPresent(message -> log.warn(
+                    "image_hosting.photo_replace.old_photo_not_removed itemInventoryPhotoId={} oldPhotoId={} newPhotoId={} message={}",
+                    photo.getItemInventoryPhotoId(),
+                    oldPhotoId,
+                    newPhotoId,
+                    message
+            ));
+            return replaceSucceeded(
+                    action,
+                    startedAt,
+                    "swapped",
+                    oldNotRemoved
+                            .map(message -> "Uploaded the new file as photo [%s] in place of [%s]; the old photo could not be removed (%s)"
+                                    .formatted(newPhotoId, oldPhotoId, message))
+                            .orElseGet(() -> "Uploaded the new file as photo [%s] and removed the old photo [%s]".formatted(newPhotoId, oldPhotoId)),
+                    newPhotoId,
+                    attemptedResponse
+            );
+        } finally {
+            deleteTempFile(photoMetaData);
+        }
+    }
+
+    /**
+     * Gives the new photo the old photo's place in the album, as the host listed the album when the plan was
+     * made. Nothing to do when the old photo is in no album. Returns the failure message, or empty when done.
+     */
+    private Optional<String> swapInAlbum(SyncAction action, String oldPhotoId, String newPhotoId) {
+        Set<String> remotePhotoIds = csvAttribute(action, "remotePhotoIds");
+        if (!remotePhotoIds.contains(oldPhotoId) || !hasText(action.getAlbumId())) {
+            return Optional.empty();
+        }
+        Map<String, String> swap = Map.of(oldPhotoId, newPhotoId);
+        String primaryPhotoId = attribute(action, "remotePrimaryPhotoId")
+                .filter(this::hasText)
+                .map(photoId -> swap.getOrDefault(photoId, photoId))
+                .orElse(null);
+        PhotoServiceResponse<Void> response = retryTemplate.execute(
+                "updateAlbumMembership",
+                () -> imageHostingService().updateAlbumMembership(new SimplePhotoServiceRequest<>(
+                        HostedAlbumMembershipRequest.builder()
+                                .albumId(action.getAlbumId())
+                                .primaryPhotoId(primaryPhotoId)
+                                .photoIds(current(remotePhotoIds, swap))
+                                .build()
+                ))
+        ).response();
+        return response.isError() ? Optional.of(responseMessage(response)) : Optional.empty();
+    }
+
+    /** Removes a photo from the host. A photo already gone counts as removed. Returns the failure message. */
+    private Optional<String> removeHostedPhoto(String photoId) {
+        PhotoServiceResponse<Void> response = retryTemplate.execute(
+                "deletePhoto",
+                () -> imageHostingService().deletePhoto(new SimplePhotoServiceRequest<>(photoId))
+        ).response();
+        return response.isError() && !PhotoServiceErrorType.PHOTO_NOT_FOUND.equals(response.errorType())
+                ? Optional.of(responseMessage(response))
+                : Optional.empty();
+    }
+
+    /** Records that the host now holds the photo's current file. A new upload also carried the current metadata. */
+    private void saveReplacedImage(ExternalImage image, ItemInventoryPhoto photo, boolean uploadedWithMetadata) {
+        image.setMd5AtUpload(photo.getMd5());
+        if (uploadedWithMetadata) {
+            image.setTitle(publishingPolicy.photoTitle(photo));
+            image.setMetadataHashAtSync(photo.getMetadataHash());
+        }
+        image.setSyncStatus(SYNCED);
+        image.setErrorMessage(null);
+        image.setLastSyncedAt(ZonedDateTime.now());
+        externalImageDao.update(image);
+    }
+
+    private SyncActionResult replaceSucceeded(
+            SyncAction action,
+            LocalDateTime startedAt,
+            String outcome,
+            String message,
+            String photoId,
+            ImageHostingRetryTemplate.AttemptedResponse<?> attemptedResponse
+    ) {
+        metricsService.recordPhotoReplacement(providerTag(action), outcome);
+        log.info(
+                "image_hosting.photo_replace.completed itemInventoryPhotoId={} outcome={} plannedPhotoId={} photoId={}",
+                attribute(action, "itemInventoryPhotoId").orElse(null),
+                outcome,
+                action.getPhotoId(),
+                photoId
+        );
+        return result(action, SyncActionStatus.SUCCEEDED, message, startedAt, null, photoId, attemptedResponse);
+    }
+
+    private SyncActionResult replaceSkipped(SyncAction action, LocalDateTime startedAt, String message) {
+        metricsService.recordPhotoReplacement(providerTag(action), "skipped");
+        log.info(
+                "image_hosting.photo_replace.skipped itemInventoryPhotoId={} photoId={} message={}",
+                attribute(action, "itemInventoryPhotoId").orElse(null),
+                action.getPhotoId(),
+                message
+        );
+        return result(action, SyncActionStatus.SKIPPED, message, startedAt, null, null);
+    }
+
+    /** The upload hash is not touched: the host still holds the old file. */
+    private SyncActionResult replaceFailed(
+            SyncAction action,
+            LocalDateTime startedAt,
+            ExternalImage image,
+            String message,
+            ImageHostingRetryTemplate.AttemptedResponse<?> attemptedResponse
+    ) {
+        image.setSyncStatus(FAILED);
+        image.setErrorMessage(message);
+        image.setLastSyncedAt(ZonedDateTime.now());
+        externalImageDao.update(image);
+        metricsService.recordPhotoReplacement(providerTag(action), "failed");
+        log.warn(
+                "image_hosting.photo_replace.failed itemInventoryPhotoId={} photoId={} message={}",
+                attribute(action, "itemInventoryPhotoId").orElse(null),
+                action.getPhotoId(),
+                message
+        );
+        return attemptedResponse == null
+                ? result(action, SyncActionStatus.FAILED, message, startedAt, null, null)
+                : responseResult(action, SyncActionStatus.FAILED, attemptedResponse, message, startedAt, null);
+    }
+
+    /** The ids as they are now: each id replaced earlier in this run gives way to its new id. */
+    private Set<String> current(Set<String> photoIds, Map<String, String> replacedPhotoIds) {
+        return photoIds.stream()
+                .map(photoId -> replacedPhotoIds.getOrDefault(photoId, photoId))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     private SyncActionResult createAlbum(SyncAction action, LocalDateTime startedAt) {
@@ -340,8 +616,13 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 : Optional.empty();
     }
 
-    private SyncActionResult updatePhotoMetadata(SyncAction action, LocalDateTime startedAt) {
-        String photoId = requiredPhotoId(action);
+    private SyncActionResult updatePhotoMetadata(
+            SyncAction action,
+            LocalDateTime startedAt,
+            Map<String, String> replacedPhotoIds
+    ) {
+        String plannedPhotoId = requiredPhotoId(action);
+        String photoId = replacedPhotoIds.getOrDefault(plannedPhotoId, plannedPhotoId);
         ImageHostingRetryTemplate.AttemptedResponse<Void> attemptedResponse = retryTemplate.execute(
                 "updatePhotoMetadata",
                 () -> imageHostingService().updatePhotoMetadata(new SimplePhotoServiceRequest<>(
@@ -384,19 +665,24 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         return result(action, SyncActionStatus.SUCCEEDED, "Updated Flickr album metadata", startedAt, albumId, null, attemptedResponse);
     }
 
-    private SyncActionResult updateAlbumMembership(SyncAction action, LocalDateTime startedAt) {
-        Set<String> remotePhotoIds = csvAttribute(action, "remotePhotoIds");
+    private SyncActionResult updateAlbumMembership(
+            SyncAction action,
+            LocalDateTime startedAt,
+            Map<String, String> replacedPhotoIds
+    ) {
+        Set<String> remotePhotoIds = current(csvAttribute(action, "remotePhotoIds"), replacedPhotoIds);
         if (!remotePhotoIds.isEmpty() && csvAttribute(action, "desiredPhotoIds").isEmpty()) {
             return repairAlbumMembership(action, remotePhotoIds, startedAt);
         }
 
         String albumId = requiredAlbumId(action);
-        Set<String> photoIds = csvAttribute(action, "desiredPhotoIds");
+        Set<String> photoIds = current(csvAttribute(action, "desiredPhotoIds"), replacedPhotoIds);
         if (photoIds.isEmpty()) {
             return result(action, SyncActionStatus.FAILED, "desiredPhotoIds is required", startedAt, albumId, null);
         }
         String primaryPhotoId = attribute(action, "desiredPrimaryPhotoId")
                 .filter(this::hasText)
+                .map(photoId -> replacedPhotoIds.getOrDefault(photoId, photoId))
                 .orElseGet(() -> photoIds.stream().findFirst().orElseThrow());
 
         ImageHostingRetryTemplate.AttemptedResponse<Void> attemptedResponse = retryTemplate.execute(

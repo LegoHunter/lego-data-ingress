@@ -502,8 +502,9 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             ItemInventoryPhoto photo,
             ExternalImage externalImage
     ) {
-        boolean changed = !Objects.equals(externalImage.getMd5AtUpload(), photo.getMd5())
-                || !Objects.equals(externalImage.getMetadataHashAtSync(), photo.getMetadataHash())
+        // md5AtUpload is left alone: it records the file that was uploaded, and nothing is uploaded here.
+        // Overwriting it would hide a photo whose file changed from the job that replaces it.
+        boolean changed = !Objects.equals(externalImage.getMetadataHashAtSync(), photo.getMetadataHash())
                 || !Objects.equals(externalImage.getTitle(), publishingPolicy.photoTitle(photo))
                 || !SYNCED.equals(externalImage.getSyncStatus());
         if (!changed) {
@@ -513,7 +514,6 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         externalImage.setExternalServiceId(externalServiceId);
         externalImage.setItemInventoryPhotoId(photo.getItemInventoryPhotoId());
         externalImage.setTitle(publishingPolicy.photoTitle(photo));
-        externalImage.setMd5AtUpload(photo.getMd5());
         externalImage.setMetadataHashAtSync(photo.getMetadataHash());
         externalImage.setSyncStatus(SYNCED);
         externalImage.setErrorMessage(null);

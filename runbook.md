@@ -365,6 +365,18 @@ differently is not revisited by the job; the nightly difference report (below) f
 The two lower-environment operations answer 403 in production. The production account holds albums made by the
 legacy system that this database does not know yet; a sweep there would call them all orphans.
 
+**A re-uploaded photo.** When a photo is uploaded again with the same file name and new pixels, the sync job
+replaces it on Flickr (plan action `REPLACE_PHOTO`). The job finds it by comparing the stored file's hash
+(`item_inventory_photo.md5`) with the hash recorded at upload (`external_image.md5_at_upload`); the job's
+`candidates_selected` log line counts these as `contentChanged`.
+
+- PROD (Pro account): Flickr swaps the file in place. Same photo id, same album, nothing else changes.
+- SANDBOX and DEV (free accounts, where Flickr refuses replace): the new file goes up as a new photo, takes
+  the old photo's place in the album, and the old photo is deleted. The photo's Flickr id and URL change.
+- A failed replacement is tried again on the next run. Log lines: `image_hosting.photo_replace.completed`,
+  `.skipped`, `.failed`, `.old_photo_not_removed`; metric `image_hosting_photo_replace` by `outcome`.
+- Setting: `lego.image-hosting.sync.photo-replacement.mode` (`AUTO`, `IN_PLACE`, `UPLOAD_AND_SWAP`).
+
 **Staying under the account's item limit.** A free Flickr account (SANDBOX, DEV) holds 1,000 items and Flickr
 deletes the oldest above that. Putting deleted photos back only makes Flickr delete others, so the system stops
 before the limit (`ImageHostingHeadroomGuard`).
@@ -407,7 +419,7 @@ database.
   | `EXTRA_PHOTOS` | The album holds photos the database does not list for the item. | Look at them, then apply the sync plan with `allowReviewRequired=true`. |
   | `PHOTOS_DELETED` | Flickr no longer has the photo, in the album or anywhere on the account. | The sync plan cannot bring it back. Lower environments: purge the item's hosted content and upload the photos again. Production: no procedure yet. |
   | `ALBUM_MISSING` | The album is gone. The detail says how many of its photos are left on the account. | As for `PHOTOS_DELETED`. |
-  | `PHOTOS_NOT_PUBLISHED`, `PHOTO_METADATA_PENDING` | Work the database already shows as outstanding. | Nothing; the sync job does it. If it stays night after night, look at the job (headroom, failures). |
+  | `PHOTOS_NOT_PUBLISHED`, `PHOTO_REPLACEMENT_PENDING`, `PHOTO_METADATA_PENDING` | Work the database already shows as outstanding. | Nothing; the sync job does it. If it stays night after night, look at the job (headroom, failures). |
   | `CHECK_FAILED` | The album could not be compared. | Read the detail; the next run tries again. |
 
 - **`accountLimitLikely`** on `PHOTOS_DELETED` or `ALBUM_MISSING` means the account is limited and at or past

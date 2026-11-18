@@ -26,6 +26,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumCreateRequest;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
+import io.legohunter.imaging.model.HostedPhotoMetadataUpdate;
 import io.legohunter.imaging.model.HostedAlbumMetadataUpdate;
 import io.legohunter.imaging.model.PhotoMetaDataV1;
 import io.legohunter.imaging.model.PhotoServiceErrorType;
@@ -59,6 +60,7 @@ import static io.legohunter.data.enums.ExternalSyncStatus.SYNCED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -740,6 +742,262 @@ class DefaultImageHostingSyncPlanExecutorTest {
 
         assertThat(report.getResults().getFirst().getStatus()).isEqualTo(SyncActionStatus.SKIPPED);
         verify(imageHostingService, never()).deletePhoto(any());
+    }
+
+    @Test
+    void executeReplacesThePhotoInPlaceOnAnAccountWithNoItemLimit() {
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImage image = publishedImage();
+        when(headroomGuard.current()).thenReturn(unlimitedAccount());
+        when(itemInventoryPhotoDao.findByItemInventoryPhotoId(11)).thenReturn(Optional.of(photo));
+        when(externalImageDao.findByExternalImageId(201L)).thenReturn(Optional.of(image));
+        when(s3Service.getObject("photos", "100/front.jpg"))
+                .thenReturn(new ByteArrayInputStream("new-image-data".getBytes()));
+        when(imageHostingService.replacePhoto(any())).thenReturn(response("photo-11"));
+
+        SyncReport report = executor.execute(SyncPlan.builder().planId("plan-1").action(replaceAction()).build(), false);
+
+        assertThat(report.getResults().getFirst())
+                .extracting(SyncActionResult::getStatus, SyncActionResult::getPhotoId)
+                .containsExactly(SyncActionStatus.SUCCEEDED, "photo-11");
+        ArgumentCaptor<PhotoServiceRequest<PhotoMetaDataV1>> replaceCaptor = ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).replacePhoto(replaceCaptor.capture());
+        assertThat(replaceCaptor.getValue().get().getPhotoId()).isEqualTo("photo-11");
+
+        // Same photo id, new upload hash. The caption was not sent, so the metadata hash is left for its own action.
+        verify(externalImageDao).update(image);
+        assertThat(image)
+                .extracting(
+                        ExternalImage::getExternalServiceImageId,
+                        ExternalImage::getMd5AtUpload,
+                        ExternalImage::getMetadataHashAtSync,
+                        ExternalImage::getSyncStatus
+                )
+                .containsExactly("photo-11", "md5-11", "old-metadata", SYNCED);
+        // The photo kept its id, so the album is not touched and nothing is removed.
+        verify(imageHostingService, never()).uploadPhoto(any());
+        verify(imageHostingService, never()).updateAlbumMembership(any());
+        verify(imageHostingService, never()).deletePhoto(any());
+        verify(headroomGuard, never()).reserve(anyInt());
+        assertThat(meterRegistry.counter("image_hosting_photo_replace", "provider", "flickr", "outcome", "in_place").count())
+                .isEqualTo(1.0);
+    }
+
+    @Test
+    void executeKeepsTheOldUploadHashWhenTheInPlaceReplaceFails() {
+        ExternalImage image = publishedImage();
+        when(headroomGuard.current()).thenReturn(unlimitedAccount());
+        when(itemInventoryPhotoDao.findByItemInventoryPhotoId(11)).thenReturn(Optional.of(photo(11, true)));
+        when(externalImageDao.findByExternalImageId(201L)).thenReturn(Optional.of(image));
+        when(s3Service.getObject("photos", "100/front.jpg"))
+                .thenReturn(new ByteArrayInputStream("new-image-data".getBytes()));
+        when(imageHostingService.replacePhoto(any()))
+                .thenReturn(errorResponse(PhotoServiceErrorType.VALIDATION_FAILED, 5, "Filetype was not recognised"));
+
+        SyncReport report = executor.execute(SyncPlan.builder().planId("plan-1").action(replaceAction()).build(), false);
+
+        assertThat(report.getResults().getFirst().getStatus()).isEqualTo(SyncActionStatus.FAILED);
+        // Still the old hash: the host still holds the old file, and the next run plans the replacement again.
+        assertThat(image)
+                .extracting(ExternalImage::getMd5AtUpload, ExternalImage::getSyncStatus, ExternalImage::getErrorMessage)
+                .containsExactly("old-md5", FAILED, "Filetype was not recognised");
+    }
+
+    @Test
+    void executeUploadsAndSwapsOnALimitedAccountKeepingTheAlbumOrderAndCover() {
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImage image = publishedImage();
+        when(headroomGuard.current()).thenReturn(limitedAccount());
+        when(itemInventoryPhotoDao.findByItemInventoryPhotoId(11)).thenReturn(Optional.of(photo));
+        when(externalImageDao.findByExternalImageId(201L)).thenReturn(Optional.of(image));
+        when(s3Service.getObject("photos", "100/front.jpg"))
+                .thenReturn(new ByteArrayInputStream("new-image-data".getBytes()));
+        when(imageHostingService.uploadPhoto(any())).thenReturn(response("photo-11-new"));
+        when(imageHostingService.updateAlbumMembership(any())).thenReturn(response(null));
+        when(imageHostingService.deletePhoto(any())).thenReturn(response(null));
+
+        SyncReport report = executor.execute(SyncPlan.builder().planId("plan-1").action(replaceAction()).build(), false);
+
+        assertThat(report.getResults().getFirst())
+                .extracting(SyncActionResult::getStatus, SyncActionResult::getPhotoId)
+                .containsExactly(SyncActionStatus.SUCCEEDED, "photo-11-new");
+
+        // The new photo sits exactly where the old one was, and is the cover because the old one was.
+        ArgumentCaptor<PhotoServiceRequest<HostedAlbumMembershipRequest>> membershipCaptor =
+                ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).updateAlbumMembership(membershipCaptor.capture());
+        assertThat(membershipCaptor.getValue().get().getAlbumId()).isEqualTo("album-100");
+        assertThat(membershipCaptor.getValue().get().getPhotoIds())
+                .containsExactly("photo-10", "photo-11-new", "photo-12");
+        assertThat(membershipCaptor.getValue().get().getPrimaryPhotoId()).isEqualTo("photo-11-new");
+
+        // New id, new upload hash, and the metadata that went up with the new file.
+        assertThat(image)
+                .extracting(
+                        ExternalImage::getExternalServiceImageId,
+                        ExternalImage::getMd5AtUpload,
+                        ExternalImage::getMetadataHashAtSync,
+                        ExternalImage::getTitle,
+                        ExternalImage::getSyncStatus
+                )
+                .containsExactly("photo-11-new", "md5-11", "metadata-11", "Front caption", SYNCED);
+
+        // The old photo goes last, once the album and the database both name the new one.
+        ArgumentCaptor<PhotoServiceRequest<String>> deleteCaptor = ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        var order = inOrder(imageHostingService, externalImageDao);
+        order.verify(imageHostingService).uploadPhoto(any());
+        order.verify(imageHostingService).updateAlbumMembership(any());
+        order.verify(externalImageDao).update(image);
+        order.verify(imageHostingService).deletePhoto(deleteCaptor.capture());
+        assertThat(deleteCaptor.getValue().get()).isEqualTo("photo-11");
+        verify(imageHostingService, never()).replacePhoto(any());
+        verify(headroomGuard).reserve(1);
+        assertThat(meterRegistry.counter("image_hosting_photo_replace", "provider", "flickr", "outcome", "swapped").count())
+                .isEqualTo(1.0);
+    }
+
+    @Test
+    void executeRemovesTheNewPhotoAgainWhenItCannotTakeTheOldOnesPlaceInTheAlbum() {
+        ExternalImage image = publishedImage();
+        when(headroomGuard.current()).thenReturn(limitedAccount());
+        when(itemInventoryPhotoDao.findByItemInventoryPhotoId(11)).thenReturn(Optional.of(photo(11, true)));
+        when(externalImageDao.findByExternalImageId(201L)).thenReturn(Optional.of(image));
+        when(s3Service.getObject("photos", "100/front.jpg"))
+                .thenReturn(new ByteArrayInputStream("new-image-data".getBytes()));
+        when(imageHostingService.uploadPhoto(any())).thenReturn(response("photo-11-new"));
+        when(imageHostingService.updateAlbumMembership(any()))
+                .thenReturn(errorResponse(PhotoServiceErrorType.ALBUM_NOT_FOUND, 1, "Photoset not found"));
+        when(imageHostingService.deletePhoto(any())).thenReturn(response(null));
+
+        SyncReport report = executor.execute(SyncPlan.builder().planId("plan-1").action(replaceAction()).build(), false);
+
+        assertThat(report.getResults().getFirst().getStatus()).isEqualTo(SyncActionStatus.FAILED);
+        // The database still names the old photo with the old hash, so the next run starts over.
+        assertThat(image)
+                .extracting(ExternalImage::getExternalServiceImageId, ExternalImage::getMd5AtUpload, ExternalImage::getSyncStatus)
+                .containsExactly("photo-11", "old-md5", FAILED);
+        // Only the new photo is removed; the old one is still the published one.
+        ArgumentCaptor<PhotoServiceRequest<String>> deleteCaptor = ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).deletePhoto(deleteCaptor.capture());
+        assertThat(deleteCaptor.getValue().get()).isEqualTo("photo-11-new");
+    }
+
+    @Test
+    void executeUsesTheNewPhotoIdInLaterActionsOfTheSamePlan() {
+        ExternalImage image = publishedImage();
+        when(headroomGuard.current()).thenReturn(limitedAccount());
+        when(itemInventoryPhotoDao.findByItemInventoryPhotoId(11)).thenReturn(Optional.of(photo(11, true)));
+        when(externalImageDao.findByExternalImageId(201L)).thenReturn(Optional.of(image));
+        when(s3Service.getObject("photos", "100/front.jpg"))
+                .thenReturn(new ByteArrayInputStream("new-image-data".getBytes()));
+        when(imageHostingService.uploadPhoto(any())).thenReturn(response("photo-11-new"));
+        when(imageHostingService.updateAlbumMembership(any())).thenReturn(response(null));
+        when(imageHostingService.deletePhoto(any())).thenReturn(response(null));
+        when(imageHostingService.updatePhotoMetadata(any())).thenReturn(response(null));
+
+        SyncReport report = executor.execute(SyncPlan.builder()
+                .planId("plan-1")
+                .action(replaceAction())
+                // Planned before the replacement, so it still names the old photo.
+                .action(SyncAction.builder()
+                        .actionId("002-update-photo-metadata")
+                        .type(SyncActionType.UPDATE_PHOTO_METADATA)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .photoId("photo-11")
+                        .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
+                        .attribute("itemInventoryPhotoId", "11")
+                        .attribute("externalImageId", "201")
+                        .attribute("desiredTitle", "Front caption")
+                        .attribute("desiredDescription", "Front caption")
+                        .build())
+                .build(), false);
+
+        assertThat(report.getResults())
+                .extracting(SyncActionResult::getStatus)
+                .containsExactly(SyncActionStatus.SUCCEEDED, SyncActionStatus.SUCCEEDED);
+        ArgumentCaptor<PhotoServiceRequest<HostedPhotoMetadataUpdate>> metadataCaptor =
+                ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).updatePhotoMetadata(metadataCaptor.capture());
+        assertThat(metadataCaptor.getValue().get().getPhotoId()).isEqualTo("photo-11-new");
+    }
+
+    @Test
+    void executeHoldsASwapBackWhenTheLimitedAccountHasNoRoomForOneMorePhoto() {
+        when(headroomGuard.current()).thenReturn(limitedAccount());
+        when(headroomGuard.reserve(1)).thenReturn(new HeadroomDecision(
+                false,
+                "The image host account holds 900 of 1000 items",
+                limitedAccount()
+        ));
+        when(itemInventoryPhotoDao.findByItemInventoryPhotoId(11)).thenReturn(Optional.of(photo(11, true)));
+        when(externalImageDao.findByExternalImageId(201L)).thenReturn(Optional.of(publishedImage()));
+
+        SyncReport report = executor.execute(SyncPlan.builder().planId("plan-1").action(replaceAction()).build(), false);
+
+        assertThat(report.getResults().getFirst().getStatus()).isEqualTo(SyncActionStatus.SKIPPED);
+        assertThat(report.getResults().getFirst().getMessage()).contains("900 of 1000");
+        assertThat(report.hasFailures()).isFalse();
+        verifyNoInteractions(imageHostingService, s3Service);
+        verify(externalImageDao, never()).update(any());
+    }
+
+    @Test
+    void executeSkipsAReplacementWhenTheAccountCannotBeReadOrTheFileIsAlreadyCurrent() {
+        ExternalImage current = publishedImage();
+        current.setMd5AtUpload("md5-11");
+        when(itemInventoryPhotoDao.findByItemInventoryPhotoId(11)).thenReturn(Optional.of(photo(11, true)));
+        when(externalImageDao.findByExternalImageId(201L)).thenReturn(Optional.of(publishedImage()), Optional.of(current));
+        when(headroomGuard.current()).thenReturn(new AccountHeadroom(false, null, null, false, 100, null, null, "Flickr is down"));
+
+        SyncReport report = executor.execute(SyncPlan.builder()
+                .planId("plan-1")
+                // Whether the account allows an in-place replace is not known.
+                .action(replaceAction())
+                // The plan is stale: the host already has this file.
+                .action(replaceAction())
+                .build(), false);
+
+        assertThat(report.getResults())
+                .extracting(SyncActionResult::getStatus)
+                .containsExactly(SyncActionStatus.SKIPPED, SyncActionStatus.SKIPPED);
+        assertThat(report.hasFailures()).isFalse();
+        verifyNoInteractions(imageHostingService, s3Service);
+        verify(externalImageDao, never()).update(any());
+    }
+
+    private static SyncAction replaceAction() {
+        return SyncAction.builder()
+                .actionId("001-replace-photo")
+                .type(SyncActionType.REPLACE_PHOTO)
+                .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                .albumId("album-100")
+                .photoId("photo-11")
+                .filename("front.jpg")
+                .attribute("provider", "flickr")
+                .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
+                .attribute("itemInventoryId", "100")
+                .attribute("itemInventoryPhotoId", "11")
+                .attribute("externalImageId", "201")
+                .attribute("remotePhotoIds", "photo-10,photo-11,photo-12")
+                .attribute("remotePrimaryPhotoId", "photo-11")
+                .build();
+    }
+
+    /** Photo 11 as published earlier, from a file that has since changed. */
+    private static ExternalImage publishedImage() {
+        ExternalImage image = externalImage(201L, 11, "photo-11");
+        image.setMd5AtUpload("old-md5");
+        image.setMetadataHashAtSync("old-metadata");
+        image.setSyncStatus(SYNCED);
+        return image;
+    }
+
+    private static AccountHeadroom unlimitedAccount() {
+        return new AccountHeadroom(true, 5000, null, false, 100, null, null, null);
+    }
+
+    private static AccountHeadroom limitedAccount() {
+        return new AccountHeadroom(true, 3, 1000, true, 100, 900, 897, null);
     }
 
     private static SyncAction uploadAction() {

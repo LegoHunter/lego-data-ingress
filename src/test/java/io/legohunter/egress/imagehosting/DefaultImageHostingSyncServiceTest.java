@@ -525,7 +525,8 @@ class DefaultImageHostingSyncServiceTest {
                         ExternalImage::getTitle,
                         ExternalImage::getSyncStatus
                 )
-                .containsExactly("md5-11", "metadata-11", "Updated caption", SYNCED);
+                // The upload hash stays: nothing was uploaded, and it is what shows a changed file later.
+                .containsExactly("old-md5", "metadata-11", "Updated caption", SYNCED);
         verify(imageHostingService, never()).uploadPhoto(any());
     }
 
