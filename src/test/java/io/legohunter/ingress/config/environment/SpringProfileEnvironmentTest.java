@@ -78,20 +78,23 @@ class SpringProfileEnvironmentTest {
     }
 
     @Test
-    void theLotImageSyncRunsInSandboxOnlyAndStartsInDryRun() {
-        // HOMELAB-92: only SANDBOX has a BrickLink web gateway. The token is never in committed configuration.
+    void theLotImageSyncWritesInSandboxDryRunsInDevAndIsOffInProd() {
+        // HOMELAB-92 / HOMELAB-94: SANDBOX and DEV have a BrickLink web gateway; PROD has none yet.
+        // The token is never in committed configuration.
         Properties sandbox = podConfiguration("sandbox");
-        assertThat(String.valueOf(sandbox.get("lego.bricklink.lot-image-sync.enabled"))).isEqualTo("true");
-        assertThat(String.valueOf(sandbox.get("lego.bricklink.lot-image-sync.scheduled.enabled"))).isEqualTo("true");
         assertThat(String.valueOf(sandbox.get("lego.bricklink.lot-image-sync.mode"))).isEqualTo("APPLY");
-        assertThat(String.valueOf(sandbox.get("lego.bricklink.lot-image-sync.gateway-base-url"))).isEqualTo("http://bricklink-web-gateway:8080");
+        Properties dev = podConfiguration("dev");
+        assertThat(String.valueOf(dev.get("lego.bricklink.lot-image-sync.mode"))).isEqualTo("DRY_RUN");
+        for (Properties lower : List.of(sandbox, dev)) {
+            assertThat(String.valueOf(lower.get("lego.bricklink.lot-image-sync.enabled"))).isEqualTo("true");
+            assertThat(String.valueOf(lower.get("lego.bricklink.lot-image-sync.scheduled.enabled"))).isEqualTo("true");
+            assertThat(String.valueOf(lower.get("lego.bricklink.lot-image-sync.gateway-base-url")))
+                    .isEqualTo("http://bricklink-web-gateway:8080");
+        }
+        assertThat(String.valueOf(podConfiguration("prod").get("lego.bricklink.lot-image-sync.enabled"))).isEqualTo("false");
         for (String env : List.of("sandbox", "dev", "prod")) {
-            Properties effective = podConfiguration(env);
-            assertThat(String.valueOf(effective.get("lego.bricklink.lot-image-sync.caller-token")))
+            assertThat(String.valueOf(podConfiguration(env).get("lego.bricklink.lot-image-sync.caller-token")))
                     .as(env).isEqualTo("${bricklink.web-gateway.caller-token:}");
-            if (!"sandbox".equals(env)) {
-                assertThat(String.valueOf(effective.get("lego.bricklink.lot-image-sync.enabled"))).as(env).isEqualTo("false");
-            }
         }
     }
 
