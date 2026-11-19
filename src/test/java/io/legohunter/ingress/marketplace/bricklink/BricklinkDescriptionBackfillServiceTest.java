@@ -12,6 +12,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -71,6 +72,30 @@ class BricklinkDescriptionBackfillServiceTest {
         assertThat(first.getAttemptCount()).isZero();
         assertThat(first.getNextAttemptAt()).isNotNull();
         assertThat(result.rows()).extracting(BricklinkDescriptionBackfillService.Row::syncRequestId).containsExactly(700L, 702L);
+    }
+
+    @Test
+    void scheduledDriftIsQueuedExceptWhereTheLastUpdateFailedWithinTheBackoff() {
+        // HOMELAB-82: listing 958's last DESCRIPTION_UPDATE was blocked an hour ago, so it is held back; a lot that
+        // cannot take its text is not queued again every hour. Too-long drift is never queued.
+        when(syncRequestDao.findByMarketplaceListingIdAndSyncRequestTypeCodeAndSyncRequestStatusCodes(
+                eq(958), eq("DESCRIPTION_UPDATE"), any())).thenReturn(java.util.Set.of(MarketplaceListingSyncRequest.builder()
+                .syncRequestStatusCode("BLOCKED").updatedAt(java.time.ZonedDateTime.now().minusHours(1)).build()));
+        when(syncRequestDao.findByMarketplaceListingIdAndSyncRequestTypeCodeAndSyncRequestStatusCodes(
+                eq(956), eq("DESCRIPTION_UPDATE"), any())).thenReturn(java.util.Set.of(MarketplaceListingSyncRequest.builder()
+                .syncRequestStatusCode("BLOCKED").updatedAt(java.time.ZonedDateTime.now().minusHours(7)).build()));
+
+        int queued = service.queueDrift(report(
+                drift(BricklinkInventoryDriftType.DESCRIPTION_DRIFT, 956, 569454187L, "Summer Cottage"),
+                drift(BricklinkInventoryDriftType.DESCRIPTION_DRIFT, 958, 569454192L, "Metro Park & Service Tower"),
+                drift(BricklinkInventoryDriftType.DESCRIPTION_TOO_LONG, 959, 569454190L, "at most 255 characters")));
+
+        assertThat(queued).isOne();
+        ArgumentCaptor<MarketplaceListingSyncRequest> captor = ArgumentCaptor.forClass(MarketplaceListingSyncRequest.class);
+        verify(syncRequestDao).insert(captor.capture());
+        assertThat(captor.getValue().getMarketplaceListingId()).isEqualTo(956);
+        assertThat(captor.getValue().getSyncReasonCode()).isEqualTo("DESCRIPTION_DRIFT");
+        assertThat(captor.getValue().getCreatedByJobName()).isEqualTo("BricklinkInventoryReconciliationJob");
     }
 
     @Test

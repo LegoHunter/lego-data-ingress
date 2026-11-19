@@ -19,7 +19,8 @@ class BricklinkListingCreateInventoryMapper {
             BricklinkMarketplaceListing bricklinkListing,
             ItemInventory itemInventory,
             MarketplaceListingSyncRequest request,
-            BricklinkListingCreateSafetyResult safety
+            BricklinkListingCreateSafetyResult safety,
+            String description
     ) {
         Inventory inventory = new Inventory();
         inventory.setItem(item(listing.getExternalCatalogItem()));
@@ -28,7 +29,7 @@ class BricklinkListingCreateInventoryMapper {
         inventory.setNew_or_used(normalizeCondition(itemInventory.getNewOrUsed()));
         inventory.setCompleteness(normalizeCompleteness(itemInventory));
         inventory.setUnit_price(doubleValue(request.getRequestedUnitPrice()));
-        inventory.setDescription(BricklinkLotDescription.expected(listing));
+        inventory.setDescription(description);
         inventory.setRemarks(safety.desiredRemarks());
         inventory.setBulk(bricklinkListing.getBulk() == null ? 1 : bricklinkListing.getBulk());
         inventory.setIs_retain(bricklinkListing.getIsRetain());

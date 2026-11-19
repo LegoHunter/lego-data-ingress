@@ -22,7 +22,8 @@ class BricklinkListingCreateInventoryMapperTest {
                 bricklinkListing(),
                 itemInventory(false, "I"),
                 request(),
-                safety()
+                safety(),
+                "Description"
         );
 
         assertThat(inventory.getItem().getNo()).isEqualTo("6390-1");
@@ -40,13 +41,15 @@ class BricklinkListingCreateInventoryMapperTest {
     }
 
     @Test
-    void mapsSealedCompletenessAndFallsBackToTitle() {
+    void mapsSealedCompletenessAndSendsTheComposedDescription() {
+        // The text is composed by BricklinkLotDescription (title fallback, album link); the mapper sends it as given.
         Inventory inventory = mapper.map(
                 listing("SET", null),
                 bricklinkListing(),
                 itemInventory(true, "C"),
                 request(),
-                safety()
+                safety(),
+                "Main Street"
         );
 
         assertThat(inventory.getCompleteness()).isEqualTo("S");

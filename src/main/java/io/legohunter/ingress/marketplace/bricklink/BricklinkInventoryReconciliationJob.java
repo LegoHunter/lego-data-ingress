@@ -3,6 +3,7 @@ package io.legohunter.ingress.marketplace.bricklink;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -18,6 +19,9 @@ import org.springframework.stereotype.Component;
 public class BricklinkInventoryReconciliationJob {
     private final BricklinkInventoryReconciliationService reconciliationService;
     private final BricklinkInventoryReconciliationMetrics metrics;
+    private final BricklinkInventoryReconciliationProperties properties;
+    /** Present where marketplace sync is enabled; only it can send the requests. */
+    private final ObjectProvider<BricklinkDescriptionBackfillService> descriptionBackfill;
 
     @Scheduled(
             fixedDelayString = "${lego.bricklink.inventory-reconciliation.scheduled.fixed-delay-ms:3600000}",
@@ -35,6 +39,13 @@ public class BricklinkInventoryReconciliationJob {
     BricklinkInventoryReconciliationReport runOnce() {
         BricklinkInventoryReconciliationReport report = reconciliationService.reconcile();
         metrics.record(report);
+        if (properties.isQueueDescriptionUpdates()) {
+            // HOMELAB-82: a new album link or a caption added or removed changes what the lot should show.
+            BricklinkDescriptionBackfillService backfill = descriptionBackfill.getIfAvailable();
+            if (backfill != null) {
+                backfill.queueDrift(report);
+            }
+        }
         return report;
     }
 }

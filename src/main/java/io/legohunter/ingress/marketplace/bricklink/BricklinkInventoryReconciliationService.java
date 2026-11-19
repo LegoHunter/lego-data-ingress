@@ -3,6 +3,7 @@ package io.legohunter.ingress.marketplace.bricklink;
 import com.bricklink.api.rest.client.BricklinkRestClient;
 import com.bricklink.api.rest.model.v1.BricklinkResource;
 import com.bricklink.api.rest.model.v1.Inventory;
+import io.legohunter.data.bricklink.BricklinkLotText;
 import io.legohunter.data.dao.BricklinkMarketplaceListingDao;
 import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
@@ -56,6 +57,7 @@ public class BricklinkInventoryReconciliationService {
     private final MarketplaceListingDao marketplaceListingDao;
     private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao;
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao;
+    private final BricklinkLotDescription lotDescription;
 
     public BricklinkInventoryReconciliationReport reconcile() {
         long start = System.currentTimeMillis();
@@ -166,11 +168,16 @@ public class BricklinkInventoryReconciliationService {
         }
 
         // A listing with neither description nor title has nothing to show, so it is never drift. While a change is
-        // in flight (for example a DESCRIPTION_UPDATE) the lot is expected to lag, as with the price.
-        String expectedDescription = BricklinkLotDescription.expected(local.listing());
-        if (!priceChangeInFlight && expectedDescription != null
-                && !BricklinkLotDescription.matches(expectedDescription, lot.getDescription())) {
-            drifts.add(drift(BricklinkInventoryDriftType.DESCRIPTION_DRIFT, local, lotId, expectedDescription,
+        // in flight (for example a DESCRIPTION_UPDATE) the lot is expected to lag, as with the price. A text too long
+        // for BrickLink is its own drift (HOMELAB-82): only the owner can fix it, so it is never queued.
+        BricklinkLotText.Description expectedDescription = lotDescription.expected(local.listing());
+        if (expectedDescription.present() && expectedDescription.tooLong()) {
+            drifts.add(drift(BricklinkInventoryDriftType.DESCRIPTION_TOO_LONG, local, lotId,
+                    "at most " + BricklinkLotText.DESCRIPTION_MAX_LENGTH + " characters",
+                    expectedDescription.length() + " characters: " + expectedDescription.text()));
+        } else if (!priceChangeInFlight && expectedDescription.present()
+                && !BricklinkLotDescription.matches(expectedDescription.text(), lot.getDescription())) {
+            drifts.add(drift(BricklinkInventoryDriftType.DESCRIPTION_DRIFT, local, lotId, expectedDescription.text(),
                     lot.getDescription() == null ? "(empty)" : lot.getDescription()));
         }
     }

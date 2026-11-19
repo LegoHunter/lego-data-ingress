@@ -218,12 +218,25 @@ The only code that writes to BrickLink lots. It takes `PENDING` requests that ar
 | --- | --- |
 | `PRICE_UPDATE` | Reads the lot and checks safety, writes the price (and, outside PROD, the stockroom), reads it back. Only then does it move the local price and mark the decision `APPLIED`. |
 | `LISTING_CREATE` | Re-checks the draft locally. Reads the whole store and compares each lot's ownership block with the item's UUID (never the item number). A lot for this listing, left by an earlier lost response, is taken over. A lot for the same item under **another listing** blocks the create with `REMOTE_LOT_EXISTS_FOR_ITEM` (HOMELAB-100). The same item under another environment's block is only logged. Otherwise it creates the lot and saves its id at once. Reads it back, checking ownership, stockroom and quantity 1, then marks the listing `ACTIVE`. A lot that fails the read-back is hidden in a stockroom (A in PROD, the environment's own elsewhere). |
-| `DESCRIPTION_UPDATE` | Writes only the lot's Description, from the listing's description or else its title. The read-back must show the text and unchanged remarks (HOMELAB-80). BrickLink caps the REST Description at 255 characters. |
+| `DESCRIPTION_UPDATE` | Writes only the lot's Description (see "The lot Description" below). The read-back must show the text and unchanged remarks (HOMELAB-80). A text over 255 characters is `BLOCKED` with `DESCRIPTION_TOO_LONG` before anything is sent. |
 | `LISTING_DELETE` | Seeded-item teardown (HOMELAB-40): deletes a lower-environment lot that is in this environment's stockroom and carries its ownership block. It is refused in PROD, and success is proven by the lot reading back as not found. The listing becomes `ENDED`. |
+
+**The lot Description (HOMELAB-82)** is one rule, `BricklinkLotText` in lego-data, also used by lego-data-service:
+1. the listing's description, otherwise its title;
+2. `<a href="ALBUM">View all photos</a>.`, when the item's Flickr album has an address (its short link first);
+3. "See Extended Description for additional Item Condition notes.", when a processed photo has a caption **and**
+   the Extended Description sync runs in `APPLY` here (otherwise buyers would be pointed at an empty field).
+
+A text on its own is sent as typed; with a link or the sentence after it, it ends with a period. BrickLink keeps
+the anchor tag (the link is clickable) but drops a `target` attribute, stores `&` as `&amp;`, and **silently cuts
+the stored text at 255 characters**, mid-link if need be (measured 2026-11-19). So the length is counted as stored,
+and a text that does not fit is never sent or trimmed: the owner shortens the listing's description or title.
+lego-data-service refuses such an edit with the length in the message.
 
 Request states: `PENDING → CLAIMED → SUCCEEDED | BLOCKED | FAILED`.
 - **`BLOCKED`** is final. A safety check said no, and retrying would repeat an unsafe write. `last_error_message`
-  starts with the check's code.
+  starts with the check's code. BrickLink's own refusal of a change, `409 RESOURCE_UPDATE_NOT_ALLOWED`, is
+  `BLOCKED` with `REMOTE_UPDATE_NOT_ALLOWED`: a retry would send the same change.
 - **`FAILED`** means the request used up `max_attempts` (3). A claim spends an attempt; a failure that is not an
   outage puts the request back to `PENDING` after `retry-backoff` (6 h).
 - A request left `CLAIMED` for longer than `stale-claim-timeout` (1 h), for example by a killed pod, is released
@@ -243,18 +256,25 @@ Safety-check codes you may see:
   listing; the message names the lot and that listing), `DUPLICATE_REMOTE_INVENTORY` (several lots for this listing).
 - **Read-back:** `REMOTE_PRICE_MISMATCH`, `REMOTE_QUANTITY_MISMATCH`,
   `REMOTE_DESCRIPTION_MISMATCH`, `REMOTE_REMARKS_MISMATCH`.
+- **The text itself:** `DESCRIPTION_TOO_LONG` (fix the listing's text), `REMOTE_UPDATE_NOT_ALLOWED` (BrickLink 409).
 
 Mode `DRY_RUN` verifies and logs without claiming or writing. The `local` environment is always `DRY_RUN`.
 
 ## Store checks (read-only)
 
 - **`BricklinkInventoryReconciliationJob`** reads the whole store once per run and reports drift against the
-  local listings. It never writes. Drift types:
+  local listings. It never writes to BrickLink. Drift types:
   - `MISSING_REMOTE_LOT` (usually sold);
   - `PRICE_DRIFT`, `QUANTITY_DRIFT`, `VISIBILITY_DRIFT`, `REMARKS_DRIFT`, `DESCRIPTION_DRIFT`;
+  - `DESCRIPTION_TOO_LONG` (the text the listing calls for is over 255 characters as BrickLink stores it, for
+    example after the album link arrived; fix the listing's text, nothing is queued);
   - `UNTRACKED_REMOTE_LOT` (the block names this environment, but no listing points at the lot).
 
   Changes still in flight are not reported. Each drift logs `bricklink.inventory_reconciliation.drift`.
+  With `inventory-reconciliation.queue-description-updates: true` (SANDBOX), each run also queues a
+  `DESCRIPTION_UPDATE` for every `DESCRIPTION_DRIFT` (`bricklink.description_drift.queued`). That is how a new
+  album link, or a caption added or removed, reaches the lot. A listing whose last `DESCRIPTION_UPDATE` ended
+  without success within `retry-backoff` (6 h) is held back.
 - **`BricklinkLotAuditJob`** checks independently that no lower-environment lot is public
   (`LOWER_ENV_LOT_PUBLIC`), in stockroom A, or in another environment's stockroom. It logs
   `bricklink.lot_audit.violation` at ERROR and never moves a lot: move it back by hand, then find out how it got
@@ -262,6 +282,27 @@ Mode `DRY_RUN` verifies and logs without claiming or writing. The `local` enviro
 - **Description backfill:** `POST /internal/bricklink/marketplace-sync/description-backfill?apply=false` lists
   the `DESCRIPTION_UPDATE` requests it would queue for every `DESCRIPTION_DRIFT`; `apply=true` queues them.
   Always run the dry run first.
+
+## Web gateway syncs (lot image, Extended Description)
+
+Both write through this environment's `bricklink-web-gateway` (`lego.bricklink.web-gateway.base-url`, caller token
+from `bricklink-web-gateway-caller.yml`), which holds the signed-in BrickLink website session. Both read the lot
+through the official API and run the same ownership and stockroom checks first; the gateway checks the stockroom
+again. A gateway that is signed out or unreachable, or a BrickLink API outage, puts the request back to `PENDING`
+with its attempt given back (`deferral-delay`, 30 min) and stops the run. Each writes only when its own `mode` and
+the marketplace sync's mode are both `APPLY`.
+
+| Job | Request type | What it keeps in step | Recorded on `bricklink_marketplace_listing` |
+| --- | --- | --- | --- |
+| `BricklinkLotImageSyncJob` (HOMELAB-92) | `LOT_IMAGE_UPDATE` | the lot's custom image = the item's primary photo | `lot_image_md5`, `lot_image_synced_at` |
+| `BricklinkExtendedDescriptionSyncJob` (HOMELAB-82) | `EXTENDED_DESCRIPTION_UPDATE` | the lot's Extended Description = the captions of the item's processed photos, one per line, in photo order, each once; cleared when none is left | `extended_description_hash` (SHA-256 of the text sent), `extended_description_synced_at` |
+
+Each run compares the local database only (no BrickLink request), queues a request for every listing that is out
+of date, and sends `batch-size` (3) of them. The text is built again when it is sent. Hand edits made on BrickLink
+are not noticed. If the text the gateway reads back is only the start of the one sent, BrickLink cut it short: the
+request is `BLOCKED` with `EXTENDED_DESCRIPTION_TRUNCATED` and both lengths (shorten the captions). Log events:
+`bricklink.extended_description.{queued,sent,deferred,blocked,truncated,dry_run_verified}`.
+Where they run: SANDBOX (both `APPLY`), DEV (both `DRY_RUN`), PROD (off until the gateway is there, HOMELAB-114).
 
 ## Orders and fulfillment
 

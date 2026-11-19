@@ -56,6 +56,7 @@ class BricklinkListingDeleteSyncTest {
             new BricklinkRemoteInventorySafetyService(),
             new BricklinkListingCreateSafetyService(),
             new BricklinkListingCreateInventoryMapper(),
+            LotDescriptions.textOnly(),
             mock(PricingDecisionDao.class),
             transactions
     );

@@ -13,6 +13,7 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Queues a DESCRIPTION_UPDATE for every owned lot whose Description does not show its listing's description or
@@ -22,6 +23,11 @@ import java.util.List;
  * <p>It reads the drift from a fresh reconciliation, which already skips listings with a change in flight, so a
  * second run never queues a duplicate. With {@code apply=false} it only reports what it would queue. The requests
  * are sent by the marketplace sync job like any other, with its ownership, stockroom and read-back guards.
+ *
+ * <p>The scheduled reconciliation also hands its drift here when {@code queue-description-updates} is on
+ * (HOMELAB-82): that is how a new album link or a caption added or removed reaches the lot. There, a listing whose
+ * last DESCRIPTION_UPDATE ended without success within the retry backoff is skipped, so a lot that cannot take its
+ * text is not queued again every hour. A DESCRIPTION_TOO_LONG drift is never queued: only the owner can fix it.
  */
 @Slf4j
 @Service
@@ -30,6 +36,8 @@ import java.util.List;
 public class BricklinkDescriptionBackfillService {
     static final String SYNC_REASON = "DESCRIPTION_DRIFT_BACKFILL";
     static final String CREATED_BY = "BricklinkDescriptionBackfill";
+    static final String SYNC_REASON_DRIFT = "DESCRIPTION_DRIFT";
+    static final String CREATED_BY_RECONCILIATION = "BricklinkInventoryReconciliationJob";
     private static final int MAX_ATTEMPTS = 3;
 
     private final ObjectProvider<BricklinkInventoryReconciliationService> reconciliationService;
@@ -50,7 +58,7 @@ public class BricklinkDescriptionBackfillService {
             }
             Long requestId = null;
             if (apply) {
-                requestId = marketplaceListingSyncRequestDao.insert(request(drift)).getMarketplaceListingSyncRequestId();
+                requestId = marketplaceListingSyncRequestDao.insert(request(drift, SYNC_REASON, CREATED_BY)).getMarketplaceListingSyncRequestId();
             }
             rows.add(new Row(drift.marketplaceListingId(), drift.bricklinkInventoryId(), drift.expected(), drift.actual(), requestId));
         }
@@ -59,20 +67,59 @@ public class BricklinkDescriptionBackfillService {
         return java.util.Optional.of(new Result(apply, report.outcome(), List.copyOf(rows)));
     }
 
-    private MarketplaceListingSyncRequest request(BricklinkInventoryReconciliationReport.Drift drift) {
+    /**
+     * Queues a DESCRIPTION_UPDATE for each DESCRIPTION_DRIFT of a scheduled reconciliation (HOMELAB-82), skipping a
+     * listing whose last DESCRIPTION_UPDATE ended without success within the retry backoff.
+     *
+     * @return how many requests were queued
+     */
+    public int queueDrift(BricklinkInventoryReconciliationReport report) {
+        int queued = 0;
+        int heldBack = 0;
+        ZonedDateTime retryNotBefore = now().minus(properties.effectiveRetryBackoff());
+        for (BricklinkInventoryReconciliationReport.Drift drift : report.drifts()) {
+            if (drift.type() != BricklinkInventoryDriftType.DESCRIPTION_DRIFT || drift.marketplaceListingId() == null) {
+                continue;
+            }
+            if (failedRecently(drift.marketplaceListingId(), retryNotBefore)) {
+                heldBack++;
+                continue;
+            }
+            MarketplaceListingSyncRequest request = marketplaceListingSyncRequestDao.insert(request(drift, SYNC_REASON_DRIFT, CREATED_BY_RECONCILIATION));
+            queued++;
+            log.info("bricklink.description_drift.queued marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={}",
+                    request.getMarketplaceListingSyncRequestId(), drift.marketplaceListingId(), drift.bricklinkInventoryId());
+        }
+        if (queued > 0 || heldBack > 0) {
+            log.info("bricklink.description_drift.completed queued={} heldBack={}", queued, heldBack);
+        }
+        return queued;
+    }
+
+    private boolean failedRecently(Integer marketplaceListingId, ZonedDateTime retryNotBefore) {
+        return marketplaceListingSyncRequestDao.findByMarketplaceListingIdAndSyncRequestTypeCodeAndSyncRequestStatusCodes(
+                        marketplaceListingId,
+                        BricklinkMarketplaceSyncService.TYPE_DESCRIPTION_UPDATE,
+                        Set.of(BricklinkMarketplaceSyncService.STATUS_BLOCKED, BricklinkMarketplaceSyncService.STATUS_FAILED))
+                .stream()
+                .map(request -> request.getUpdatedAt() != null ? request.getUpdatedAt() : request.getCompletedAt())
+                .anyMatch(endedAt -> endedAt != null && endedAt.isAfter(retryNotBefore));
+    }
+
+    private MarketplaceListingSyncRequest request(BricklinkInventoryReconciliationReport.Drift drift, String syncReason, String createdBy) {
         boolean nonProd = properties.nonProdEnvironment();
         return MarketplaceListingSyncRequest.builder()
                 .marketplaceListingId(drift.marketplaceListingId())
                 .listingExternalServiceId(properties.getBricklinkExternalServiceId())
                 .syncRequestTypeCode(BricklinkMarketplaceSyncService.TYPE_DESCRIPTION_UPDATE)
                 .syncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_PENDING)
-                .syncReasonCode(SYNC_REASON)
+                .syncReasonCode(syncReason)
                 .remoteInventoryId(String.valueOf(drift.bricklinkInventoryId()))
                 .remoteVisibilityScopeCode(nonProd ? MarketplaceSyncCodes.REMOTE_SCOPE_STOCKROOM : null)
                 .remoteVisibilityContainerId(nonProd ? properties.effectiveNonProdStockRoomId() : null)
                 .remoteIsPubliclyAvailable(nonProd ? Boolean.FALSE : null)
                 .environmentCode(properties.effectiveEnvironmentCode())
-                .createdByJobName(CREATED_BY)
+                .createdByJobName(createdBy)
                 .attemptCount(0)
                 .maxAttempts(MAX_ATTEMPTS)
                 .nextAttemptAt(now())
