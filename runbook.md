@@ -334,6 +334,12 @@ and `external_category`. Topics and groups are in `kafka.topic-configuration.*` 
 lego-imaging. Manual endpoints are under `/internal/image-hosting/item-inventories/{id}/`: `sync-plan`,
 `sync-plan/apply`, `repair-plan`, `repair-plan/apply` and `generated-description`. Prefer a plan, then apply it.
 
+**Short links are made in production only (HOMELAB-118).** `lego.image-hosting.short-url.enabled` is false
+by default and true in `application-prod.yml`. Where it is false the job never calls Bitly, an album's
+`short_url` stays empty, and the generated description carries the full album address. The owner's Bitly
+account is on the free plan, which allows only a handful of new links a month, so a lower environment's test
+albums must not spend them.
+
 **The database is the system of record; Flickr is a published copy** (owner decision 2026-11-17).
 - What Flickr should hold (photos, cover, album title and description) is computed from the database and the
   final-photo bucket.

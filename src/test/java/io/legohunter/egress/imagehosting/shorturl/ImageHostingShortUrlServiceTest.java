@@ -1,5 +1,6 @@
 package io.legohunter.egress.imagehosting.shorturl;
 
+import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.imaging.bitly.config.BitlyProperties;
 import io.legohunter.imaging.bitly.impl.BitlinksService;
 import io.legohunter.imaging.bitly.model.bitly.Bitlink;
@@ -29,6 +30,7 @@ class ImageHostingShortUrlServiceTest {
 
     private BitlinksService bitlinksService;
     private BitlyProperties bitlyProperties;
+    private ImageHostingSyncProperties imageHostingProperties;
     private ImageHostingShortUrlService service;
 
     @BeforeEach
@@ -37,9 +39,12 @@ class ImageHostingShortUrlServiceTest {
         bitlyProperties = new BitlyProperties();
         bitlyProperties.setAccessToken("token");
         bitlyProperties.setGroupGuid(GROUP_GUID);
+        imageHostingProperties = new ImageHostingSyncProperties();
+        imageHostingProperties.getShortUrl().setEnabled(true);
         service = new ImageHostingShortUrlService(
                 Optional.of(bitlinksService),
-                bitlyProperties
+                bitlyProperties,
+                imageHostingProperties
         );
     }
 
@@ -170,8 +175,29 @@ class ImageHostingShortUrlServiceTest {
     }
 
     @Test
+    void shortLinksAreOffUnlessTurnedOn() {
+        assertThat(new ImageHostingSyncProperties().getShortUrl().isEnabled()).isFalse();
+    }
+
+    @Test
+    void nothingIsAskedOfBitlyWhenShortLinksAreTurnedOff() {
+        // Lower environments: a test album must not spend one of the few links the account may make.
+        imageHostingProperties.getShortUrl().setEnabled(false);
+
+        ImageHostingShortUrlResult generated = service.generateShortUrl(ALBUM_URL);
+        ImageHostingShortUrlResult recovered = service.recoverExistingShortUrl(ALBUM_URL);
+
+        assertThat(generated.getStatus()).isEqualTo(ImageHostingShortUrlStatus.DISABLED);
+        assertThat(generated.getShortUrl()).isNull();
+        assertThat(generated.getMessage()).isEqualTo("Short links are turned off in this environment");
+        assertThat(recovered.getStatus()).isEqualTo(ImageHostingShortUrlStatus.DISABLED);
+        assertThat(recovered.getShortUrl()).isNull();
+        verifyNoInteractions(bitlinksService);
+    }
+
+    @Test
     void recoverExistingShortUrlIsDisabledWhenBitlyServiceIsMissing() {
-        service = new ImageHostingShortUrlService(Optional.empty(), bitlyProperties);
+        service = new ImageHostingShortUrlService(Optional.empty(), bitlyProperties, imageHostingProperties);
 
         ImageHostingShortUrlResult result = service.recoverExistingShortUrl(ALBUM_URL);
 

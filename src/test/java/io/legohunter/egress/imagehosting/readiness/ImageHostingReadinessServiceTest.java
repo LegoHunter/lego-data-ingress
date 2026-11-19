@@ -64,6 +64,24 @@ class ImageHostingReadinessServiceTest {
     }
 
     @Test
+    void evaluateDoesNotRequireBitlyWhereShortLinksAreTurnedOff() {
+        ImageHostingSyncProperties properties = configuredImageHostingProperties(true, true, true);
+        properties.getShortUrl().setEnabled(false);
+
+        ImageHostingReadinessReport report = service(
+                environmentWithDatabaseKey(),
+                Optional.of(mock(DataSource.class)),
+                configuredS3(),
+                properties,
+                Optional.of(configuredFlickr()),
+                Optional.of(new BitlyProperties())
+        ).evaluate();
+
+        assertThat(report.ready()).isTrue();
+        assertThat(check(report, "bitly").required()).isFalse();
+    }
+
+    @Test
     void evaluateAllowsBitlyWarningWhenScheduledSyncRunsInDryRunMode() {
         BitlyProperties bitlyProperties = new BitlyProperties();
         ImageHostingReadinessReport report = service(
@@ -148,6 +166,7 @@ class ImageHostingReadinessServiceTest {
         properties.getSync().getScheduled().setEnabled(scheduledEnabled);
         properties.getSync().getScheduled().setApply(applyEnabled);
         properties.getReadiness().setRequireScheduledSyncEnabled(requireScheduledSyncEnabled);
+        properties.getShortUrl().setEnabled(true);
 
         ImageHostingSyncProperties.Provider flickr = new ImageHostingSyncProperties.Provider();
         flickr.setEnabled(true);

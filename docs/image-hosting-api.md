@@ -383,6 +383,11 @@ where possible:
   found.
 - Bitly lookup/generation failures are reported in the action result message
   but do not fail the Flickr sync action.
+- Short links are made only where `lego.image-hosting.short-url.enabled` is
+  true, which is production alone (HOMELAB-118). Everywhere else the executor
+  does not call Bitly at all, `short_url` stays empty, and the generated
+  description carries the full album address. The Bitly account allows few new
+  links a month, and a lower environment's test albums must not spend them.
 
 Manual historical backfill for existing DB album rows remains a migration-tool
 workflow in `lego-data-migration`. The ingress application only performs short
@@ -649,6 +654,8 @@ lego:
       enabled: true
       require-scheduled-sync-enabled: false
       require-bitly-when-apply-enabled: true
+    short-url:
+      enabled: false   # true in application-prod.yml only
     publishing:
       photo:
         title-template: "{captionOrFilename}"
@@ -682,7 +689,7 @@ configuration needed for scheduled Flickr sync:
 | `database` | Scheduled sync is enabled or required | `spring.datasource.database-key-name` is configured and a `DataSource` bean exists. |
 | `s3` | Scheduled sync is enabled or required | `lego.s3.url`, `lego.s3.access-key`, and `lego.s3.secret-key` are configured. |
 | `flickr` | Scheduled sync is enabled or required | Flickr provider config, external service id, user id, API key/secret, OAuth token, and OAuth token secret are configured. |
-| `bitly` | Scheduled sync is enabled with `apply=true` | Bitly base URL, access token, and group GUID are configured. Missing Bitly config is only a warning in dry-run mode. |
+| `bitly` | Short links are on (`short-url.enabled`) and scheduled sync is enabled with `apply=true` | Bitly base URL, access token, and group GUID are configured. Missing Bitly config is only a warning in dry-run mode. |
 
 Startup logs emit one summary line and one line per readiness check using the
 `image_hosting.readiness.*` log keys. Secret values are never logged; only
