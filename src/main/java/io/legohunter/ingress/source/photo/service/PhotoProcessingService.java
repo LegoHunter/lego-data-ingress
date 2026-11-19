@@ -51,6 +51,7 @@ public class PhotoProcessingService {
     private final S3Service s3Service;
     private final MetadataExtractorService metadataExtractorService;
     private final MetadataFingerprintService metadataFingerprintService;
+    private final PhotoFingerprintService photoFingerprintService;
     private final PhotoMetricsService photoMetricsService;
     private final S3BucketProperties s3BucketProperties;
     private final PhotoIngestProperties photoIngestProperties;
@@ -331,7 +332,7 @@ public class PhotoProcessingService {
 
         try {
             md5 =
-                    metadataExtractorService.calculateMd5(originalBytes);
+                    photoFingerprintService.fingerprint(originalBytes);
         } catch (Exception e) {
             throw new RejectedPhotoUploadException(
                     "Photo hash could not be calculated for [%s]"
