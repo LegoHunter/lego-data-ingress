@@ -61,9 +61,11 @@ class BricklinkLotImageSyncServiceTest {
     private final S3Service s3Service = mock(S3Service.class);
     private final ImageScalingService imageScalingService = mock(ImageScalingService.class);
     private final BricklinkWebGatewayClient gateway = mock(BricklinkWebGatewayClient.class);
+    private final BricklinkWebGatewayProperties gatewayProperties = new BricklinkWebGatewayProperties();
     private final BricklinkLotImageSyncService service = new BricklinkLotImageSyncService(
             properties, syncProperties, syncRequestDao, marketplaceListingDao, bricklinkMarketplaceListingDao, itemInventoryDao,
-            itemInventoryPhotoDao, bricklinkRestClient, new BricklinkRemoteInventorySafetyService(), s3Service, imageScalingService, gateway);
+            itemInventoryPhotoDao, bricklinkRestClient, new BricklinkRemoteInventorySafetyService(), s3Service, imageScalingService, gateway,
+            gatewayProperties);
 
     private BricklinkMarketplaceListing mapping;
 
@@ -73,8 +75,8 @@ class BricklinkLotImageSyncServiceTest {
         syncProperties.setNonProdStockRoomId("C");
         syncProperties.setMode("APPLY");
         properties.setMode("APPLY");
-        properties.setGatewayBaseUrl("http://bricklink-web-gateway:8080");
-        properties.setCallerToken("test-caller-token");
+        gatewayProperties.setBaseUrl("http://bricklink-web-gateway:8080");
+        gatewayProperties.setCallerToken("test-caller-token");
 
         mapping = BricklinkMarketplaceListing.builder().marketplaceListingId(100).bricklinkInventoryId((int) LOT).build();
         when(marketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(MarketplaceListing.builder()
@@ -307,7 +309,7 @@ class BricklinkLotImageSyncServiceTest {
 
     @Test
     void withoutAGatewayAddressOrTokenNothingIsQueuedOrSent() {
-        properties.setCallerToken("");
+        gatewayProperties.setCallerToken("");
         outOfDate(100);
 
         BricklinkLotImageSyncResult result = service.runOnce();
@@ -335,7 +337,7 @@ class BricklinkLotImageSyncServiceTest {
 
     @Test
     void theTokenIsNeverPrinted() {
-        assertThat(properties.toString()).doesNotContain("test-caller-token").contains("<set>");
+        assertThat(gatewayProperties.toString()).doesNotContain("test-caller-token").contains("<set>");
     }
 
     private void outOfDate(Integer... listingIds) {

@@ -16,6 +16,12 @@ import org.springframework.context.annotation.Configuration;
 public class BricklinkInventoryReconciliationProperties {
     private boolean enabled = false;
     private Integer bricklinkExternalServiceId = 2;
+    /**
+     * Whether each scheduled run queues a DESCRIPTION_UPDATE for every lot with DESCRIPTION_DRIFT (HOMELAB-82). This
+     * is how a new album link or a caption added or removed reaches the lot Description. Off, the drift is only
+     * reported, and the backfill endpoint queues it by hand.
+     */
+    private boolean queueDescriptionUpdates = false;
     private Scheduled scheduled = new Scheduled();
 
     @Getter

@@ -110,12 +110,20 @@ lego:
         initial-delay-ms: 300000
         lock-at-most-for: 10m
         lock-at-least-for: 0s
-    # Lot images through the DEV BrickLink web gateway (HOMELAB-94). Dry run: it checks and logs what
-    # it would send and calls nothing. APPLY comes later, as its own change, once DEV has listings.
+    # The DEV BrickLink web gateway (HOMELAB-94), the Service of the same namespace.
+    web-gateway:
+      base-url: http://bricklink-web-gateway:8080
+    # Lot images through the DEV web gateway. Dry run: it checks and logs what it would send and
+    # calls nothing. APPLY comes later, as its own change, once DEV has listings.
     lot-image-sync:
       enabled: true
       mode: DRY_RUN
-      gateway-base-url: http://bricklink-web-gateway:8080
+      scheduled:
+        enabled: true
+    # Extended Description sync (HOMELAB-82), dry run like the lot images.
+    extended-description-sync:
+      enabled: true
+      mode: DRY_RUN
       scheduled:
         enabled: true
   fulfillment:

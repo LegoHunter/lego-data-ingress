@@ -94,6 +94,47 @@ class HttpBricklinkWebGatewayClientTest {
     }
 
     @Test
+    void sendsTheExtendedDescriptionAsJsonWithTheCallerToken() throws IOException {
+        AtomicReference<String> method = new AtomicReference<>();
+        AtomicReference<String> path = new AtomicReference<>();
+        AtomicReference<String> authorization = new AtomicReference<>();
+        AtomicReference<String> contentType = new AtomicReference<>();
+        AtomicReference<String> body = new AtomicReference<>();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            method.set(exchange.getRequestMethod());
+            path.set(exchange.getRequestURI().getPath());
+            authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            contentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
+            body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = "{\"lotId\":569454190,\"extendedDescription\":\"x\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+
+        Answer answer = client("http://127.0.0.1:" + server.getAddress().getPort())
+                .putExtendedDescription(569454190L, "Box has a \"dent\".\nSticker sheet applied.");
+
+        assertThat(answer.kind()).isEqualTo(Kind.STORED);
+        assertThat(method.get()).isEqualTo("PUT");
+        assertThat(path.get()).isEqualTo("/lots/569454190/extended-description");
+        assertThat(authorization.get()).isEqualTo("Bearer test-caller-token");
+        assertThat(contentType.get()).startsWith("application/json");
+        assertThat(body.get()).isEqualTo("{\"extendedDescription\":\"Box has a \\\"dent\\\".\\nSticker sheet applied.\"}");
+    }
+
+    @Test
+    void anUnreachableGatewayCannotWorkForTheExtendedDescriptionEither() {
+        Answer answer = client("http://127.0.0.1:1").putExtendedDescription(1L, "");
+
+        assertThat(answer.kind()).isEqualTo(Kind.CANNOT_WORK);
+        assertThat(answer.code()).isEqualTo(HttpBricklinkWebGatewayClient.UNREACHABLE);
+    }
+
+    @Test
     void aGatewayThatCannotBeReachedIsNotARequestFailure() {
         // Nothing listens on port 1.
         Answer answer = client("http://127.0.0.1:1").putLotImage(1L, "lot-1.jpg", new byte[] {1});
@@ -104,8 +145,8 @@ class HttpBricklinkWebGatewayClientTest {
     }
 
     private static HttpBricklinkWebGatewayClient client(String baseUrl) {
-        BricklinkLotImageSyncProperties properties = new BricklinkLotImageSyncProperties();
-        properties.setGatewayBaseUrl(baseUrl);
+        BricklinkWebGatewayProperties properties = new BricklinkWebGatewayProperties();
+        properties.setBaseUrl(baseUrl);
         properties.setCallerToken("test-caller-token");
         properties.setConnectTimeout(Duration.ofSeconds(2));
         properties.setRequestTimeout(Duration.ofSeconds(5));

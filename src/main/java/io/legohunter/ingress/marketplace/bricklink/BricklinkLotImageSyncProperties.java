@@ -9,7 +9,8 @@ import java.time.Duration;
 
 /**
  * Settings of the lot image sync: setting a BrickLink lot's custom image from the item's primary
- * photo, through the BrickLink web gateway (HOMELAB-92).
+ * photo, through the BrickLink web gateway (HOMELAB-92). How to reach the gateway is in
+ * {@link BricklinkWebGatewayProperties}.
  */
 @Getter
 @Setter
@@ -19,10 +20,6 @@ public class BricklinkLotImageSyncProperties {
     private boolean enabled = false;
     /** DRY_RUN or APPLY. It writes only when this and the marketplace sync mode are both APPLY. */
     private String mode = BricklinkMarketplaceSyncMode.DRY_RUN.name();
-    /** Address of the web gateway of this environment, for example http://bricklink-web-gateway:8080. */
-    private String gatewayBaseUrl = "";
-    /** Bearer token the gateway expects from its callers. A secret: never logged. */
-    private String callerToken = "";
     /** How many listings one run may queue. */
     private int queueLimit = 25;
     /**
@@ -31,9 +28,6 @@ public class BricklinkLotImageSyncProperties {
      */
     private int batchSize = 3;
     private int maxAttempts = 3;
-    private Duration connectTimeout = Duration.ofSeconds(5);
-    /** Longer than the gateway's own two-minute wait for its queue. */
-    private Duration requestTimeout = Duration.ofMinutes(3);
     /** A stored photo above this is scaled down before it is sent. BrickLink turns away large files. */
     private long maxImageBytes = 2_000_000L;
     /**
@@ -68,15 +62,9 @@ public class BricklinkLotImageSyncProperties {
         return deferralDelay == null || deferralDelay.isNegative() || deferralDelay.isZero() ? Duration.ofMinutes(30) : deferralDelay;
     }
 
-    public boolean gatewayConfigured() {
-        return gatewayBaseUrl != null && !gatewayBaseUrl.isBlank() && callerToken != null && !callerToken.isBlank();
-    }
-
-    /** Never print the token. */
     @Override
     public String toString() {
-        return "BricklinkLotImageSyncProperties[enabled=" + enabled + ", mode=" + mode + ", gatewayBaseUrl=" + gatewayBaseUrl
-                + ", callerToken=" + (callerToken == null || callerToken.isBlank() ? "<unset>" : "<set>") + ", batchSize=" + batchSize + "]";
+        return "BricklinkLotImageSyncProperties[enabled=" + enabled + ", mode=" + mode + ", batchSize=" + batchSize + "]";
     }
 
     @Getter

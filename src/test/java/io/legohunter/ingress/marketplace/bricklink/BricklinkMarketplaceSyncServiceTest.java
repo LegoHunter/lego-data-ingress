@@ -71,6 +71,7 @@ class BricklinkMarketplaceSyncServiceTest {
             new BricklinkRemoteInventorySafetyService(),
             new BricklinkListingCreateSafetyService(),
             new BricklinkListingCreateInventoryMapper(),
+            LotDescriptions.textOnly(),
             pricingDecisionDao,
             transactions
     );
@@ -1535,6 +1536,40 @@ class BricklinkMarketplaceSyncServiceTest {
 
         verify(bricklinkRestClient, never()).updateInventory(anyLong(), any());
         assertThat(lastRequestUpdate().getLastErrorMessage()).startsWith("NO_LISTING_DESCRIPTION");
+    }
+
+    @Test
+    void aDescriptionTooLongForBricklinkIsBlockedBeforeAnythingIsWritten() {
+        // HOMELAB-82: never trimmed, never sent. 253 characters as typed, 257 as BrickLink stores the "&".
+        applyDescriptionUpdateAsSandbox();
+        arrangeDescriptionRequest(titledListing("Main Street", "x".repeat(249) + " & y"), remoteInventory("Human notes " + systemBlock()));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        verify(bricklinkRestClient, never()).updateInventory(anyLong(), any());
+        assertThat(result.blocked()).isOne();
+        MarketplaceListingSyncRequest blocked = lastRequestUpdate();
+        assertThat(blocked.getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        assertThat(blocked.getLastErrorMessage()).startsWith("DESCRIPTION_TOO_LONG").contains("257 characters", "allows 255");
+    }
+
+    @Test
+    void bricklinksRefusalOfTheChangeIsBlockedAndNotRetried() {
+        // 409 RESOURCE_UPDATE_NOT_ALLOWED (measured 2026-11-14 with a 600-character Description): a retry sends the
+        // same change and gets the same answer.
+        applyDescriptionUpdateAsSandbox();
+        arrangeDescriptionRequest(titledListing("Main Street", null), remoteInventory("Human notes " + systemBlock()));
+        when(bricklinkRestClient.updateInventory(eq(12345L), any(Inventory.class)))
+                .thenThrow(new BricklinkClientException(409, "RESOURCE_UPDATE_NOT_ALLOWED", "Description cannot exceed 255 characters"));
+
+        BricklinkMarketplaceSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isOne();
+        assertThat(result.failed()).isZero();
+        MarketplaceListingSyncRequest blocked = lastRequestUpdate();
+        assertThat(blocked.getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        assertThat(blocked.getLastErrorMessage()).startsWith("REMOTE_UPDATE_NOT_ALLOWED");
+        verify(bricklinkRestClient, never()).getColor(org.mockito.ArgumentMatchers.anyInt());
     }
 
     @Test

@@ -3,7 +3,7 @@ package io.legohunter.ingress.marketplace.bricklink;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -14,19 +14,20 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 /** {@link BricklinkWebGatewayClient} over HTTP. */
 @Slf4j
 @Component
-@ConditionalOnProperty(prefix = "lego.bricklink.lot-image-sync", name = "enabled", havingValue = "true")
+@ConditionalOnExpression("${lego.bricklink.lot-image-sync.enabled:false} or ${lego.bricklink.extended-description-sync.enabled:false}")
 public class HttpBricklinkWebGatewayClient implements BricklinkWebGatewayClient {
     static final String UNREACHABLE = "UNREACHABLE";
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private final BricklinkLotImageSyncProperties properties;
+    private final BricklinkWebGatewayProperties properties;
     private final RestClient restClient;
 
-    public HttpBricklinkWebGatewayClient(BricklinkLotImageSyncProperties properties) {
+    public HttpBricklinkWebGatewayClient(BricklinkWebGatewayProperties properties) {
         this.properties = properties;
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(properties.getConnectTimeout());
@@ -59,6 +60,23 @@ public class HttpBricklinkWebGatewayClient implements BricklinkWebGatewayClient 
         }
     }
 
+    @Override
+    public Answer putExtendedDescription(long lotId, String text) {
+        try {
+            return restClient.put()
+                    .uri(baseUrl() + "/lots/{lotId}/extended-description", lotId)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getCallerToken())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("extendedDescription", text == null ? "" : text))
+                    .exchange((request, response) -> answer(
+                            response.getStatusCode().value(),
+                            new String(response.getBody().readAllBytes(), StandardCharsets.UTF_8)));
+        } catch (RuntimeException e) {
+            log.warn("bricklink.web_gateway.unreachable lotId={} error={}", lotId, e.getClass().getSimpleName());
+            return new Answer(Kind.CANNOT_WORK, UNREACHABLE, "The BrickLink web gateway could not be reached: " + e.getClass().getSimpleName());
+        }
+    }
+
     /** The gateway answers errors as {"code": "...", "message": "..."}. */
     static Answer answer(int status, String body) {
         if (status == 200) {
@@ -85,7 +103,7 @@ public class HttpBricklinkWebGatewayClient implements BricklinkWebGatewayClient 
     }
 
     private String baseUrl() {
-        String url = properties.getGatewayBaseUrl().trim();
+        String url = properties.getBaseUrl().trim();
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
 }

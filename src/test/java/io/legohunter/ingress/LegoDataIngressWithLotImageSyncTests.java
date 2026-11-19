@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(properties = {
         "lego.bricklink.lot-image-sync.enabled=true",
         "lego.bricklink.lot-image-sync.scheduled.enabled=true",
-        "lego.bricklink.lot-image-sync.gateway-base-url=http://bricklink-web-gateway:8080",
+        "lego.bricklink.web-gateway.base-url=http://bricklink-web-gateway:8080",
         // Long enough that the job never fires during the test.
         "lego.bricklink.lot-image-sync.scheduled.initial-delay-ms=3600000",
         // The BrickLink REST client will not start without its keys. Placeholders: nothing is called.

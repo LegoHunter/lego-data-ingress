@@ -17,6 +17,11 @@ public enum BricklinkInventoryDriftType {
      * DESCRIPTION_UPDATE sync request (HOMELAB-80).
      */
     DESCRIPTION_DRIFT,
+    /**
+     * The Description the listing calls for is longer than BrickLink's 255 characters, for example after the album
+     * link arrived. Never sent and never queued: the owner shortens the listing's description or title (HOMELAB-82).
+     */
+    DESCRIPTION_TOO_LONG,
     /** The store has a lot tagged for this environment that no local listing owns. */
     UNTRACKED_REMOTE_LOT;
 

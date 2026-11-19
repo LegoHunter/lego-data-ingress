@@ -34,7 +34,8 @@ class BricklinkInventoryReconciliationServiceTest {
     private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao = mock(BricklinkMarketplaceListingDao.class);
     private final MarketplaceListingSyncRequestDao syncRequestDao = mock(MarketplaceListingSyncRequestDao.class);
     private final BricklinkInventoryReconciliationService service = new BricklinkInventoryReconciliationService(
-            properties, environment, bricklinkRestClient, marketplaceListingDao, bricklinkMarketplaceListingDao, syncRequestDao);
+            properties, environment, bricklinkRestClient, marketplaceListingDao, bricklinkMarketplaceListingDao, syncRequestDao,
+            LotDescriptions.textOnly());
 
     @BeforeEach
     void runAsSandbox() {
@@ -274,6 +275,25 @@ class BricklinkInventoryReconciliationServiceTest {
         BricklinkInventoryReconciliationReport report = service.reconcile();
 
         assertThat(report.outcome()).isEqualTo("IN_SYNC");
+    }
+
+    @Test
+    void aDescriptionTooLongForBricklinkIsItsOwnDriftAndNotDescriptionDrift() {
+        // HOMELAB-82: only the owner can fix it, so it must not look like something a DESCRIPTION_UPDATE would fix.
+        MarketplaceListing tooLong = listing(956, "70.14");
+        tooLong.setTitle("Summer Cottage");
+        tooLong.setDescription("x".repeat(256));
+        arrangeListings(tooLong);
+        arrangeBricklink(mapping(956, 1001));
+        Inventory lot = lot(1001, 70.14, 956);
+        lot.setDescription("Summer Cottage");
+        arrangeStore(lot);
+
+        BricklinkInventoryReconciliationReport report = service.reconcile();
+
+        BricklinkInventoryReconciliationReport.Drift drift = assertSingleDrift(report, BricklinkInventoryDriftType.DESCRIPTION_TOO_LONG, 956, 1001L);
+        assertThat(drift.expected()).isEqualTo("at most 255 characters");
+        assertThat(drift.actual()).startsWith("256 characters: xxx");
     }
 
     @Test

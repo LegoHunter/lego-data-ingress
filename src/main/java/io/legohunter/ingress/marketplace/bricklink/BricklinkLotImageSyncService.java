@@ -68,8 +68,8 @@ public class BricklinkLotImageSyncService {
     /** The gateway's code for "the lot does not show the image after the upload". The old image is gone by then. */
     static final String WRITE_NOT_APPLIED = "WRITE_NOT_APPLIED";
 
-    private static final String STATUS_PENDING = BricklinkMarketplaceSyncService.STATUS_PENDING;
-    private static final String STATUS_CLAIMED = BricklinkMarketplaceSyncService.STATUS_CLAIMED;
+    private static final String STATUS_PENDING = BricklinkGatewaySyncRequests.STATUS_PENDING;
+    private static final String STATUS_CLAIMED = BricklinkGatewaySyncRequests.STATUS_CLAIMED;
 
     private final BricklinkLotImageSyncProperties properties;
     private final BricklinkMarketplaceSyncProperties syncProperties;
@@ -83,6 +83,7 @@ public class BricklinkLotImageSyncService {
     private final S3Service s3Service;
     private final ImageScalingService imageScalingService;
     private final BricklinkWebGatewayClient gateway;
+    private final BricklinkWebGatewayProperties gatewayProperties;
 
     public BricklinkLotImageSyncResult runOnce() {
         long start = System.currentTimeMillis();
@@ -104,7 +105,7 @@ public class BricklinkLotImageSyncService {
             return counters.result(mode, System.currentTimeMillis() - start);
         }
 
-        if (!properties.gatewayConfigured()) {
+        if (!gatewayProperties.configured()) {
             // Nothing is queued either: requests that can never be sent would only pile up.
             log.error("bricklink.lot_image.gateway_not_configured outOfDate={} message=The gateway address or caller token is not set", listingIds.size());
             counters.notConfigured = true;
@@ -327,71 +328,29 @@ public class BricklinkLotImageSyncService {
         return new Context(listing, bricklinkListing, itemInventory, lotId.longValue(), primaries);
     }
 
-    /** A request left CLAIMED by a worker that died (pod killed mid-run) goes back to PENDING, or FAILED when out of attempts. */
+    private BricklinkGatewaySyncRequests requests() {
+        return new BricklinkGatewaySyncRequests(syncRequestDao, syncProperties, TYPE, "bricklink.lot_image");
+    }
+
     private void releaseStaleClaims() {
-        ZonedDateTime cutoff = now().minus(syncProperties.effectiveStaleClaimTimeout());
-        for (MarketplaceListingSyncRequest request : syncRequestDao.findBySyncRequestStatusCode(STATUS_CLAIMED)) {
-            if (!TYPE.equals(request.getSyncRequestTypeCode()) || request.getClaimedAt() == null || request.getClaimedAt().isAfter(cutoff)) {
-                continue;
-            }
-            log.warn("bricklink.lot_image.stale_claim_released marketplaceListingSyncRequestId={} claimedAt={}",
-                    request.getMarketplaceListingSyncRequestId(), request.getClaimedAt());
-            markRetryOrFailed(request, "Released a stale claim from " + request.getClaimedAt() + ": the worker stopped before finishing");
-        }
+        requests().releaseStaleClaims(now());
     }
 
     private void markSucceeded(MarketplaceListingSyncRequest request, Inventory remote) {
-        boolean stockRoom = Boolean.TRUE.equals(remote.getIs_stock_room());
-        request.setSyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_SUCCEEDED);
-        request.setLastErrorMessage(null);
-        request.setClaimedAt(null);
-        request.setCompletedAt(now());
-        request.setRemoteVisibilityScopeCode(stockRoom ? MarketplaceSyncCodes.REMOTE_SCOPE_STOCKROOM : MarketplaceSyncCodes.REMOTE_SCOPE_PUBLIC);
-        request.setRemoteVisibilityContainerId(stockRoom ? remote.getStock_room_id() : null);
-        request.setRemoteIsPubliclyAvailable(!stockRoom);
-        syncRequestDao.update(request);
+        requests().markSucceeded(request, remote, now());
     }
 
     private void markBlocked(MarketplaceListingSyncRequest request, String statusCode, String message) {
-        request.setSyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_BLOCKED);
-        request.setLastErrorMessage(shortMessage(statusCode + ": " + message));
-        request.setClaimedAt(null);
-        request.setCompletedAt(now());
-        syncRequestDao.update(request);
-        log.warn("bricklink.lot_image.blocked marketplaceListingSyncRequestId={} marketplaceListingId={} statusCode={} message={}",
-                request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), statusCode, message);
+        requests().markBlocked(request, statusCode, message, now());
     }
 
     private void markRetryOrFailed(MarketplaceListingSyncRequest request, String message) {
-        request.setClaimedAt(null);
-        request.setLastErrorMessage(shortMessage(message));
-        boolean exhausted = request.getAttemptCount() != null && request.getMaxAttempts() != null
-                && request.getAttemptCount() >= request.getMaxAttempts();
-        if (exhausted) {
-            request.setSyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_FAILED);
-            request.setCompletedAt(now());
-        } else {
-            request.setSyncRequestStatusCode(STATUS_PENDING);
-            request.setNextAttemptAt(now().plus(syncProperties.effectiveRetryBackoff()));
-        }
-        syncRequestDao.update(request);
+        requests().markRetryOrFailed(request, message, now());
     }
 
     /** Back to PENDING, due after the deferral delay, with the attempt its claim took given back. */
     private void defer(MarketplaceListingSyncRequest request, String message) {
-        int attempts = request.getAttemptCount() == null ? 0 : request.getAttemptCount();
-        request.setAttemptCount(Math.max(0, attempts - 1));
-        request.setClaimedAt(null);
-        request.setLastErrorMessage(shortMessage("Not sent, attempt not counted: " + message));
-        request.setSyncRequestStatusCode(STATUS_PENDING);
-        request.setNextAttemptAt(now().plus(properties.effectiveDeferralDelay()));
-        syncRequestDao.update(request);
-        log.warn("bricklink.lot_image.deferred marketplaceListingSyncRequestId={} marketplaceListingId={} retryAfter={} message={}",
-                request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), properties.effectiveDeferralDelay(), message);
-    }
-
-    private static String shortMessage(String message) {
-        return message == null || message.length() <= 1000 ? message : message.substring(0, 1000);
+        requests().defer(request, message, properties.effectiveDeferralDelay(), now());
     }
 
     private static <T> T data(BricklinkResource<T> resource) {

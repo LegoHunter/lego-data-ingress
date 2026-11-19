@@ -88,14 +88,31 @@ class SpringProfileEnvironmentTest {
         for (Properties lower : List.of(sandbox, dev)) {
             assertThat(String.valueOf(lower.get("lego.bricklink.lot-image-sync.enabled"))).isEqualTo("true");
             assertThat(String.valueOf(lower.get("lego.bricklink.lot-image-sync.scheduled.enabled"))).isEqualTo("true");
-            assertThat(String.valueOf(lower.get("lego.bricklink.lot-image-sync.gateway-base-url")))
+            assertThat(String.valueOf(lower.get("lego.bricklink.web-gateway.base-url")))
                     .isEqualTo("http://bricklink-web-gateway:8080");
         }
         assertThat(String.valueOf(podConfiguration("prod").get("lego.bricklink.lot-image-sync.enabled"))).isEqualTo("false");
         for (String env : List.of("sandbox", "dev", "prod")) {
-            assertThat(String.valueOf(podConfiguration(env).get("lego.bricklink.lot-image-sync.caller-token")))
+            assertThat(String.valueOf(podConfiguration(env).get("lego.bricklink.web-gateway.caller-token")))
                     .as(env).isEqualTo("${bricklink.web-gateway.caller-token:}");
         }
+    }
+
+    @Test
+    void theExtendedDescriptionSyncDryRunsInSandboxAndDevAndIsOffInProd() {
+        // HOMELAB-82: it writes through the web gateway, which PROD does not have yet (HOMELAB-114). DRY_RUN until
+        // the owner's go-ahead; only APPLY adds the "See Extended Description" sentence to the lot Description.
+        for (String env : List.of("sandbox", "dev")) {
+            Properties lower = podConfiguration(env);
+            assertThat(String.valueOf(lower.get("lego.bricklink.extended-description-sync.enabled"))).as(env).isEqualTo("true");
+            assertThat(String.valueOf(lower.get("lego.bricklink.extended-description-sync.mode"))).as(env).isEqualTo("DRY_RUN");
+            assertThat(String.valueOf(lower.get("lego.bricklink.extended-description-sync.scheduled.enabled"))).as(env).isEqualTo("true");
+        }
+        assertThat(String.valueOf(podConfiguration("prod").get("lego.bricklink.extended-description-sync.enabled"))).isEqualTo("false");
+        assertThat(String.valueOf(podConfiguration("sandbox").get("lego.bricklink.inventory-reconciliation.queue-description-updates")))
+                .isEqualTo("true");
+        assertThat(String.valueOf(podConfiguration("prod").get("lego.bricklink.inventory-reconciliation.queue-description-updates")))
+                .isEqualTo("false");
     }
 
     @ParameterizedTest

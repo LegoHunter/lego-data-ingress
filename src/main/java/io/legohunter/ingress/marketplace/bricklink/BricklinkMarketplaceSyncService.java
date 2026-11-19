@@ -6,6 +6,7 @@ import com.bricklink.api.rest.client.BricklinkRestClient;
 import com.bricklink.api.rest.exception.BricklinkClientException;
 import com.bricklink.api.rest.model.v1.BricklinkResource;
 import com.bricklink.api.rest.model.v1.Inventory;
+import io.legohunter.data.bricklink.BricklinkLotText;
 import io.legohunter.data.dao.BricklinkMarketplaceListingDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.MarketplaceListingDao;
@@ -55,6 +56,10 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
     static final String SAFETY_REMOTE_DELETED = "REMOTE_DELETED";
     /** The store already has a lot for this inventory item (same UUID) under another marketplace listing. */
     static final String SAFETY_REMOTE_LOT_EXISTS_FOR_ITEM = "REMOTE_LOT_EXISTS_FOR_ITEM";
+    /** The lot Description would be over BrickLink's 255 characters: the owner shortens the listing's text (HOMELAB-82). */
+    static final String DESCRIPTION_TOO_LONG = "DESCRIPTION_TOO_LONG";
+    /** BrickLink refused the change to this lot with 409 RESOURCE_UPDATE_NOT_ALLOWED; a retry gets the same answer. */
+    static final String REMOTE_UPDATE_NOT_ALLOWED = "REMOTE_UPDATE_NOT_ALLOWED";
     /** Run outcome when a BrickLink outage stopped the run (HOMELAB-81). */
     static final String OUTCOME_OUTAGE = "OUTAGE";
     /** White: a catalog color that always exists. Reading it is the outage probe: cheap and read-only. */
@@ -69,6 +74,7 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
     private final BricklinkRemoteInventorySafetyService safetyService;
     private final BricklinkListingCreateSafetyService listingCreateSafetyService;
     private final BricklinkListingCreateInventoryMapper listingCreateInventoryMapper;
+    private final BricklinkLotDescription lotDescription;
     private final PricingDecisionDao pricingDecisionDao;
     private final TransactionOperations transactions;
 
@@ -190,6 +196,22 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
      * @return true for an outage
      */
     private boolean recordFailure(MarketplaceListingSyncRequest request, BricklinkMarketplaceSyncMode mode, Counters counters, RuntimeException e) {
+        if (isUpdateNotAllowed(e)) {
+            // BrickLink refuses this change to this lot (for example a Description over 255 characters). Retrying
+            // sends the same change and gets the same answer, so the request stops here (HOMELAB-82).
+            counters.blocked++;
+            if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+                markBlocked(request, REMOTE_UPDATE_NOT_ALLOWED, e.getMessage());
+            }
+            log.warn(
+                    "bricklink.marketplace_sync.update_not_allowed marketplaceListingSyncRequestId={} marketplaceListingId={} syncRequestType={} message={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    request.getSyncRequestTypeCode(),
+                    e.getMessage()
+            );
+            return false;
+        }
         if (isConfirmedOutage(e)) {
             counters.outageDeferred++;
             if (mode == BricklinkMarketplaceSyncMode.APPLY) {
@@ -216,6 +238,16 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
                 e.getMessage(),
                 e
         );
+        return false;
+    }
+
+    /** BrickLink's 409 RESOURCE_UPDATE_NOT_ALLOWED: a refusal of this request, not an outage. */
+    static boolean isUpdateNotAllowed(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof BricklinkClientException client && client.getCode() == 409) {
+                return true;
+            }
+        }
         return false;
     }
 
@@ -372,8 +404,8 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
             return;
         }
 
-        String description = BricklinkLotDescription.expected(context.listing());
-        if (description == null) {
+        BricklinkLotText.Description expected = lotDescription.expected(context.listing());
+        if (!expected.present()) {
             // Clearing a lot's Description is not something this request type does: nothing to send.
             counters.blocked++;
             if (mode == BricklinkMarketplaceSyncMode.APPLY) {
@@ -381,6 +413,19 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
             }
             return;
         }
+        if (expected.tooLong()) {
+            // Never trimmed: BrickLink would cut it mid-link. The owner shortens the listing's text (HOMELAB-82).
+            counters.blocked++;
+            if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+                markBlocked(request, DESCRIPTION_TOO_LONG, expected.tooLongMessage());
+            }
+            log.warn(
+                    "bricklink.marketplace_sync.description_too_long marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} length={}",
+                    request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), lotId, expected.length()
+            );
+            return;
+        }
+        String description = expected.text();
         if (mode == BricklinkMarketplaceSyncMode.DRY_RUN) {
             counters.dryRunVerified++;
             log.info(
@@ -620,12 +665,26 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
             return;
         }
 
+        BricklinkLotText.Description description = lotDescription.expected(context.listing());
+        if (description.tooLong()) {
+            // The lot is not created with a Description BrickLink would cut short (HOMELAB-82).
+            counters.blocked++;
+            if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+                markBlocked(request, DESCRIPTION_TOO_LONG, description.tooLongMessage());
+            }
+            log.warn(
+                    "bricklink.marketplace_sync.description_too_long marketplaceListingSyncRequestId={} marketplaceListingId={} length={}",
+                    request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), description.length()
+            );
+            return;
+        }
         Inventory createPayload = listingCreateInventoryMapper.map(
                 context.listing(),
                 context.bricklinkListing(),
                 context.itemInventory(),
                 request,
-                safety
+                safety,
+                description.text()
         );
         if (mode == BricklinkMarketplaceSyncMode.DRY_RUN) {
             counters.dryRunVerified++;
