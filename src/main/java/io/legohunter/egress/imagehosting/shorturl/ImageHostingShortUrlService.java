@@ -1,5 +1,6 @@
 package io.legohunter.egress.imagehosting.shorturl;
 
+import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.imaging.bitly.config.BitlyProperties;
 import io.legohunter.imaging.bitly.impl.BitlinksService;
 import io.legohunter.imaging.bitly.model.bitly.Bitlink;
@@ -34,12 +35,16 @@ public class ImageHostingShortUrlService {
 
     private final Optional<BitlinksService> bitlinksService;
     private final BitlyProperties bitlyProperties;
+    private final ImageHostingSyncProperties imageHostingProperties;
 
     private BitlyShortUrlLookup cachedLookup;
 
     public ImageHostingShortUrlResult recoverExistingShortUrl(String albumUrl) {
         if (!hasText(albumUrl)) {
             return result(LOOKUP_MISS, albumUrl, null, "Flickr album URL is missing");
+        }
+        if (!shortLinksEnabled()) {
+            return result(DISABLED, albumUrl, null, "Short links are turned off in this environment");
         }
         if (!bitlyReadEnabled()) {
             return result(DISABLED, albumUrl, null, "Bitly lookup is disabled or not configured");
@@ -58,6 +63,9 @@ public class ImageHostingShortUrlService {
     public ImageHostingShortUrlResult generateShortUrl(String albumUrl) {
         if (!hasText(albumUrl)) {
             return result(LOOKUP_MISS, albumUrl, null, "Flickr album URL is missing");
+        }
+        if (!shortLinksEnabled()) {
+            return result(DISABLED, albumUrl, null, "Short links are turned off in this environment");
         }
         if (!bitlyWriteEnabled()) {
             return result(DISABLED, albumUrl, null, "Bitly shortening is disabled or not configured");
@@ -125,6 +133,11 @@ public class ImageHostingShortUrlService {
         if (cachedLookup != null) {
             cachedLookup.add(albumUrl, shortUrl);
         }
+    }
+
+    /** Off means no call to the link service at all, neither to make a link nor to look one up. */
+    private boolean shortLinksEnabled() {
+        return imageHostingProperties.getShortUrl().isEnabled();
     }
 
     private boolean bitlyReadEnabled() {

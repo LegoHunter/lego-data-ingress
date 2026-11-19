@@ -40,7 +40,8 @@ public class ImageHostingReadinessService {
         validateDatabase(checks, syncRuntimeRequired);
         validateS3(checks, syncRuntimeRequired);
         validateFlickr(checks, syncRuntimeRequired);
-        validateBitly(checks, scheduledEnabled && applyEnabled && readiness.isRequireBitlyWhenApplyEnabled());
+        validateBitly(checks, imageHostingProperties.getShortUrl().isEnabled()
+                && scheduledEnabled && applyEnabled && readiness.isRequireBitlyWhenApplyEnabled());
 
         boolean ready = checks.stream().noneMatch(ImageHostingReadinessCheck::down);
         return new ImageHostingReadinessReport(ready, checks);

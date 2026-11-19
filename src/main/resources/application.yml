@@ -252,6 +252,11 @@ lego:
       enabled: true
       require-scheduled-sync-enabled: false
       require-bitly-when-apply-enabled: true
+    # Short links (bit.ly) for album addresses (HOMELAB-118). Off here and in every lower environment;
+    # application-prod.yml turns it on. Off means no call to Bitly, and the generated description carries
+    # the full album address.
+    short-url:
+      enabled: false
   fulfillment:
     marketplace-code: BRICKLINK
     metrics-tag: fulfillment

@@ -21,6 +21,7 @@ public class ImageHostingSyncProperties {
     private Sync sync = new Sync();
     private Publishing publishing = new Publishing();
     private Readiness readiness = new Readiness();
+    private ShortUrl shortUrl = new ShortUrl();
     private Map<String, Provider> providers = new LinkedHashMap<>();
 
     public ResolvedProvider resolveProvider(String requestedProvider, Integer requestedExternalServiceId) {
@@ -169,6 +170,17 @@ public class ImageHostingSyncProperties {
         private Integer externalServiceId;
         private String displayName;
         private String metricsTag;
+    }
+
+    /**
+     * Short links (bit.ly) for album addresses. Off unless a profile turns it on, and only production does:
+     * the link service allows few new links a month, and a lower environment's test albums must not spend
+     * them. Without a short link the generated description carries the full album address.
+     */
+    @Getter
+    @Setter
+    public static class ShortUrl {
+        private boolean enabled = false;
     }
 
     @Getter
