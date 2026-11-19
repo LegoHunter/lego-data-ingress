@@ -55,8 +55,8 @@ public class BricklinkLotAuditService {
                 throw new IllegalStateException("BrickLink inventory search returned no data");
             }
         } catch (RuntimeException e) {
-            if (BricklinkRestOutageClassifier.clearsOnItsOwn(e)) {
-                // BrickLink is down or in maintenance: the next run audits. No stack trace (HOMELAB-121).
+            if (BricklinkRestOutageClassifier.mayBeOutage(e)) {
+                // BrickLink cannot be used now (outage, maintenance, refused token): the next run audits. No stack trace (HOMELAB-121).
                 log.warn("bricklink.lot_audit.outage message={}", e.getMessage());
             } else {
                 log.error("bricklink.lot_audit.failed message={}", e.getMessage(), e);

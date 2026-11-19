@@ -195,7 +195,7 @@ public class BricklinkOpenOrderProbeService {
                     payloadsWritten
             );
         } catch (RuntimeException e) {
-            if (BricklinkRestOutageClassifier.clearsOnItsOwn(e)) {
+            if (BricklinkRestOutageClassifier.mayBeOutage(e)) {
                 return outageDeferred(syncRun, providerTag, apply, startedAt, e);
             }
             completeSyncRun(syncRun, "FAILED", 0, 1, e.getMessage());
@@ -204,9 +204,10 @@ public class BricklinkOpenOrderProbeService {
     }
 
     /**
-     * BrickLink is down or in maintenance (HOMELAB-121). Nothing was read, so nothing is lost: the next run after
-     * BrickLink returns picks up every open order. One WARN line, no stack trace, and the run is recorded as
-     * OUTAGE_DEFERRED rather than FAILED, so a maintenance window does not look like a broken poller.
+     * BrickLink cannot be used now (HOMELAB-121): maintenance, an outage, a rate limit, or the API token refused (401,
+     * for example TOKEN_IP_MISMATCHED, or 403). Nothing was read, so nothing is lost: the next run that reaches
+     * BrickLink picks up every open order. One WARN line, no stack trace, and the run is recorded as OUTAGE_DEFERRED
+     * rather than FAILED, the same way the queued syncs defer. A refused token is left to a dedicated alert.
      */
     private BricklinkOrderProbeResult outageDeferred(
             MarketplaceOrderSyncRun syncRun,

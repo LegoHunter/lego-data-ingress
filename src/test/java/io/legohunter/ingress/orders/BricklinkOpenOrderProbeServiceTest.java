@@ -374,13 +374,30 @@ class BricklinkOpenOrderProbeServiceTest {
     }
 
     @Test
-    void aRejectedTokenStillFailsTheRun() {
+    void aRejectedTokenDefersTheRunLikeTheQueuedSyncsDo() {
         properties.getScheduled().setApply(true);
         properties.setStatuses(List.of("PENDING"));
         properties.setIncludeUnfiledCancelled(false);
         MarketplaceOrderSyncRun syncRun = new MarketplaceOrderSyncRun();
         when(marketplaceOrderSyncRunDao.insert(any(MarketplaceOrderSyncRun.class))).thenReturn(syncRun);
-        BricklinkClientException rejected = new BricklinkClientException(401, "BAD_OAUTH_REQUEST", "TOKEN_IP_MISMATCHED");
+        when(bricklinkRestClient.getOrders(anyMap(), any()))
+                .thenThrow(new BricklinkClientException(401, "BAD_OAUTH_REQUEST", "TOKEN_IP_MISMATCHED"));
+
+        BricklinkOrderProbeResult result = probeService.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("OUTAGE_DEFERRED");
+        assertThat(syncRun.getSyncStatusCode()).isEqualTo("OUTAGE_DEFERRED");
+        assertThat(syncRun.getErrorMessage()).contains("TOKEN_IP_MISMATCHED");
+    }
+
+    @Test
+    void aFailureThatIsNotAnOutageStillFailsTheRun() {
+        properties.getScheduled().setApply(true);
+        properties.setStatuses(List.of("PENDING"));
+        properties.setIncludeUnfiledCancelled(false);
+        MarketplaceOrderSyncRun syncRun = new MarketplaceOrderSyncRun();
+        when(marketplaceOrderSyncRunDao.insert(any(MarketplaceOrderSyncRun.class))).thenReturn(syncRun);
+        BricklinkClientException rejected = new BricklinkClientException(400, "INVALID_REQUEST_PARAMETER", "status");
         when(bricklinkRestClient.getOrders(anyMap(), any())).thenThrow(rejected);
 
         assertThatThrownBy(() -> probeService.runOnce()).isSameAs(rejected);
