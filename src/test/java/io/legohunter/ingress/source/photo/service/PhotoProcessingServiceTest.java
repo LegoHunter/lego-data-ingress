@@ -61,6 +61,9 @@ class PhotoProcessingServiceTest {
     private MetadataFingerprintService metadataFingerprintService;
 
     @Mock
+    private PhotoFingerprintService photoFingerprintService;
+
+    @Mock
     private PhotoMetricsService photoMetricsService;
 
     @Mock
@@ -117,7 +120,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata);
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("md5-1");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -212,7 +215,7 @@ class PhotoProcessingServiceTest {
 
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-2", "3002", null, null, null, null));
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("md5-2");
         when(itemInventoryDao.findByUuid("uuid-2"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-2")));
@@ -257,7 +260,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", true, false, true, "Updated caption"));
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("new-md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(existingInventory));
@@ -350,7 +353,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", false, false, true, "Metadata-only caption"));
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("same-md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(existingInventory));
@@ -418,7 +421,7 @@ class PhotoProcessingServiceTest {
                         null,
                         null
                 ));
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("new-md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(existingInventory));
@@ -505,7 +508,7 @@ class PhotoProcessingServiceTest {
                         ConditionEnum.E,
                         null
                 ));
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("7f7580228caebdd153e1d3fea8089833");
         when(itemInventoryDao.findByUuid("e57aad1b8724d89bab9c0d5fccbb3a99"))
                 .thenReturn(Optional.of(existingInventory));
@@ -558,7 +561,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", null, null, null, null));
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("duplicate-md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -655,7 +658,7 @@ class PhotoProcessingServiceTest {
         }
 
         // Both photos passed the size check: each got as far as its fingerprint.
-        verify(metadataExtractorService, times(2)).calculateMd5(originalBytes);
+        verify(photoFingerprintService, times(2)).fingerprint(originalBytes);
     }
 
     @Test
@@ -683,7 +686,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("no-such-uuid", "3001", true, true, false, "Front view"));
-        when(metadataExtractorService.calculateMd5(originalBytes)).thenReturn("md5-1");
+        when(photoFingerprintService.fingerprint(originalBytes)).thenReturn("md5-1");
         when(itemInventoryDao.findByUuid("no-such-uuid")).thenReturn(Optional.empty());
 
         service.process(event);
@@ -715,7 +718,7 @@ class PhotoProcessingServiceTest {
     private void arrangeNewPhoto(String key, ImageMetadata metadata, ItemInventory item) {
         when(s3Service.getObject("lego-uploads-sandbox", key)).thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes)).thenReturn(metadata);
-        when(metadataExtractorService.calculateMd5(originalBytes)).thenReturn("md5-new");
+        when(photoFingerprintService.fingerprint(originalBytes)).thenReturn("md5-new");
         when(itemInventoryDao.findByUuid("uuid-1")).thenReturn(Optional.of(item));
         lenient().when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
                 .thenReturn(Optional.of(externalCatalogItem(123)));
@@ -844,7 +847,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "9999", null, null, null, null));
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -882,7 +885,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata);
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("md5-1");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -908,7 +911,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", null, null, null, null));
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("md5-fail");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -948,7 +951,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", null, null, null, null));
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("md5-rollback");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -989,7 +992,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", false, null, null, null));
-        when(metadataExtractorService.calculateMd5(originalBytes))
+        when(photoFingerprintService.fingerprint(originalBytes))
                 .thenReturn("md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));

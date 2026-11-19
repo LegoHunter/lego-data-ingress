@@ -284,9 +284,15 @@ not a JPEG, a file over the upload limit, or a conflict under the sealed / built
 bytes exported from the photo editor are the bytes kept in `lego-photos-<env>` and published to the image
 host. It used to re-encode every photo as a 75%-quality JPEG of at most 2 MB.
 
-- The photo's fingerprint (`item_inventory_photo.md5`) is now the fingerprint of the uploaded file. A photo
-  stored before this change keeps its old fingerprint, so re-uploading the same export counts as new pixels:
-  the stored file is replaced, and the published photo with it (see "A re-uploaded photo" below).
+- The photo's fingerprint (`item_inventory_photo.md5`) is taken from the picture alone
+  (`PhotoFingerprintService`, HOMELAB-117): the file without its Exif and XMP (APP1), its Photoshop and IPTC
+  block (APP13) and its comments. The colour profile and all picture data count. So two exports of one
+  picture that differ only in keywords or caption have the same fingerprint, and a keyword-only re-upload
+  updates the text without replacing the photo. The stored file is then not rewritten: it keeps the keywords
+  it was first uploaded with, and the database holds the current ones.
+- A photo stored before these changes has an older kind of fingerprint, so re-uploading the same export
+  counts as new pixels once: the stored file is replaced, and the published photo with it (see "A
+  re-uploaded photo" below).
 - The size is decided by the export, so the export must carry the agreed size cap. An upload larger than
   `lego.photos.max-upload-bytes` (default 10,000,000; zero or less turns the limit off) is rejected.
 - Only JPEG is accepted; nothing converts another format any more.
