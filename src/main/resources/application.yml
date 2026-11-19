@@ -15,6 +15,11 @@ lego:
   environment:
     code: local
     production: false
+  # Photo ingestion (HOMELAB-99). A photo is stored and published exactly as uploaded, so its size is set
+  # by the export from the photo editor. An upload over max-upload-bytes is rejected (moved to
+  # photos/rejected/); zero or less turns the limit off.
+  photos:
+    max-upload-bytes: 10000000
   # The shared marketplace_pricing schema on the same MySQL server (HOMELAB-31/32).
   marketplace-pricing:
     schema: marketplace_pricing

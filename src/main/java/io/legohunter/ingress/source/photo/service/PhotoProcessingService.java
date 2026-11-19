@@ -5,7 +5,6 @@ import io.legohunter.imaging.metadata.MetadataFingerprintService;
 import io.legohunter.imaging.metadata.impl.MetadataExtractorService;
 import io.legohunter.imaging.metadata.model.ConditionEnum;
 import io.legohunter.imaging.metadata.model.ImageMetadata;
-import io.legohunter.imaging.scaling.ImageScalingService;
 import io.legohunter.ingress.common.logging.LoggingContext;
 import io.legohunter.ingress.config.storage.S3BucketProperties;
 import io.legohunter.ingress.s3.api.S3Service;
@@ -50,11 +49,11 @@ public class PhotoProcessingService {
     private static final int BRICKLINK_SERVICE_ID = 2;
 
     private final S3Service s3Service;
-    private final ImageScalingService imageScalingService;
     private final MetadataExtractorService metadataExtractorService;
     private final MetadataFingerprintService metadataFingerprintService;
     private final PhotoMetricsService photoMetricsService;
     private final S3BucketProperties s3BucketProperties;
+    private final PhotoIngestProperties photoIngestProperties;
 
     private final ItemInventoryDao itemInventoryDao;
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
@@ -303,27 +302,26 @@ public class PhotoProcessingService {
         );
 
         // =========================================================
-        // SCALE IMAGE
+        // CHECK THE FILE THAT WILL BE STORED
         // =========================================================
 
-        byte[] scaledBytes;
-
-        try {
-            scaledBytes =
-                    imageScalingService.scale(originalBytes);
-        } catch (Exception e) {
+        // The photo is stored and published exactly as uploaded: no scaling, no re-encoding. So it must already
+        // be a JPEG, and its size was decided by the export; an export without the agreed size cap is rejected
+        // here rather than filling the photo store.
+        if (!isJpeg(originalBytes)) {
             throw new RejectedPhotoUploadException(
-                    "Photo image could not be scaled for [%s]"
-                            .formatted(originalFilename),
-                    e
+                    "Photo [%s] is not a JPEG; export it as JPEG"
+                            .formatted(originalFilename)
             );
         }
 
-        log.info(
-                "photo.scaled originalSize={} scaledSize={}",
-                originalBytes.length,
-                scaledBytes.length
-        );
+        long maxUploadBytes = photoIngestProperties.getMaxUploadBytes();
+        if (maxUploadBytes > 0 && originalBytes.length > maxUploadBytes) {
+            throw new RejectedPhotoUploadException(
+                    "Photo [%s] is %s bytes, over the limit of %s bytes; export it with the size cap"
+                            .formatted(originalFilename, originalBytes.length, maxUploadBytes)
+            );
+        }
 
         // =========================================================
         // MD5
@@ -333,7 +331,7 @@ public class PhotoProcessingService {
 
         try {
             md5 =
-                    metadataExtractorService.calculateMd5(scaledBytes);
+                    metadataExtractorService.calculateMd5(originalBytes);
         } catch (Exception e) {
             throw new RejectedPhotoUploadException(
                     "Photo hash could not be calculated for [%s]"
@@ -514,8 +512,8 @@ public class PhotoProcessingService {
                 s3Service.putObject(
                         finalBucket,
                         destinationKey,
-                        new ByteArrayInputStream(scaledBytes),
-                        scaledBytes.length,
+                        new ByteArrayInputStream(originalBytes),
+                        originalBytes.length,
                         "image/jpeg"
                 );
 
@@ -592,7 +590,7 @@ public class PhotoProcessingService {
                         normalizedFileName,
                         finalBucket,
                         destinationKey,
-                        scaledBytes.length,
+                        originalBytes.length,
                         primaryPhoto,
                         photoCaption,
                         contentChanged
@@ -607,7 +605,7 @@ public class PhotoProcessingService {
                         normalizedFileName,
                         finalBucket,
                         destinationKey,
-                        scaledBytes.length,
+                        originalBytes.length,
                         primaryPhoto,
                         photoCaption,
                         PROCESSED
@@ -1133,6 +1131,14 @@ public class PhotoProcessingService {
                 && Objects.equals(existingPhoto.getCaption(), photoCaption);
     }
 
+
+    /** A JPEG file starts with the bytes FF D8 FF. */
+    private static boolean isJpeg(byte[] bytes) {
+        return bytes.length >= 3
+                && (bytes[0] & 0xFF) == 0xFF
+                && (bytes[1] & 0xFF) == 0xD8
+                && (bytes[2] & 0xFF) == 0xFF;
+    }
 
     private static class RejectedPhotoUploadException extends RuntimeException {
 

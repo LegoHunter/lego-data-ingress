@@ -5,7 +5,6 @@ import io.legohunter.imaging.metadata.MetadataFingerprintService;
 import io.legohunter.imaging.metadata.impl.MetadataExtractorService;
 import io.legohunter.imaging.metadata.model.ConditionEnum;
 import io.legohunter.imaging.metadata.model.ImageMetadata;
-import io.legohunter.imaging.scaling.ImageScalingService;
 import io.legohunter.ingress.config.storage.S3BucketProperties;
 import io.legohunter.ingress.s3.api.S3Service;
 import io.legohunter.ingress.source.photo.metrics.PhotoMetricsService;
@@ -44,6 +43,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -53,9 +53,6 @@ class PhotoProcessingServiceTest {
 
     @Mock
     private S3Service s3Service;
-
-    @Mock
-    private ImageScalingService imageScalingService;
 
     @Mock
     private MetadataExtractorService metadataExtractorService;
@@ -68,6 +65,9 @@ class PhotoProcessingServiceTest {
 
     @Mock
     private S3BucketProperties s3BucketProperties;
+
+    @org.mockito.Spy
+    private PhotoIngestProperties photoIngestProperties = new PhotoIngestProperties();
 
     @Mock
     private ItemInventoryDao itemInventoryDao;
@@ -89,12 +89,10 @@ class PhotoProcessingServiceTest {
     private PhotoProcessingService service;
 
     private byte[] originalBytes;
-    private byte[] scaledBytes;
 
     @BeforeEach
     void setUp() {
-        originalBytes = "original-image".getBytes();
-        scaledBytes = "scaled-image".getBytes();
+        originalBytes = jpeg("original-image");
         lenient().when(s3BucketProperties.finalPhotoBucket()).thenReturn("lego-photos-sandbox");
         lenient().when(metadataFingerprintService.calculateHash(any())).thenReturn("metadata-hash");
         lenient().doAnswer(invocation -> invocation.getArgument(0))
@@ -119,9 +117,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata);
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("md5-1");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -155,7 +151,7 @@ class PhotoProcessingServiceTest {
                 eq("lego-photos-sandbox"),
                 eq("3001/uuid-1/md5-1.jpg"),
                 any(InputStream.class),
-                eq((long) scaledBytes.length),
+                eq((long) originalBytes.length),
                 eq("image/jpeg")
         );
         verify(itemInventoryPhotoDao).insertPhoto(
@@ -165,7 +161,7 @@ class PhotoProcessingServiceTest {
                 "test.jpg",
                 "lego-photos-sandbox",
                 "3001/uuid-1/md5-1.jpg",
-                scaledBytes.length,
+                originalBytes.length,
                 true,
                 "Front view",
                 PROCESSED
@@ -216,9 +212,7 @@ class PhotoProcessingServiceTest {
 
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-2", "3002", null, null, null, null));
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("md5-2");
         when(itemInventoryDao.findByUuid("uuid-2"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-2")));
@@ -238,7 +232,7 @@ class PhotoProcessingServiceTest {
                 "photo.jpg",
                 "lego-photos-sandbox",
                 "3002/uuid-2/md5-2.jpg",
-                scaledBytes.length,
+                originalBytes.length,
                 false,
                 null,
                 PROCESSED
@@ -263,9 +257,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", true, false, true, "Updated caption"));
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("new-md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(existingInventory));
@@ -282,7 +274,7 @@ class PhotoProcessingServiceTest {
                 "metadata-hash",
                 "lego-photos-sandbox",
                 "3001/uuid-1/new-md5.jpg",
-                scaledBytes.length,
+                originalBytes.length,
                 true,
                 "Updated caption",
                 PROCESSED
@@ -309,7 +301,7 @@ class PhotoProcessingServiceTest {
                 eq("lego-photos-sandbox"),
                 eq("3001/uuid-1/new-md5.jpg"),
                 any(InputStream.class),
-                eq((long) scaledBytes.length),
+                eq((long) originalBytes.length),
                 eq("image/jpeg")
         );
         verify(itemInventoryPhotoDao).replaceStoredObject(
@@ -319,7 +311,7 @@ class PhotoProcessingServiceTest {
                 "metadata-hash",
                 "lego-photos-sandbox",
                 "3001/uuid-1/new-md5.jpg",
-                scaledBytes.length,
+                originalBytes.length,
                 true,
                 "Updated caption",
                 PROCESSED
@@ -358,9 +350,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", false, false, true, "Metadata-only caption"));
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("same-md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(existingInventory));
@@ -428,9 +418,7 @@ class PhotoProcessingServiceTest {
                         null,
                         null
                 ));
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("new-md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(existingInventory));
@@ -447,7 +435,7 @@ class PhotoProcessingServiceTest {
                 "metadata-hash",
                 "lego-photos-sandbox",
                 "3001/uuid-1/new-md5.jpg",
-                scaledBytes.length,
+                originalBytes.length,
                 false,
                 null,
                 PROCESSED
@@ -517,9 +505,7 @@ class PhotoProcessingServiceTest {
                         ConditionEnum.E,
                         null
                 ));
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("7f7580228caebdd153e1d3fea8089833");
         when(itemInventoryDao.findByUuid("e57aad1b8724d89bab9c0d5fccbb3a99"))
                 .thenReturn(Optional.of(existingInventory));
@@ -572,9 +558,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", null, null, null, null));
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("duplicate-md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -635,7 +619,59 @@ class PhotoProcessingServiceTest {
                 "photos/rejected/photo.jpg"
         );
         verify(s3Service).deleteObject("bucket", "photos/photo.jpg");
-        verify(imageScalingService, never()).scale(any());
+        verify(photoMetricsService).incrementFailed("event");
+    }
+
+    @Test
+    void process_rejectsAPhotoLargerThanTheUploadLimit() {
+        // HOMELAB-99: the photo is stored as uploaded, so an export without the size cap is turned away.
+        photoIngestProperties.setMaxUploadBytes(originalBytes.length - 1);
+        PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/huge.jpg");
+        when(s3Service.getObject("bucket", "photos/huge.jpg"))
+                .thenReturn(new ByteArrayInputStream(originalBytes));
+        when(metadataExtractorService.extractMetadata(originalBytes))
+                .thenReturn(metadata("uuid-1", "3001", true, true, false, "Front view"));
+
+        service.process(event);
+
+        verify(s3Service).copyObject("bucket", "photos/huge.jpg", "bucket", "photos/rejected/huge.jpg");
+        verify(s3Service).deleteObject("bucket", "photos/huge.jpg");
+        verify(s3Service, never()).putObject(any(), any(), any(InputStream.class), anyLong(), any());
+        verify(itemInventoryDao, never()).upsert(any(ItemInventory.class));
+        verify(photoMetricsService).incrementFailed("event");
+    }
+
+    @Test
+    void process_acceptsAPhotoOfExactlyTheUploadLimitAndAnyPhotoWhenThereIsNoLimit() {
+        for (long limit : new long[]{originalBytes.length, 0}) {
+            photoIngestProperties.setMaxUploadBytes(limit);
+            PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/typo.jpg");
+            when(s3Service.getObject("bucket", "photos/typo.jpg"))
+                    .thenReturn(new ByteArrayInputStream(originalBytes));
+            when(metadataExtractorService.extractMetadata(originalBytes))
+                    .thenReturn(metadata("uuid-1", "3001", true, true, false, "Front view"));
+
+            service.process(event);
+        }
+
+        // Both photos passed the size check: each got as far as its fingerprint.
+        verify(metadataExtractorService, times(2)).calculateMd5(originalBytes);
+    }
+
+    @Test
+    void process_rejectsAFileThatIsNotAJpeg() {
+        // HOMELAB-99: nothing converts a photo to JPEG any more, so only a JPEG can be stored and published.
+        byte[] png = "\u0089PNG-image".getBytes();
+        PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/picture.png");
+        when(s3Service.getObject("bucket", "photos/picture.png"))
+                .thenReturn(new ByteArrayInputStream(png));
+        when(metadataExtractorService.extractMetadata(png))
+                .thenReturn(metadata("uuid-1", "3001", true, true, false, "Front view"));
+
+        service.process(event);
+
+        verify(s3Service).copyObject("bucket", "photos/picture.png", "bucket", "photos/rejected/picture.png");
+        verify(s3Service, never()).putObject(any(), any(), any(InputStream.class), anyLong(), any());
         verify(photoMetricsService).incrementFailed("event");
     }
 
@@ -647,8 +683,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("no-such-uuid", "3001", true, true, false, "Front view"));
-        when(imageScalingService.scale(originalBytes)).thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes)).thenReturn("md5-1");
+        when(metadataExtractorService.calculateMd5(originalBytes)).thenReturn("md5-1");
         when(itemInventoryDao.findByUuid("no-such-uuid")).thenReturn(Optional.empty());
 
         service.process(event);
@@ -680,8 +715,7 @@ class PhotoProcessingServiceTest {
     private void arrangeNewPhoto(String key, ImageMetadata metadata, ItemInventory item) {
         when(s3Service.getObject("lego-uploads-sandbox", key)).thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes)).thenReturn(metadata);
-        when(imageScalingService.scale(originalBytes)).thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes)).thenReturn("md5-new");
+        when(metadataExtractorService.calculateMd5(originalBytes)).thenReturn("md5-new");
         when(itemInventoryDao.findByUuid("uuid-1")).thenReturn(Optional.of(item));
         lenient().when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
                 .thenReturn(Optional.of(externalCatalogItem(123)));
@@ -810,9 +844,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "9999", null, null, null, null));
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -850,9 +882,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata);
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("md5-1");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -878,9 +908,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", null, null, null, null));
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("md5-fail");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -920,9 +948,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", null, null, null, null));
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("md5-rollback");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -940,7 +966,7 @@ class PhotoProcessingServiceTest {
                 "photo.jpg",
                         "lego-photos-sandbox",
                         "3001/uuid-1/md5-rollback.jpg",
-                        scaledBytes.length,
+                        originalBytes.length,
                         false,
                         null,
                         PROCESSED
@@ -963,9 +989,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(new ByteArrayInputStream(originalBytes));
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata("uuid-1", "3001", false, null, null, null));
-        when(imageScalingService.scale(originalBytes))
-                .thenReturn(scaledBytes);
-        when(metadataExtractorService.calculateMd5(scaledBytes))
+        when(metadataExtractorService.calculateMd5(originalBytes))
                 .thenReturn("md5");
         when(itemInventoryDao.findByUuid("uuid-1"))
                 .thenReturn(Optional.of(itemInventory(999, "uuid-1")));
@@ -1066,5 +1090,16 @@ class PhotoProcessingServiceTest {
                 itemCondition,
                 caption
         );
+    }
+
+    /** Bytes that start like a JPEG file, followed by the given text. */
+    private static byte[] jpeg(String content) {
+        byte[] text = content.getBytes();
+        byte[] bytes = new byte[text.length + 3];
+        bytes[0] = (byte) 0xFF;
+        bytes[1] = (byte) 0xD8;
+        bytes[2] = (byte) 0xFF;
+        System.arraycopy(text, 0, bytes, 3, text.length);
+        return bytes;
     }
 }
