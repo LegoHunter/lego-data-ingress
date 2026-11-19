@@ -73,7 +73,8 @@ class BricklinkMarketplaceSyncServiceTest {
             new BricklinkListingCreateInventoryMapper(),
             LotDescriptions.textOnly(),
             pricingDecisionDao,
-            transactions
+            transactions,
+            new BricklinkApiCredentialsRejectedMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry())
     );
 
     @Test

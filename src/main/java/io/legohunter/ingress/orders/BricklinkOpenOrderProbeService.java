@@ -22,6 +22,7 @@ import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderItem;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
 import io.legohunter.data.dto.MarketplaceOrderSyncRun;
+import io.legohunter.ingress.marketplace.bricklink.BricklinkApiCredentialsRejectedMetrics;
 import io.legohunter.ingress.marketplace.bricklink.BricklinkRestOutageClassifier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -71,6 +72,7 @@ public class BricklinkOpenOrderProbeService {
     private final ItemInventoryDao itemInventoryDao;
     private final BricklinkOrderProjectionService projectionService;
     private final ObjectMapper objectMapper;
+    private final BricklinkApiCredentialsRejectedMetrics credentialsRejectedMetrics;
 
     public BricklinkOrderProbeResult runOnce() {
         long startedAt = System.currentTimeMillis();
@@ -195,6 +197,7 @@ public class BricklinkOpenOrderProbeService {
                     payloadsWritten
             );
         } catch (RuntimeException e) {
+            credentialsRejectedMetrics.record(BricklinkApiCredentialsRejectedMetrics.Source.ORDER_POLL, e);
             if (BricklinkRestOutageClassifier.mayBeOutage(e)) {
                 return outageDeferred(syncRun, providerTag, apply, startedAt, e);
             }

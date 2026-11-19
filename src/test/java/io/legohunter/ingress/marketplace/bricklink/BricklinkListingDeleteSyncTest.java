@@ -58,7 +58,8 @@ class BricklinkListingDeleteSyncTest {
             new BricklinkListingCreateInventoryMapper(),
             LotDescriptions.textOnly(),
             mock(PricingDecisionDao.class),
-            transactions
+            transactions,
+            new BricklinkApiCredentialsRejectedMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry())
     );
 
     @BeforeEach

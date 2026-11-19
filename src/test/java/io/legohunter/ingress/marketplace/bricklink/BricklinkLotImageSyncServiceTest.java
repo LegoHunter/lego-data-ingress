@@ -65,7 +65,7 @@ class BricklinkLotImageSyncServiceTest {
     private final BricklinkLotImageSyncService service = new BricklinkLotImageSyncService(
             properties, syncProperties, syncRequestDao, marketplaceListingDao, bricklinkMarketplaceListingDao, itemInventoryDao,
             itemInventoryPhotoDao, bricklinkRestClient, new BricklinkRemoteInventorySafetyService(), s3Service, imageScalingService, gateway,
-            gatewayProperties);
+            gatewayProperties, new BricklinkApiCredentialsRejectedMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
 
     private BricklinkMarketplaceListing mapping;
 

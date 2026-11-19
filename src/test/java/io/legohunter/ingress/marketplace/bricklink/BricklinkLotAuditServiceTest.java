@@ -6,6 +6,7 @@ import com.bricklink.api.rest.model.v1.BricklinkResource;
 import com.bricklink.api.rest.model.v1.Inventory;
 import com.bricklink.api.rest.model.v1.Item;
 import io.legohunter.data.enums.LegoEnvironment;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -18,7 +19,20 @@ import static org.mockito.Mockito.when;
 
 class BricklinkLotAuditServiceTest {
     private final BricklinkRestClient bricklinkRestClient = mock(BricklinkRestClient.class);
-    private final BricklinkLotAuditService service = new BricklinkLotAuditService(bricklinkRestClient);
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+    private final BricklinkLotAuditService service = new BricklinkLotAuditService(
+            bricklinkRestClient, new BricklinkApiCredentialsRejectedMetrics(meterRegistry));
+
+    @Test
+    void aRefusedTokenIsCountedForTheAlert() {
+        when(bricklinkRestClient.getInventories(anyMap()))
+                .thenThrow(new BricklinkClientException(401, "BAD_OAUTH_REQUEST", "TOKEN_IP_MISMATCHED"));
+
+        BricklinkLotAuditReport report = service.audit();
+
+        assertThat(report.outcome()).isEqualTo("FAILED");
+        assertThat(meterRegistry.counter("bricklink_api_credentials_rejected", "source", "lot_audit").count()).isEqualTo(1.0);
+    }
 
     @Test
     void aPublicLotCarryingASandboxBlockRaisesTheAlert() {
