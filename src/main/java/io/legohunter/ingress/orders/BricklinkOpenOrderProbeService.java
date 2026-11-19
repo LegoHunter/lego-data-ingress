@@ -22,6 +22,7 @@ import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderItem;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
 import io.legohunter.data.dto.MarketplaceOrderSyncRun;
+import io.legohunter.ingress.marketplace.bricklink.BricklinkRestOutageClassifier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -56,6 +57,7 @@ public class BricklinkOpenOrderProbeService {
     private static final String ORDER_RESPONSE_PAYLOAD = "ORDER_RESPONSE";
     private static final String ORDER_ITEMS_RESPONSE_PAYLOAD = "ORDER_ITEMS_RESPONSE";
     private static final String RESERVED_FOR_ORDER = "RESERVED_FOR_ORDER";
+    static final String OUTAGE_DEFERRED = "OUTAGE_DEFERRED";
 
     private final BricklinkRestClient bricklinkRestClient;
     private final BricklinkOrderSyncProperties properties;
@@ -193,9 +195,36 @@ public class BricklinkOpenOrderProbeService {
                     payloadsWritten
             );
         } catch (RuntimeException e) {
+            if (BricklinkRestOutageClassifier.clearsOnItsOwn(e)) {
+                return outageDeferred(syncRun, providerTag, apply, startedAt, e);
+            }
             completeSyncRun(syncRun, "FAILED", 0, 1, e.getMessage());
             throw e;
         }
+    }
+
+    /**
+     * BrickLink is down or in maintenance (HOMELAB-121). Nothing was read, so nothing is lost: the next run after
+     * BrickLink returns picks up every open order. One WARN line, no stack trace, and the run is recorded as
+     * OUTAGE_DEFERRED rather than FAILED, so a maintenance window does not look like a broken poller.
+     */
+    private BricklinkOrderProbeResult outageDeferred(
+            MarketplaceOrderSyncRun syncRun,
+            String providerTag,
+            boolean apply,
+            long startedAt,
+            RuntimeException failure
+    ) {
+        long elapsedMillis = System.currentTimeMillis() - startedAt;
+        metricsService.recordRun(providerTag, OUTAGE_DEFERRED.toLowerCase(), elapsedMillis);
+        completeSyncRun(syncRun, OUTAGE_DEFERRED, 0, 0, failure.getMessage());
+        log.warn(
+                "bricklink.order_sync.probe.outage_deferred provider={} elapsedMillis={} message={}",
+                providerTag,
+                elapsedMillis,
+                failure.getMessage()
+        );
+        return new BricklinkOrderProbeResult(OUTAGE_DEFERRED, 0, 0, 0, 0, elapsedMillis, apply, 0, 0, 0);
     }
 
     List<Order> getOpenOrderSummaries(List<String> statuses) {

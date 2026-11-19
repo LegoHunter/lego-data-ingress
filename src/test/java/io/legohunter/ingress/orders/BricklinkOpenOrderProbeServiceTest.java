@@ -1,6 +1,7 @@
 package io.legohunter.ingress.orders;
 
 import com.bricklink.api.rest.client.BricklinkRestClient;
+import com.bricklink.api.rest.exception.BricklinkClientException;
 import com.bricklink.api.rest.model.v1.BricklinkResource;
 import com.bricklink.api.rest.model.v1.Cost;
 import com.bricklink.api.rest.model.v1.Item;
@@ -36,6 +37,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
@@ -330,6 +332,67 @@ class BricklinkOpenOrderProbeServiceTest {
         assertThat(result.orderItemsWritten()).isEqualTo(1);
         verify(marketplaceOrderItemDao).update(any(io.legohunter.data.dto.MarketplaceOrderItem.class));
         verify(itemInventoryDao, never()).updateInventoryState(any(), any(), any());
+    }
+
+    @Test
+    void aMaintenanceRedirectDefersTheRunInsteadOfFailingIt() {
+        properties.getScheduled().setApply(true);
+        properties.setStatuses(List.of("PENDING"));
+        properties.setIncludeUnfiledCancelled(false);
+        MarketplaceOrderSyncRun syncRun = new MarketplaceOrderSyncRun();
+        when(marketplaceOrderSyncRunDao.insert(any(MarketplaceOrderSyncRun.class))).thenReturn(syncRun);
+        when(bricklinkRestClient.getOrders(anyMap(), any())).thenThrow(maintenanceRedirect());
+
+        BricklinkOrderProbeResult result = probeService.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("OUTAGE_DEFERRED");
+        assertThat(result.applied()).isTrue();
+        assertThat(result.ordersDiscovered()).isZero();
+        assertThat(result.ordersFailed()).isZero();
+        assertThat(syncRun.getSyncStatusCode()).isEqualTo("OUTAGE_DEFERRED");
+        assertThat(syncRun.getOrdersFailed()).isZero();
+        assertThat(syncRun.getErrorMessage()).contains("maintenance.bricklink.com");
+        assertThat(syncRun.getCompletedAt()).isNotNull();
+        verify(marketplaceOrderSyncRunDao).update(syncRun);
+        verifyNoInteractions(marketplaceOrderDao, marketplaceOrderItemDao, marketplaceOrderPayloadDao, itemInventoryDao);
+        assertThat(meterRegistry.counter(
+                "bricklink_order_sync",
+                "provider", "bricklink",
+                "outcome", "outage_deferred"
+        ).count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void aMaintenanceRedirectInDryRunReturnsDeferredWithoutARunRecord() {
+        when(bricklinkRestClient.getOrders(anyMap(), any())).thenThrow(maintenanceRedirect());
+
+        BricklinkOrderProbeResult result = probeService.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("OUTAGE_DEFERRED");
+        assertThat(result.applied()).isFalse();
+        verifyNoInteractions(marketplaceOrderSyncRunDao);
+    }
+
+    @Test
+    void aRejectedTokenStillFailsTheRun() {
+        properties.getScheduled().setApply(true);
+        properties.setStatuses(List.of("PENDING"));
+        properties.setIncludeUnfiledCancelled(false);
+        MarketplaceOrderSyncRun syncRun = new MarketplaceOrderSyncRun();
+        when(marketplaceOrderSyncRunDao.insert(any(MarketplaceOrderSyncRun.class))).thenReturn(syncRun);
+        BricklinkClientException rejected = new BricklinkClientException(401, "BAD_OAUTH_REQUEST", "TOKEN_IP_MISMATCHED");
+        when(bricklinkRestClient.getOrders(anyMap(), any())).thenThrow(rejected);
+
+        assertThatThrownBy(() -> probeService.runOnce()).isSameAs(rejected);
+
+        assertThat(syncRun.getSyncStatusCode()).isEqualTo("FAILED");
+        assertThat(syncRun.getOrdersFailed()).isEqualTo(1);
+    }
+
+    private static BricklinkClientException maintenanceRedirect() {
+        return new BricklinkClientException(302,
+                "GET https://api.bricklink.com/api/store/v1/orders?direction=in&status=PENDING",
+                "Unexpected redirect to [https://maintenance.bricklink.com:443/recovery.html].");
     }
 
     @Test

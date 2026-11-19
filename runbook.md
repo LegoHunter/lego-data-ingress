@@ -309,6 +309,12 @@ Where they run: SANDBOX (both `APPLY`), DEV (both `DRY_RUN`), PROD (off until th
 - **`BricklinkOpenOrderProbeJob`** reads open BrickLink orders. With `apply=true` it stages them in this
   environment's database (`marketplace_order`, `marketplace_order_item`, `marketplace_order_payload`, one
   `marketplace_order_sync_run` per run). It never writes to BrickLink.
+  While BrickLink is down or in maintenance (a redirect such as the maintenance page, 429, 5xx, I/O or timeout) a
+  run logs one WARN `bricklink.order_sync.probe.outage_deferred`, records the run as `OUTAGE_DEFERRED` and counts
+  `bricklink_order_sync{outcome="outage_deferred"}`; the next run after BrickLink returns reads every open order.
+  A 401 or 403 (for example `TOKEN_IP_MISMATCHED`) still fails the run with an ERROR: it needs someone to act.
+  The lot audit and the inventory reconciliation log the same outages as WARN `bricklink.lot_audit.outage` and
+  `bricklink.inventory_reconciliation.outage` (no stack trace); their report outcome stays `FAILED`.
 - **`FulfillmentScheduledSyncJob`** maps invoiced, staged orders to ShipStation orders, records shipments and
   marks BrickLink orders shipped. It writes only when `lego.fulfillment.sync.scheduled.apply=true` **and**
   `lego.environment.production=true`. Elsewhere it logs `fulfillment.sync_job.apply_suppressed` and maps only.

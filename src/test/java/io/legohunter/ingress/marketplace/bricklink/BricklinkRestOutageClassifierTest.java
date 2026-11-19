@@ -43,4 +43,28 @@ class BricklinkRestOutageClassifierTest {
         assertThat(BricklinkRestOutageClassifier.mayBeOutage(new IllegalStateException("BrickLink inventory id is missing"))).isFalse();
         assertThat(BricklinkRestOutageClassifier.mayBeOutage(null)).isFalse();
     }
+
+    @ParameterizedTest
+    @ValueSource(ints = {302, 429, 500, 503})
+    void outagesBrickLinkEndsByItselfClearOnTheirOwn(int code) {
+        assertThat(BricklinkRestOutageClassifier.clearsOnItsOwn(new BricklinkClientException(code, "m", "d"))).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {401, 403})
+    void aRejectedTokenOrBlockedClientDoesNotClearOnItsOwn(int code) {
+        assertThat(BricklinkRestOutageClassifier.clearsOnItsOwn(new BricklinkClientException(code, "BAD_OAUTH_REQUEST", "TOKEN_IP_MISMATCHED"))).isFalse();
+        assertThat(BricklinkRestOutageClassifier.clearsOnItsOwn(
+                new IllegalStateException("wrapped", new BricklinkClientException(code, "m", "d")))).isFalse();
+    }
+
+    @Test
+    void theMaintenanceRedirectAndIoFailuresClearOnTheirOwnButLocalFailuresDoNot() {
+        assertThat(BricklinkRestOutageClassifier.clearsOnItsOwn(new BricklinkClientException(302,
+                "GET https://api.bricklink.com/api/store/v1/orders?direction=in&status=PENDING",
+                "Unexpected redirect to [https://maintenance.bricklink.com:443/recovery.html]."))).isTrue();
+        assertThat(BricklinkRestOutageClassifier.clearsOnItsOwn(new ResourceAccessException("I/O", new ConnectException("refused")))).isTrue();
+        assertThat(BricklinkRestOutageClassifier.clearsOnItsOwn(new BricklinkClientException(404, "m", "d"))).isFalse();
+        assertThat(BricklinkRestOutageClassifier.clearsOnItsOwn(new IllegalStateException("no data"))).isFalse();
+    }
 }
