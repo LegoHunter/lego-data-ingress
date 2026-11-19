@@ -1,6 +1,7 @@
 package io.legohunter.ingress.marketplace.bricklink;
 
 import com.bricklink.api.rest.client.BricklinkRestClient;
+import com.bricklink.api.rest.exception.BricklinkClientException;
 import com.bricklink.api.rest.model.v1.BricklinkResource;
 import com.bricklink.api.rest.model.v1.Inventory;
 import com.bricklink.api.rest.model.v1.Item;
@@ -105,6 +106,15 @@ class BricklinkLotAuditServiceTest {
 
         assertThat(report.outcome()).isEqualTo("FAILED");
         assertThat(report.errorMessage()).contains("401");
+    }
+
+    @Test
+    void aMaintenanceWindowIsStillReportedAsFailedNotClean() {
+        when(bricklinkRestClient.getInventories(anyMap())).thenThrow(new BricklinkClientException(302,
+                "GET https://api.bricklink.com/api/store/v1/inventories",
+                "Unexpected redirect to [https://maintenance.bricklink.com:443/recovery.html]."));
+
+        assertThat(service.audit().outcome()).isEqualTo("FAILED");
     }
 
     @Test

@@ -21,15 +21,21 @@ import java.util.Set;
  * This is only a candidate. The REST client does not follow redirects, and BrickLink also answers a malformed request
  * URL with a redirect, so the sync service confirms an outage with a probe call before it stops counting attempts.
  * Everything else (400, 404, a validation error, a local check) is a failure of that request.
+ *
+ * <p>The jobs that read from BrickLink without a request queue (the order poll, the lot audit, the reconciliation)
+ * use the same rule (HOMELAB-121): on an outage they log a warning and try again on their next run. A rejected token
+ * (401) is treated as an outage everywhere, like the queued syncs do; it is meant to be caught by a dedicated alert,
+ * not by error-level logging.
  */
-final class BricklinkRestOutageClassifier {
+public final class BricklinkRestOutageClassifier {
     private static final Set<Integer> CLIENT_WIDE_STATUS_CODES = Set.of(401, 403, 429);
     private static final String MAINTENANCE_HOST = "maintenance.bricklink.com";
 
     private BricklinkRestOutageClassifier() {
     }
 
-    static boolean mayBeOutage(Throwable failure) {
+    /** True when the failure may be a BrickLink-wide outage; see the class comment for the rules. */
+    public static boolean mayBeOutage(Throwable failure) {
         for (Throwable cause = failure; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
             if (mayBeOutageItself(cause)) {
                 return true;

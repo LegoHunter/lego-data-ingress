@@ -70,7 +70,12 @@ public class BricklinkInventoryReconciliationService {
                 throw new IllegalStateException("BrickLink inventory search returned no data");
             }
         } catch (RuntimeException e) {
-            log.error("bricklink.inventory_reconciliation.failed environmentCode={} message={}", environmentCode, e.getMessage(), e);
+            if (BricklinkRestOutageClassifier.mayBeOutage(e)) {
+                // BrickLink cannot be used now (outage, maintenance, refused token): the next run reconciles. No stack trace (HOMELAB-121).
+                log.warn("bricklink.inventory_reconciliation.outage environmentCode={} message={}", environmentCode, e.getMessage());
+            } else {
+                log.error("bricklink.inventory_reconciliation.failed environmentCode={} message={}", environmentCode, e.getMessage(), e);
+            }
             return new BricklinkInventoryReconciliationReport(
                     BricklinkInventoryReconciliationReport.FAILED, environmentCode, checkedAt,
                     0, 0, 0, 0, 0, emptyCounts(), List.of(), e.getMessage(), elapsed(start));
