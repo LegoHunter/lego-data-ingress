@@ -84,6 +84,7 @@ public class BricklinkLotImageSyncService {
     private final ImageScalingService imageScalingService;
     private final BricklinkWebGatewayClient gateway;
     private final BricklinkWebGatewayProperties gatewayProperties;
+    private final BricklinkApiCredentialsRejectedMetrics credentialsRejectedMetrics;
 
     public BricklinkLotImageSyncResult runOnce() {
         long start = System.currentTimeMillis();
@@ -255,6 +256,7 @@ public class BricklinkLotImageSyncService {
                 }
             }
         } catch (RuntimeException e) {
+            credentialsRejectedMetrics.record(BricklinkApiCredentialsRejectedMetrics.Source.LOT_IMAGE_SYNC, e);
             if (BricklinkRestOutageClassifier.mayBeOutage(e)) {
                 // The official API is down, so the safety check cannot run. Not this request's fault.
                 counters.deferred++;

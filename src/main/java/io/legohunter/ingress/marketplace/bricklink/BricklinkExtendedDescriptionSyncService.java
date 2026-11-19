@@ -79,6 +79,7 @@ public class BricklinkExtendedDescriptionSyncService {
     private final BricklinkRestClient bricklinkRestClient;
     private final BricklinkRemoteInventorySafetyService safetyService;
     private final BricklinkWebGatewayClient gateway;
+    private final BricklinkApiCredentialsRejectedMetrics credentialsRejectedMetrics;
 
     public BricklinkExtendedDescriptionSyncResult runOnce() {
         long start = System.currentTimeMillis();
@@ -274,6 +275,7 @@ public class BricklinkExtendedDescriptionSyncService {
                 }
             }
         } catch (RuntimeException e) {
+            credentialsRejectedMetrics.record(BricklinkApiCredentialsRejectedMetrics.Source.EXTENDED_DESCRIPTION_SYNC, e);
             if (BricklinkRestOutageClassifier.mayBeOutage(e)) {
                 // The official API is down, so the safety check cannot run. Not this request's fault.
                 counters.deferred++;

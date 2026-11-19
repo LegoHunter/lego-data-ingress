@@ -77,6 +77,7 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
     private final BricklinkLotDescription lotDescription;
     private final PricingDecisionDao pricingDecisionDao;
     private final TransactionOperations transactions;
+    private final BricklinkApiCredentialsRejectedMetrics credentialsRejectedMetrics;
 
     public BricklinkMarketplaceSyncResult runOnce() {
         long start = System.currentTimeMillis();
@@ -258,6 +259,7 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
      * stop every run at the same place.
      */
     private boolean isConfirmedOutage(RuntimeException failure) {
+        credentialsRejectedMetrics.record(BricklinkApiCredentialsRejectedMetrics.Source.MARKETPLACE_SYNC, failure);
         if (!BricklinkRestOutageClassifier.mayBeOutage(failure)) {
             return false;
         }
@@ -265,6 +267,7 @@ public class BricklinkMarketplaceSyncService implements MarketplaceSyncPort {
             bricklinkRestClient.getColor(OUTAGE_PROBE_COLOR_ID);
             return false;
         } catch (RuntimeException probeFailure) {
+            credentialsRejectedMetrics.record(BricklinkApiCredentialsRejectedMetrics.Source.MARKETPLACE_SYNC, probeFailure);
             log.warn("bricklink.marketplace_sync.outage_probe_failed message={}", probeFailure.getMessage());
             return true;
         }

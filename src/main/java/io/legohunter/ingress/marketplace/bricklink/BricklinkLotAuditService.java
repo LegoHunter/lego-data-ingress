@@ -44,6 +44,7 @@ public class BricklinkLotAuditService {
     private static final Pattern ENV_TAG = Pattern.compile("LEGOHUNTER_ENV\\s*=\\s*([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE);
 
     private final BricklinkRestClient bricklinkRestClient;
+    private final BricklinkApiCredentialsRejectedMetrics credentialsRejectedMetrics;
 
     public BricklinkLotAuditReport audit() {
         long start = System.currentTimeMillis();
@@ -55,6 +56,7 @@ public class BricklinkLotAuditService {
                 throw new IllegalStateException("BrickLink inventory search returned no data");
             }
         } catch (RuntimeException e) {
+            credentialsRejectedMetrics.record(BricklinkApiCredentialsRejectedMetrics.Source.LOT_AUDIT, e);
             if (BricklinkRestOutageClassifier.mayBeOutage(e)) {
                 // BrickLink cannot be used now (outage, maintenance, refused token): the next run audits. No stack trace (HOMELAB-121).
                 log.warn("bricklink.lot_audit.outage message={}", e.getMessage());

@@ -88,7 +88,8 @@ class BricklinkOpenOrderProbeServiceTest {
                 marketplaceListingDao,
                 itemInventoryDao,
                 projectionService,
-                new ObjectMapper().findAndRegisterModules()
+                new ObjectMapper().findAndRegisterModules(),
+                new io.legohunter.ingress.marketplace.bricklink.BricklinkApiCredentialsRejectedMetrics(meterRegistry)
         );
         lenient().when(projectionService.project(any(MarketplaceOrder.class), any(Set.class), any(Order.class)))
                 .thenReturn(new BricklinkOrderProjectionResult(1L, false, 1, 0));
@@ -388,6 +389,7 @@ class BricklinkOpenOrderProbeServiceTest {
         assertThat(result.outcome()).isEqualTo("OUTAGE_DEFERRED");
         assertThat(syncRun.getSyncStatusCode()).isEqualTo("OUTAGE_DEFERRED");
         assertThat(syncRun.getErrorMessage()).contains("TOKEN_IP_MISMATCHED");
+        assertThat(meterRegistry.counter("bricklink_api_credentials_rejected", "source", "order_poll").count()).isEqualTo(1.0);
     }
 
     @Test

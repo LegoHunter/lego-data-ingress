@@ -36,7 +36,7 @@ class BricklinkInventoryReconciliationServiceTest {
     private final MarketplaceListingSyncRequestDao syncRequestDao = mock(MarketplaceListingSyncRequestDao.class);
     private final BricklinkInventoryReconciliationService service = new BricklinkInventoryReconciliationService(
             properties, environment, bricklinkRestClient, marketplaceListingDao, bricklinkMarketplaceListingDao, syncRequestDao,
-            LotDescriptions.textOnly());
+            LotDescriptions.textOnly(), new BricklinkApiCredentialsRejectedMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
 
     @BeforeEach
     void runAsSandbox() {

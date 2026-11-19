@@ -59,7 +59,8 @@ class BricklinkExtendedDescriptionSyncServiceTest {
     private final BricklinkExtendedDescriptionSyncService service = new BricklinkExtendedDescriptionSyncService(
             properties, syncProperties, gatewayProperties, syncRequestDao, marketplaceListingDao, bricklinkMarketplaceListingDao,
             itemInventoryDao, new BricklinkLotTextSource(mock(ExternalImageAlbumDao.class), itemInventoryPhotoDao),
-            bricklinkRestClient, new BricklinkRemoteInventorySafetyService(), gateway);
+            bricklinkRestClient, new BricklinkRemoteInventorySafetyService(), gateway,
+            new BricklinkApiCredentialsRejectedMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
 
     private BricklinkMarketplaceListing mapping;
 
