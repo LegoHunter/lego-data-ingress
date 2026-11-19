@@ -19,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+import org.springframework.web.util.HtmlUtils;
 
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -61,6 +62,8 @@ public class BricklinkExtendedDescriptionSyncService {
     static final String SYNC_REASON = "EXTENDED_DESCRIPTION_OUT_OF_DATE";
     static final String CREATED_BY = "BricklinkExtendedDescriptionSync";
     static final String GATEWAY_NOT_CONFIGURED = "GATEWAY_NOT_CONFIGURED";
+    /** BrickLink kept only the start of the text: its Extended Description has a length limit (HOMELAB-82). */
+    static final String EXTENDED_DESCRIPTION_TRUNCATED = "EXTENDED_DESCRIPTION_TRUNCATED";
 
     private static final String STATUS_PENDING = BricklinkGatewaySyncRequests.STATUS_PENDING;
     private static final String STATUS_CLAIMED = BricklinkGatewaySyncRequests.STATUS_CLAIMED;
@@ -238,6 +241,16 @@ public class BricklinkExtendedDescriptionSyncService {
             switch (answer.kind()) {
                 case STORED -> {
                     bricklinkMarketplaceListingDao.updateExtendedDescription(request.getMarketplaceListingId(), BricklinkLotText.hash(text), now());
+                    String truncation = truncation(text, answer.storedText());
+                    if (truncation != null) {
+                        // Recorded all the same, so the same text is not sent again on every run: the captions must
+                        // be shortened, and the next caption change sends the new text.
+                        counters.blocked++;
+                        requests().markBlocked(request, EXTENDED_DESCRIPTION_TRUNCATED, truncation, now());
+                        log.error("bricklink.extended_description.truncated marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} message={}",
+                                request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), context.lotId(), truncation);
+                        return false;
+                    }
                     requests().markSucceeded(request, remote, now());
                     counters.stored++;
                     log.info("bricklink.extended_description.sent marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} characters={}",
@@ -273,6 +286,26 @@ public class BricklinkExtendedDescriptionSyncService {
                     request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), e.getMessage(), e);
             return false;
         }
+    }
+
+    /**
+     * Whether BrickLink cut the text short, judged from what the gateway read back. BrickLink keeps the text as
+     * HTML ({@code "} as {@code &quot;}, line ends as LF) and may tidy it, so the stored text is unescaped first; only
+     * a stored text that is a strict start of the one sent counts.
+     *
+     * @return a message with both lengths, or null when the text was kept whole (or nothing was read back)
+     */
+    static String truncation(String sent, String stored) {
+        if (stored == null || sent == null || sent.isEmpty()) {
+            return null;
+        }
+        String wanted = sent.replace("\r\n", "\n").strip();
+        String kept = HtmlUtils.htmlUnescape(stored).replace("\r\n", "\n").strip();
+        if (kept.length() < wanted.length() && wanted.startsWith(kept)) {
+            return "BrickLink kept %d of the %d characters sent (%d as BrickLink stores them); shorten the photo captions"
+                    .formatted(kept.length(), wanted.length(), stored.strip().length());
+        }
+        return null;
     }
 
     private Context context(Integer marketplaceListingId, MarketplaceListingSyncRequest request) {

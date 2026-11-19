@@ -140,11 +140,12 @@ lego:
       mode: APPLY
       scheduled:
         enabled: true
-    # Extended Description sync (HOMELAB-82). DRY_RUN first: it checks and logs what it would send,
-    # and writes nothing. The Description's "See Extended Description" sentence appears with APPLY.
+    # Extended Description sync (HOMELAB-82), writing (owner's go-ahead 2026-11-19). With APPLY the
+    # lot Description also carries the "See Extended Description" sentence; lego-data-service's
+    # marketplace-listing-drafts.extended-description-sync must be true here too.
     extended-description-sync:
       enabled: true
-      mode: DRY_RUN
+      mode: APPLY
       scheduled:
         enabled: true
     inventory-reconciliation:

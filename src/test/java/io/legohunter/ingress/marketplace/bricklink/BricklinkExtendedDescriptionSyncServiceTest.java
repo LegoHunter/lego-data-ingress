@@ -116,6 +116,29 @@ class BricklinkExtendedDescriptionSyncServiceTest {
     }
 
     @Test
+    void aTextBricklinkCutShortIsRecordedButBlockedSoTheOwnerSeesIt() {
+        captions(row(100, null, 1, "Box has a dent."), row(100, null, 2, "Sticker sheet applied."));
+        waiting(request());
+        when(gateway.putExtendedDescription(anyLong(), anyString()))
+                .thenReturn(new Answer(Kind.STORED, null, null, "Box has a dent.\nSticker"));
+
+        BricklinkExtendedDescriptionSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isOne();
+        verify(bricklinkMarketplaceListingDao).updateExtendedDescription(eq(100), any(), any(ZonedDateTime.class));
+        assertThat(lastUpdate().getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        assertThat(lastUpdate().getLastErrorMessage()).startsWith("EXTENDED_DESCRIPTION_TRUNCATED").contains("kept 23 of the 38");
+    }
+
+    @Test
+    void htmlEscapingAndLineEndsAreNotTruncation() {
+        assertThat(BricklinkExtendedDescriptionSyncService.truncation("Box \"dented\" & worn.\nOK", "Box &quot;dented&quot; &amp; worn.\r\nOK")).isNull();
+        assertThat(BricklinkExtendedDescriptionSyncService.truncation("Box has a dent.", null)).isNull();
+        assertThat(BricklinkExtendedDescriptionSyncService.truncation("", "")).isNull();
+        assertThat(BricklinkExtendedDescriptionSyncService.truncation("abcdef", "abc")).contains("kept 3 of the 6");
+    }
+
+    @Test
     void aLotThatHoldsTheTextAlreadyIsNotQueued() {
         String hash = BricklinkLotText.hash("Box has a dent.\nSticker sheet applied.");
         captions(row(100, hash, 1, "Box has a dent."), row(100, hash, 2, "Sticker sheet applied."));

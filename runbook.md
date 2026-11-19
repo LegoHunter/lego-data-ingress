@@ -299,9 +299,10 @@ the marketplace sync's mode are both `APPLY`.
 
 Each run compares the local database only (no BrickLink request), queues a request for every listing that is out
 of date, and sends `batch-size` (3) of them. The text is built again when it is sent. Hand edits made on BrickLink
-are not noticed. Log events: `bricklink.extended_description.{queued,sent,deferred,blocked,dry_run_verified}`.
-Where they run: SANDBOX (lot image `APPLY`, Extended Description `DRY_RUN`), DEV (both `DRY_RUN`), PROD (off until
-the gateway is there, HOMELAB-114).
+are not noticed. If the text the gateway reads back is only the start of the one sent, BrickLink cut it short: the
+request is `BLOCKED` with `EXTENDED_DESCRIPTION_TRUNCATED` and both lengths (shorten the captions). Log events:
+`bricklink.extended_description.{queued,sent,deferred,blocked,truncated,dry_run_verified}`.
+Where they run: SANDBOX (both `APPLY`), DEV (both `DRY_RUN`), PROD (off until the gateway is there, HOMELAB-114).
 
 ## Orders and fulfillment
 

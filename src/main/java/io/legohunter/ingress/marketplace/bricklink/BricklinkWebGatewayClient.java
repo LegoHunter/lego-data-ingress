@@ -28,11 +28,17 @@ public interface BricklinkWebGatewayClient {
     }
 
     /**
-     * @param code    the gateway's error code (for example SESSION_SIGNED_OUT), or a local one
-     *                (UNREACHABLE, HTTP_500); null when stored
-     * @param message safe to log and to store on the sync request
+     * @param code       the gateway's error code (for example SESSION_SIGNED_OUT), or a local one
+     *                   (UNREACHABLE, HTTP_500); null when stored
+     * @param message    safe to log and to store on the sync request
+     * @param storedText for an Extended Description write: the text the gateway read back from the lot, as
+     *                   BrickLink keeps it (HTML-escaped); null otherwise
      */
-    record Answer(Kind kind, String code, String message) {
+    record Answer(Kind kind, String code, String message, String storedText) {
+        Answer(Kind kind, String code, String message) {
+            this(kind, code, message, null);
+        }
+
         static Answer stored() {
             return new Answer(Kind.STORED, null, null);
         }

@@ -119,6 +119,7 @@ class HttpBricklinkWebGatewayClientTest {
                 .putExtendedDescription(569454190L, "Box has a \"dent\".\nSticker sheet applied.");
 
         assertThat(answer.kind()).isEqualTo(Kind.STORED);
+        assertThat(answer.storedText()).isEqualTo("x");
         assertThat(method.get()).isEqualTo("PUT");
         assertThat(path.get()).isEqualTo("/lots/569454190/extended-description");
         assertThat(authorization.get()).isEqualTo("Bearer test-caller-token");

@@ -99,13 +99,14 @@ class SpringProfileEnvironmentTest {
     }
 
     @Test
-    void theExtendedDescriptionSyncDryRunsInSandboxAndDevAndIsOffInProd() {
-        // HOMELAB-82: it writes through the web gateway, which PROD does not have yet (HOMELAB-114). DRY_RUN until
-        // the owner's go-ahead; only APPLY adds the "See Extended Description" sentence to the lot Description.
+    void theExtendedDescriptionSyncWritesInSandboxDryRunsInDevAndIsOffInProd() {
+        // HOMELAB-82: it writes through the web gateway, which PROD does not have yet (HOMELAB-114). Only APPLY adds
+        // the "See Extended Description" sentence to the lot Description.
+        assertThat(String.valueOf(podConfiguration("sandbox").get("lego.bricklink.extended-description-sync.mode"))).isEqualTo("APPLY");
+        assertThat(String.valueOf(podConfiguration("dev").get("lego.bricklink.extended-description-sync.mode"))).isEqualTo("DRY_RUN");
         for (String env : List.of("sandbox", "dev")) {
             Properties lower = podConfiguration(env);
             assertThat(String.valueOf(lower.get("lego.bricklink.extended-description-sync.enabled"))).as(env).isEqualTo("true");
-            assertThat(String.valueOf(lower.get("lego.bricklink.extended-description-sync.mode"))).as(env).isEqualTo("DRY_RUN");
             assertThat(String.valueOf(lower.get("lego.bricklink.extended-description-sync.scheduled.enabled"))).as(env).isEqualTo("true");
         }
         assertThat(String.valueOf(podConfiguration("prod").get("lego.bricklink.extended-description-sync.enabled"))).isEqualTo("false");

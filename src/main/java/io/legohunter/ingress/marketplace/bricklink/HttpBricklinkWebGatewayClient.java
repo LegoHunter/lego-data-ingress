@@ -80,7 +80,7 @@ public class HttpBricklinkWebGatewayClient implements BricklinkWebGatewayClient 
     /** The gateway answers errors as {"code": "...", "message": "..."}. */
     static Answer answer(int status, String body) {
         if (status == 200) {
-            return Answer.stored();
+            return new Answer(Kind.STORED, null, null, storedExtendedDescription(body));
         }
         String code = "HTTP_" + status;
         String message = "The BrickLink web gateway answered HTTP " + status;
@@ -100,6 +100,16 @@ public class HttpBricklinkWebGatewayClient implements BricklinkWebGatewayClient 
             case 400, 401, 403, 404, 409, 413, 415 -> new Answer(Kind.REFUSED, code, message);
             default -> new Answer(Kind.FAILED, code, message);
         };
+    }
+
+    /** The {@code extendedDescription} of a 200 answer to an Extended Description write; null for anything else. */
+    private static String storedExtendedDescription(String body) {
+        try {
+            JsonNode json = MAPPER.readTree(body == null ? "" : body);
+            return json != null && json.hasNonNull("extendedDescription") ? json.get("extendedDescription").asText() : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private String baseUrl() {
