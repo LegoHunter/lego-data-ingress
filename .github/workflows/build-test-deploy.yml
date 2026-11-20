@@ -23,9 +23,10 @@ on:
       - synchronize
       - closed
 
-# Upper bound for the shared pipeline's jobs (each job narrows it further).
+# Upper bound for the shared pipeline's jobs (each job narrows it further). contents:write is used
+# only by prod-release, which tags each PROD release and creates its GitHub Release (HOMELAB-127).
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -37,5 +38,7 @@ jobs:
       quay-username: ${{ vars.QUAY_USERNAME }}
       deploy-dev-enabled: ${{ vars.DEPLOY_DEV_ENABLED == 'true' }}
       deploy-prod-enabled: ${{ vars.DEPLOY_PROD_ENABLED == 'true' }}
+      jira-user-email: ${{ vars.JIRA_USER_EMAIL }}
     secrets:
       QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
