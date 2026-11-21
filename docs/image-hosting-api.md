@@ -373,25 +373,26 @@ attempt is planned again on the next run. Other results:
 
 A caption or keyword change alone never plans `REPLACE_PHOTO`; it stays `UPDATE_PHOTO_METADATA`.
 
-For album lifecycle actions, the executor also maintains `external_image_album.short_url`
-where possible:
+For album lifecycle actions, the executor also maintains `external_image_album.short_url`:
+Flickr's own short album link, `https://flic.kr/s/` followed by the album id in
+base58 (HOMELAB-128, from spike HOMELAB-120). It is calculated, in every
+environment, with no API call or credential. It replaced the bit.ly links,
+which only production made.
 
-- `CREATE_ALBUM` calls Bitly after Flickr returns the new album URL and stores
-  the generated short URL.
-- Existing-album adoption through `REPAIR_ALBUM_ID` looks up the Flickr album
-  URL in your Bitly account and stores the recovered short URL when one is
-  found.
-- Bitly lookup/generation failures are reported in the action result message
-  but do not fail the Flickr sync action.
-- Short links are made only where `lego.image-hosting.short-url.enabled` is
-  true, which is production alone (HOMELAB-118). Everywhere else the executor
-  does not call Bitly at all, `short_url` stays empty, and the generated
-  description carries the full album address. The Bitly account allows few new
-  links a month, and a lower environment's test albums must not spend them.
-
-Manual historical backfill for existing DB album rows remains a migration-tool
-workflow in `lego-data-migration`. The ingress application only performs short
-URL recovery/generation as part of normal sync-plan apply execution.
+- `CREATE_ALBUM` and existing-album adoption through `REPAIR_ALBUM_ID` both
+  calculate the link from the album id and store it.
+- Flickr documents this form for photos (`flic.kr/p/`) but not for albums, so
+  `CREATE_ALBUM` opens each new album's link once, signed out, and logs a WARN
+  when it does not end on the album (`lego.image-hosting.short-url.check-enabled`,
+  on in `application.yml`). The link is stored either way, and the description
+  rule falls back to the album address only when `short_url` is empty.
+- `POST /internal/image-hosting/short-url-backfill` gives every existing Flickr
+  album row its calculated link: empty, bit.ly or any other value. It is a dry
+  run unless `apply=true`. For each album it also lists the item's BrickLink lots
+  with the length their Description will have with the new link, and flags any
+  over BrickLink's 255 characters, so that text can be shortened first. The new
+  link then reaches Flickr through the normal description sync, and BrickLink
+  through reconciliation's description drift.
 
 Transient provider errors are retried according to
 `lego.image-hosting.sync.retry`. Retryable error types are:
@@ -653,9 +654,8 @@ lego:
     readiness:
       enabled: true
       require-scheduled-sync-enabled: false
-      require-bitly-when-apply-enabled: true
     short-url:
-      enabled: false   # true in application-prod.yml only
+      check-enabled: true   # open each new album's flic.kr link once and warn if it does not reach the album
     publishing:
       photo:
         title-template: "{captionOrFilename}"
@@ -689,7 +689,6 @@ configuration needed for scheduled Flickr sync:
 | `database` | Scheduled sync is enabled or required | `spring.datasource.database-key-name` is configured and a `DataSource` bean exists. |
 | `s3` | Scheduled sync is enabled or required | `lego.s3.url`, `lego.s3.access-key`, and `lego.s3.secret-key` are configured. |
 | `flickr` | Scheduled sync is enabled or required | Flickr provider config, external service id, user id, API key/secret, OAuth token, and OAuth token secret are configured. |
-| `bitly` | Short links are on (`short-url.enabled`) and scheduled sync is enabled with `apply=true` | Bitly base URL, access token, and group GUID are configured. Missing Bitly config is only a warning in dry-run mode. |
 
 Startup logs emit one summary line and one line per readiness check using the
 `image_hosting.readiness.*` log keys. Secret values are never logged; only
@@ -699,8 +698,8 @@ Kubernetes uses the `sandbox,kubernetes` profiles and imports projected
 configuration files from `/etc/.credentials`. The sandbox profile imports
 database, Kafka, and S3 config as required files and Flickr/Bitly config as
 optional files. Flickr configuration is still required by image-hosting
-readiness when scheduled sync is enabled or required. Bitly configuration is
-required only when scheduled sync runs with `apply=true`.
+readiness when scheduled sync is enabled or required. Bitly configuration is no
+longer used for short links (HOMELAB-128); HOMELAB-129 removes it.
 
 ## Observability
 
@@ -711,7 +710,7 @@ Prometheus endpoint. The Phase 4.5 adoption-specific counters are:
 | --- | --- | --- |
 | `image_hosting_album_creation` | `provider`, `result` | Counts successful album creation. `result=created` means a new Flickr album was created and persisted. |
 | `image_hosting_album_adoption` | `provider`, `result` | Counts DB adoption outcomes for existing remote albums. Expected results include `adopted`, `ambiguous`, `no_match`, `blocked`, and `failed`. |
-| `image_hosting_short_url` | `provider`, `operation`, `result` | Counts Bitly short URL recovery/generation outcomes. `operation` is `recover` or `generate`; expected results include `recovered`, `generated`, `lookup_miss`, `disabled`, and `failed`. |
+| `image_hosting_short_url` | `provider`, `operation`, `result` | Short album links. `operation` is `generate` (new album), `recover` (adopted album) or `check` (the new link opened once). `result` is `calculated` or `unavailable` (no album id), and for `check` `resolves`, `wrong_page` or `unreachable`. |
 | `image_hosting_photo_replace` | `provider`, `outcome` | Counts photo replacements. `outcome` is `in_place`, `swapped`, `skipped` or `failed`. |
 | `image_hosting_difference_report` | `provider`, `outcome` | Counts difference report runs. `outcome` is `completed` or `failed` (the album listing could not be read). |
 | `image_hosting_difference_report_albums_checked` | `provider` | Gauge: albums compared in the last complete run. |
@@ -723,7 +722,9 @@ The same events also emit structured logs using:
 | --- | --- |
 | `image_hosting.album_creation` | Album creation outcome. |
 | `image_hosting.album_adoption` | Adoption outcome, including ambiguity and no-match cases. |
-| `image_hosting.short_url` | Bitly recovery/generation outcome. |
+| `image_hosting.short_url` | Short album link outcome; WARN for `unavailable`, `wrong_page` and `unreachable`. |
+| `image_hosting.short_url.check.wrong_page` / `.unreachable` | A new album's flic.kr link did not reach the album (WARN), with where it ended. |
+| `image_hosting.short_url_backfill.completed` | Backfill summary: albums, changed, unchanged, without album id, BrickLink Descriptions too long. |
 | `image_hosting.photo_replace.completed` | A photo's file was replaced on Flickr; `outcome` is `in_place` or `swapped`, with the old and new photo id. |
 | `image_hosting.photo_replace.skipped` | A replacement was not attempted, with the reason. |
 | `image_hosting.photo_replace.failed` | A replacement failed (WARN); the next run tries again. |

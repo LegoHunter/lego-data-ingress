@@ -7,7 +7,7 @@ import lombok.Data;
 @Builder
 public class ImageHostingShortUrlResult {
     private ImageHostingShortUrlStatus status;
-    private String albumUrl;
+    private String albumId;
     private String shortUrl;
     private String message;
 

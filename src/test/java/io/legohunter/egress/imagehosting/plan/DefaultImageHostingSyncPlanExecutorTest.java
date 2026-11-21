@@ -22,6 +22,7 @@ import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlResult;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlService;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlStatus;
+import io.legohunter.egress.imagehosting.shorturl.ShortAlbumLinkCheck;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumCreateRequest;
@@ -314,8 +315,8 @@ class DefaultImageHostingSyncPlanExecutorTest {
         when(externalImageAlbumDao.findByExternalServiceIdAndExternalAlbumId(FLICKR_SERVICE_ID, "album-100"))
                 .thenReturn(Optional.empty());
         when(externalImageAlbumDao.findByExternalImageAlbumId(301L)).thenReturn(Optional.of(album));
-        when(shortUrlService.recoverExistingShortUrl("https://flickr.example/albums/album-100"))
-                .thenReturn(shortUrlResult(ImageHostingShortUrlStatus.RECOVERED_EXISTING, "https://bit.ly/album-100"));
+        when(shortUrlService.shortUrlFor("album-100"))
+                .thenReturn(shortUrlResult(ImageHostingShortUrlStatus.CALCULATED, "https://flic.kr/s/album100"));
 
         SyncReport report = executor.execute(SyncPlan.builder()
                 .planId("repair-plan-1")
@@ -347,7 +348,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 .containsExactly(
                         "album-100",
                         "https://flickr.example/albums/album-100",
-                        "https://bit.ly/album-100",
+                        "https://flic.kr/s/album100",
                         "4558-1 - Metroliner",
                         SYNCED
                 );
@@ -362,7 +363,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 "image_hosting_short_url",
                 "provider", "flickr",
                 "operation", "recover",
-                "result", "recovered"
+                "result", "calculated"
         ).count()).isEqualTo(1.0);
     }
 
@@ -481,11 +482,12 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 .id("album-100")
                 .url("https://flickr.example/albums/album-100")
                 .build()));
-        when(shortUrlService.generateShortUrl("https://flickr.example/albums/album-100"))
-                .thenReturn(shortUrlResult(ImageHostingShortUrlStatus.GENERATED_NEW, "https://bit.ly/album-100"));
+        when(shortUrlService.shortUrlFor("album-100"))
+                .thenReturn(shortUrlResult(ImageHostingShortUrlStatus.CALCULATED, "https://flic.kr/s/album100"));
+        when(shortUrlService.check(any())).thenReturn(Optional.of(ShortAlbumLinkCheck.Outcome.RESOLVES));
         when(imageHostingService.updateAlbumMembership(any())).thenReturn(response(null));
         when(descriptionComposer.compose(any())).thenReturn(GeneratedItemDescription.builder()
-                .description("Generated album description\n\nPhotos: https://bit.ly/album-100")
+                .description("Generated album description\n\nPhotos: https://flic.kr/s/album100")
                 .build());
         when(imageHostingService.updateAlbumMetadata(any())).thenReturn(response(null));
 
@@ -517,7 +519,9 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 )
                 .containsExactly("4558-1 - Metroliner", "Generated album description", "photo-11");
         assertThat(requestCaptor.getValue().get().getPhotoIds()).containsExactly("photo-11", "photo-12");
-        assertThat(pendingAlbum.getShortUrl()).isEqualTo("https://bit.ly/album-100");
+        assertThat(pendingAlbum.getShortUrl()).isEqualTo("https://flic.kr/s/album100");
+        assertThat(meterRegistry.get("image_hosting_short_url").tag("operation", "check").tag("result", "resolves")
+                .counter().count()).isEqualTo(1.0);
 
         // The provider creates an album from its cover photo alone: every photo is then put into it.
         @SuppressWarnings("unchecked")
@@ -544,7 +548,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 .containsExactly(
                         "album-100",
                         "4558-1 - Metroliner",
-                        "Generated album description\n\nPhotos: https://bit.ly/album-100\n\nItem reference: inventory-uuid"
+                        "Generated album description\n\nPhotos: https://flic.kr/s/album100\n\nItem reference: inventory-uuid"
                 );
         assertThat(pendingAlbum.getSyncStatus()).isEqualTo(SYNCED);
         assertThat(meterRegistry.counter(
@@ -556,7 +560,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 "image_hosting_short_url",
                 "provider", "flickr",
                 "operation", "generate",
-                "result", "generated"
+                "result", "calculated"
         ).count()).isEqualTo(1.0);
     }
 
@@ -585,8 +589,8 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 .id("album-100")
                 .url("https://flickr.example/albums/album-100")
                 .build()));
-        when(shortUrlService.generateShortUrl("https://flickr.example/albums/album-100"))
-                .thenReturn(shortUrlResult(ImageHostingShortUrlStatus.GENERATED_NEW, "https://bit.ly/album-100"));
+        when(shortUrlService.shortUrlFor("album-100"))
+                .thenReturn(shortUrlResult(ImageHostingShortUrlStatus.CALCULATED, "https://flic.kr/s/album100"));
         when(imageHostingService.updateAlbumMembership(any()))
                 .thenReturn(errorResponse(PhotoServiceErrorType.UNKNOWN, 1, "Photoset not found"));
         when(descriptionComposer.compose(any())).thenReturn(GeneratedItemDescription.builder()

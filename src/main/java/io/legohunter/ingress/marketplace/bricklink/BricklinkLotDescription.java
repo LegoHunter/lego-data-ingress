@@ -30,7 +30,7 @@ public class BricklinkLotDescription {
     }
 
     /** Whether the lot Description may point buyers at the Extended Description in this environment. */
-    boolean writesExtendedDescription() {
+    public boolean writesExtendedDescription() {
         return extendedDescriptionSyncProperties.writes(marketplaceSyncProperties.effectiveMode());
     }
 

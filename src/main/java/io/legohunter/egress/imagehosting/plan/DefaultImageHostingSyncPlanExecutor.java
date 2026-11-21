@@ -57,6 +57,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -525,11 +526,14 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         HostedAlbum hostedAlbum = response.get();
         album.setExternalAlbumId(hostedAlbum.getId());
         album.setAlbumUrl(hostedAlbum.getUrl());
-        ImageHostingShortUrlResult shortUrlResult = shortUrlService.generateShortUrl(hostedAlbum.getUrl());
+        ImageHostingShortUrlResult shortUrlResult = shortUrlService.shortUrlFor(hostedAlbum.getId());
         recordShortUrlResult(action, "generate", shortUrlResult);
         if (hasShortUrl(shortUrlResult)) {
             album.setShortUrl(shortUrlResult.getShortUrl());
         }
+        // Once per new album: the album form of the link is not documented by Flickr, so watch for a change.
+        shortUrlService.check(shortUrlResult).ifPresent(outcome ->
+                metricsService.recordShortUrl(providerTag(action), "check", outcome.name().toLowerCase(Locale.ROOT)));
         album.setSyncStatus(SYNCED);
         album.setErrorMessage(null);
         album.setLastSyncedAt(ZonedDateTime.now());
@@ -760,7 +764,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         ExternalImageAlbum album = findOrCreateAlbum(action, externalServiceId, itemInventoryId);
         album.setExternalAlbumId(remoteAlbumId);
         attribute(action, "remoteAlbumUrl").filter(this::hasText).ifPresent(album::setAlbumUrl);
-        ImageHostingShortUrlResult shortUrlResult = shortUrlService.recoverExistingShortUrl(album.getAlbumUrl());
+        ImageHostingShortUrlResult shortUrlResult = shortUrlService.shortUrlFor(remoteAlbumId);
         recordShortUrlResult(action, "recover", shortUrlResult);
         if (hasShortUrl(shortUrlResult)) {
             album.setShortUrl(shortUrlResult.getShortUrl());
@@ -1216,17 +1220,14 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     ) {
         ImageHostingShortUrlStatus status = Optional.ofNullable(result)
                 .map(ImageHostingShortUrlResult::getStatus)
-                .orElse(ImageHostingShortUrlStatus.FAILED);
+                .orElse(ImageHostingShortUrlStatus.UNAVAILABLE);
         metricsService.recordShortUrl(providerTag(action), operation, shortUrlResultTag(status));
     }
 
     private String shortUrlResultTag(ImageHostingShortUrlStatus status) {
         return switch (status) {
-            case RECOVERED_EXISTING -> "recovered";
-            case GENERATED_NEW -> "generated";
-            case LOOKUP_MISS -> "lookup_miss";
-            case DISABLED -> "disabled";
-            case FAILED -> "failed";
+            case CALCULATED -> "calculated";
+            case UNAVAILABLE -> "unavailable";
         };
     }
 

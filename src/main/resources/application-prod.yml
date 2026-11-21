@@ -36,10 +36,6 @@ lego:
     url: http://silo-prod.silo-prod.svc.cluster.local:9000
     buckets:
       final-photo: lego-photos-prod
-  # Production is the only environment that makes bit.ly short links for album addresses (HOMELAB-118).
-  image-hosting:
-    short-url:
-      enabled: true
   # The only runtime allowed to write to real orders (ShipStation, BrickLink order status,
   # Drive Thru emails). See HOMELAB-14.
   environment:

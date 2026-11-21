@@ -173,14 +173,15 @@ public class ImageHostingSyncProperties {
     }
 
     /**
-     * Short links (bit.ly) for album addresses. Off unless a profile turns it on, and only production does:
-     * the link service allows few new links a month, and a lower environment's test albums must not spend
-     * them. Without a short link the generated description carries the full album address.
+     * Short album links. Every environment gets Flickr's own {@code flic.kr/s/} link, calculated from the album id
+     * (HOMELAB-128), so there is nothing to turn on. {@code checkEnabled} opens each new album's link once, as a
+     * buyer would, and warns when it does not end on the album. Off by default so tests make no web call;
+     * application.yml turns it on.
      */
     @Getter
     @Setter
     public static class ShortUrl {
-        private boolean enabled = false;
+        private boolean checkEnabled = false;
     }
 
     @Getter
@@ -188,7 +189,6 @@ public class ImageHostingSyncProperties {
     public static class Readiness {
         private boolean enabled = true;
         private boolean requireScheduledSyncEnabled = false;
-        private boolean requireBitlyWhenApplyEnabled = true;
     }
 
     @Getter

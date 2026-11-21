@@ -1,7 +1,6 @@
 package io.legohunter.egress.imagehosting.readiness;
 
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
-import io.legohunter.imaging.bitly.config.BitlyProperties;
 import io.legohunter.imaging.flickr.config.FlickrProperties;
 import io.legohunter.ingress.config.storage.S3ClientProperties;
 import lombok.RequiredArgsConstructor;
@@ -25,7 +24,6 @@ public class ImageHostingReadinessService {
     private final S3ClientProperties s3ClientProperties;
     private final ImageHostingSyncProperties imageHostingProperties;
     private final Optional<FlickrProperties> flickrProperties;
-    private final Optional<BitlyProperties> bitlyProperties;
 
     public ImageHostingReadinessReport evaluate() {
         List<ImageHostingReadinessCheck> checks = new ArrayList<>();
@@ -33,15 +31,12 @@ public class ImageHostingReadinessService {
         ImageHostingSyncProperties.Readiness readiness = imageHostingProperties.getReadiness();
         boolean scheduledRequired = readiness.isRequireScheduledSyncEnabled();
         boolean scheduledEnabled = scheduled.isEnabled();
-        boolean applyEnabled = scheduled.isApply();
         boolean syncRuntimeRequired = scheduledEnabled || scheduledRequired;
 
         validateScheduledSync(checks, scheduled, scheduledRequired);
         validateDatabase(checks, syncRuntimeRequired);
         validateS3(checks, syncRuntimeRequired);
         validateFlickr(checks, syncRuntimeRequired);
-        validateBitly(checks, imageHostingProperties.getShortUrl().isEnabled()
-                && scheduledEnabled && applyEnabled && readiness.isRequireBitlyWhenApplyEnabled());
 
         boolean ready = checks.stream().noneMatch(ImageHostingReadinessCheck::down);
         return new ImageHostingReadinessReport(ready, checks);
@@ -148,25 +143,6 @@ public class ImageHostingReadinessService {
             }
         }
         addConfigCheck(checks, "flickr", required, missing);
-    }
-
-    private void validateBitly(List<ImageHostingReadinessCheck> checks, boolean required) {
-        List<String> missing = new ArrayList<>();
-        if (bitlyProperties.isEmpty()) {
-            missing.add("bitly configuration");
-        } else {
-            BitlyProperties properties = bitlyProperties.get();
-            if (!hasText(properties.getBaseUrl())) {
-                missing.add("bitly.base-url");
-            }
-            if (!hasText(properties.getAccessToken())) {
-                missing.add("bitly.access-token");
-            }
-            if (!hasText(properties.getGroupGuid())) {
-                missing.add("bitly.group-guid");
-            }
-        }
-        addConfigCheck(checks, "bitly", required, missing);
     }
 
     private void addConfigCheck(
