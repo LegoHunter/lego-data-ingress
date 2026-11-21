@@ -453,7 +453,7 @@ public class PhotoProcessingService {
                 effectivePrimaryPhoto(metadata, existingLogicalPhoto);
 
         String photoCaption =
-                effectivePhotoCaption(metadata, existingLogicalPhoto);
+                effectivePhotoCaption(metadata);
 
         if (replaceExistingPhoto
                 && !contentChanged
@@ -1100,18 +1100,15 @@ public class PhotoProcessingService {
                 .orElse(false);
     }
 
-    private String effectivePhotoCaption(
-            ImageMetadata metadata,
-            Optional<ItemInventoryPhoto> existingLogicalPhoto
-    ) {
-
-        if (metadata.hasCaption()) {
-            return metadata.caption();
-        }
-
-        return existingLogicalPhoto
-                .map(ItemInventoryPhoto::getCaption)
-                .orElse(null);
+    /**
+     * The caption in the uploaded file is the photo's caption, also when it has none (HOMELAB-82). Lightroom writes
+     * nothing for an empty caption, so "no caption in the file" is the only way the owner can remove one: a
+     * replacement without a caption clears the stored caption. It then leaves the Flickr photo description, the
+     * album description and the lot's Extended Description, and the lot Description loses its "See Extended
+     * Description" sentence when no caption is left.
+     */
+    private String effectivePhotoCaption(ImageMetadata metadata) {
+        return metadata.hasCaption() ? metadata.caption() : null;
     }
 
     private boolean hasNoEffectiveMetadataChanges(
