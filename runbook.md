@@ -359,6 +359,11 @@ That is how the owner removes one. The cleared caption then leaves the Flickr ph
 lot's Extended Description, and the lot Description loses its "See Extended Description" sentence when no caption
 is left. An export preset that drops metadata clears captions the same way, so export with All Metadata.
 
+**The cover is different: it stays until another photo claims it (HOMELAB-131, owner decision 2026-11-21).**
+A replacement without the `primary` keyword keeps the photo's `is_primary` (`effectivePrimaryPhoto`). The cover
+moves only when another photo is uploaded with `primary` (`setPrimaryPhoto`), or when a photo is uploaded with
+`primary:false`. So re-exporting the cover without its keyword never leaves an album without a cover.
+
 **Sealed and built-once rules** (`PhotoKeywordRules`), across all photos of one item. The photos win over what was
 entered at intake. `sealed` alone means `sealed:true`.
 

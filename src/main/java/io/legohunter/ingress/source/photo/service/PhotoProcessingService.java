@@ -1085,6 +1085,11 @@ public class PhotoProcessingService {
         return condition.conditionId();
     }
 
+    /**
+     * Unlike the caption, a replacement without a {@code primary} keyword keeps the photo's cover status: the cover
+     * stays until another photo claims it with {@code primary}, or this one is uploaded with {@code primary:false}
+     * (owner decision, HOMELAB-131). Re-exporting the cover without its keyword never leaves an album without one.
+     */
     private boolean effectivePrimaryPhoto(
             ImageMetadata metadata,
             Optional<ItemInventoryPhoto> existingLogicalPhoto
