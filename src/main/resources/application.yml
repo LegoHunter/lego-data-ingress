@@ -275,12 +275,11 @@ lego:
     readiness:
       enabled: true
       require-scheduled-sync-enabled: false
-      require-bitly-when-apply-enabled: true
-    # Short links (bit.ly) for album addresses (HOMELAB-118). Off here and in every lower environment;
-    # application-prod.yml turns it on. Off means no call to Bitly, and the generated description carries
-    # the full album address.
+    # Short album links: Flickr's own flic.kr/s/ link, calculated from the album id in every environment
+    # (HOMELAB-128; it replaced bit.ly). The check opens each new album's link once, with no sign-in, and
+    # logs a WARN when it does not end on the album.
     short-url:
-      enabled: false
+      check-enabled: true
   fulfillment:
     marketplace-code: BRICKLINK
     metrics-tag: fulfillment

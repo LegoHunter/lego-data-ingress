@@ -33,7 +33,7 @@ Intake of a physical item up to a local BrickLink draft is done by lego-data-ser
 
   Orders:     BricklinkOpenOrderProbeJob (read BrickLink orders) -> FulfillmentScheduledSyncJob (PROD writes)
   Photos/catalog: S3 upload events -> Kafka -> photo, BrickLink and Rebrickable catalog ingestion
-  Images:     ImageHostingScheduledSyncJob -> Flickr albums + Bitly links (via lego-imaging)
+  Images:     ImageHostingScheduledSyncJob -> Flickr albums + flic.kr short links (via lego-imaging)
 ```
 
 In plain words: each environment says which items it is selling. One crawler fetches the BrickLink market for
@@ -378,15 +378,21 @@ Listeners process photos
 split Rebrickable catalog and theme CSVs into per-row topics. Per-row consumers upsert `external_catalog_item`
 and `external_category`. Topics and groups are in `kafka.topic-configuration.*` (`KafkaCustomProperties`).
 
-`ImageHostingScheduledSyncJob` keeps each item's photos in its Flickr album with Bitly links, through
+`ImageHostingScheduledSyncJob` keeps each item's photos in its Flickr album, through
 lego-imaging. Manual endpoints are under `/internal/image-hosting/item-inventories/{id}/`: `sync-plan`,
 `sync-plan/apply`, `repair-plan`, `repair-plan/apply` and `generated-description`. Prefer a plan, then apply it.
 
-**Short links are made in production only (HOMELAB-118).** `lego.image-hosting.short-url.enabled` is false
-by default and true in `application-prod.yml`. Where it is false the job never calls Bitly, an album's
-`short_url` stays empty, and the generated description carries the full album address. The owner's Bitly
-account is on the free plan, which allows only a handful of new links a month, so a lower environment's test
-albums must not spend them.
+**Short album links are Flickr's own (HOMELAB-128).** An album's `short_url` is `https://flic.kr/s/` plus the
+album id in base58, calculated in every environment with no API call. It replaced the production-only bit.ly
+links. Each new album's link is opened once, signed out; a WARN `image_hosting.short_url.check.wrong_page`
+means Flickr may have changed the form, so check the link by hand.
+
+To move existing albums (bit.ly or empty) to their flic.kr link, run the backfill as a dry run first:
+`POST /internal/image-hosting/short-url-backfill`. Read `rows[].bricklinkListings`: a lot with `tooLong: true`
+would pass BrickLink's 255 characters with the new link, so shorten that listing's description first. Then run
+it with `?apply=true`. The album descriptions on Flickr follow through the image-hosting sync, and the BrickLink
+lot Descriptions through reconciliation's `DESCRIPTION_DRIFT`. This is also the step that moves the legacy PROD
+listings from bit.ly to flic.kr at the PROD cutover.
 
 **The database is the system of record; Flickr is a published copy** (owner decision 2026-11-17).
 - What Flickr should hold (photos, cover, album title and description) is computed from the database and the

@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -139,6 +140,9 @@ public class ImageHostingSyncMetricsService {
         }
     }
 
+    /** Results of a short link that leave a buyer without it, or a link that may no longer work. */
+    private static final Set<String> WARN_SHORT_URL_RESULTS = Set.of("unavailable", "wrong_page", "unreachable");
+
     public void recordShortUrl(String providerTag, String operation, String result) {
         Counter.builder("image_hosting_short_url")
                 .tag(PROVIDER_TAG, providerTag(providerTag))
@@ -146,7 +150,7 @@ public class ImageHostingSyncMetricsService {
                 .tag(RESULT_TAG, result)
                 .register(meterRegistry)
                 .increment();
-        if ("failed".equals(result)) {
+        if (WARN_SHORT_URL_RESULTS.contains(result)) {
             log.warn(
                     "image_hosting.short_url provider={} operation={} result={}",
                     providerTag(providerTag),

@@ -1,7 +1,6 @@
 package io.legohunter.egress.imagehosting.readiness;
 
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
-import io.legohunter.imaging.bitly.config.BitlyProperties;
 import io.legohunter.imaging.flickr.config.FlickrProperties;
 import io.legohunter.ingress.config.storage.S3ClientProperties;
 import org.junit.jupiter.api.Test;
@@ -26,8 +25,7 @@ class ImageHostingReadinessServiceTest {
                 Optional.of(mock(DataSource.class)),
                 configuredS3(),
                 configuredImageHostingProperties(true, true, true),
-                Optional.of(configuredFlickr()),
-                Optional.of(configuredBitly())
+                Optional.of(configuredFlickr())
         ).evaluate();
 
         assertThat(report.ready()).isTrue();
@@ -36,7 +34,6 @@ class ImageHostingReadinessServiceTest {
                 .containsOnly("UP");
         assertThat(check(report, "scheduled-sync").message())
                 .contains("apply=true", "batchSize=25", "concurrency=2");
-        assertThat(check(report, "bitly").required()).isTrue();
     }
 
     @Test
@@ -46,7 +43,6 @@ class ImageHostingReadinessServiceTest {
                 Optional.empty(),
                 new S3ClientProperties(),
                 configuredImageHostingProperties(false, false, true),
-                Optional.empty(),
                 Optional.empty()
         ).evaluate();
 
@@ -64,44 +60,19 @@ class ImageHostingReadinessServiceTest {
     }
 
     @Test
-    void evaluateDoesNotRequireBitlyWhereShortLinksAreTurnedOff() {
-        ImageHostingSyncProperties properties = configuredImageHostingProperties(true, true, true);
-        properties.getShortUrl().setEnabled(false);
-
+    void evaluateHasNoBitlyCheckSinceShortLinksAreCalculated() {
         ImageHostingReadinessReport report = service(
                 environmentWithDatabaseKey(),
                 Optional.of(mock(DataSource.class)),
                 configuredS3(),
-                properties,
-                Optional.of(configuredFlickr()),
-                Optional.of(new BitlyProperties())
+                configuredImageHostingProperties(true, true, true),
+                Optional.of(configuredFlickr())
         ).evaluate();
 
         assertThat(report.ready()).isTrue();
-        assertThat(check(report, "bitly").required()).isFalse();
-    }
-
-    @Test
-    void evaluateAllowsBitlyWarningWhenScheduledSyncRunsInDryRunMode() {
-        BitlyProperties bitlyProperties = new BitlyProperties();
-        ImageHostingReadinessReport report = service(
-                environmentWithDatabaseKey(),
-                Optional.of(mock(DataSource.class)),
-                configuredS3(),
-                configuredImageHostingProperties(true, false, false),
-                Optional.of(configuredFlickr()),
-                Optional.of(bitlyProperties)
-        ).evaluate();
-
-        assertThat(report.ready()).isTrue();
-        assertThat(check(report, "bitly"))
-                .extracting(
-                        ImageHostingReadinessCheck::status,
-                        ImageHostingReadinessCheck::required
-                )
-                .containsExactly("WARN", false);
-        assertThat(check(report, "bitly").message())
-                .contains("bitly.access-token", "bitly.group-guid");
+        assertThat(report.checks())
+                .extracting(ImageHostingReadinessCheck::component)
+                .doesNotContain("bitly");
     }
 
     @Test
@@ -131,16 +102,14 @@ class ImageHostingReadinessServiceTest {
             Optional<DataSource> dataSource,
             S3ClientProperties s3ClientProperties,
             ImageHostingSyncProperties imageHostingProperties,
-            Optional<FlickrProperties> flickrProperties,
-            Optional<BitlyProperties> bitlyProperties
+            Optional<FlickrProperties> flickrProperties
     ) {
         return new ImageHostingReadinessService(
                 environment,
                 dataSource,
                 s3ClientProperties,
                 imageHostingProperties,
-                flickrProperties,
-                bitlyProperties
+                flickrProperties
         );
     }
 
@@ -166,7 +135,6 @@ class ImageHostingReadinessServiceTest {
         properties.getSync().getScheduled().setEnabled(scheduledEnabled);
         properties.getSync().getScheduled().setApply(applyEnabled);
         properties.getReadiness().setRequireScheduledSyncEnabled(requireScheduledSyncEnabled);
-        properties.getShortUrl().setEnabled(true);
 
         ImageHostingSyncProperties.Provider flickr = new ImageHostingSyncProperties.Provider();
         flickr.setEnabled(true);
@@ -186,13 +154,6 @@ class ImageHostingReadinessServiceTest {
         secrets.setToken("token");
         secrets.setTokenSecret("token-secret");
         properties.setSecrets(secrets);
-        return properties;
-    }
-
-    private static BitlyProperties configuredBitly() {
-        BitlyProperties properties = new BitlyProperties();
-        properties.setAccessToken("bitly-token");
-        properties.setGroupGuid("bitly-group");
         return properties;
     }
 
