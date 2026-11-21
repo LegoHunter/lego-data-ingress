@@ -5,6 +5,7 @@ import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.MarketplaceListing;
+import io.legohunter.data.enums.ExternalSyncStatus;
 import io.legohunter.ingress.marketplace.bricklink.BricklinkLotDescription;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -82,6 +83,7 @@ class ShortUrlBackfillServiceTest {
                         org.assertj.core.groups.Tuple.tuple(565L, null, "https://flic.kr/s/aHBqjDaRCB", false));
         verify(albumDao, never()).update(any());
         assertThat(bitlyAlbum.getShortUrl()).isEqualTo("https://bit.ly/3XeeF0K");
+        assertThat(bitlyAlbum.getSyncStatus()).isEqualTo(ExternalSyncStatus.SYNCED);
     }
 
     @Test
@@ -105,6 +107,9 @@ class ShortUrlBackfillServiceTest {
         verify(albumDao).update(bitlyAlbum);
         verify(albumDao, never()).update(currentAlbum);
         assertThat(bitlyAlbum.getShortUrl()).isEqualTo("https://flic.kr/s/aHBqjDaRCA");
+        // PENDING makes the scheduled image-hosting sync revisit the item and rewrite the Flickr album description.
+        assertThat(bitlyAlbum.getSyncStatus()).isEqualTo(ExternalSyncStatus.PENDING);
+        assertThat(currentAlbum.getSyncStatus()).isEqualTo(ExternalSyncStatus.SYNCED);
     }
 
     private static ExternalImageAlbum album(Long id, Integer itemInventoryId, String albumId, String shortUrl) {
@@ -115,6 +120,7 @@ class ShortUrlBackfillServiceTest {
                 .externalAlbumId(albumId)
                 .albumUrl(albumId == null ? null : "https://www.flickr.com/photos/u/sets/" + albumId + "/")
                 .shortUrl(shortUrl)
+                .syncStatus(ExternalSyncStatus.SYNCED)
                 .build();
     }
 

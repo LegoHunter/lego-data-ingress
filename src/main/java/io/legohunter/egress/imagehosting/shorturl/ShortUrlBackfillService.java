@@ -18,13 +18,17 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
+import static io.legohunter.data.enums.ExternalSyncStatus.PENDING;
+
 /**
  * Gives every existing Flickr album its calculated {@code flic.kr/s/} short link (HOMELAB-128): albums with no
  * short link, a bit.ly link, or any other value. Dry run unless {@code apply=true}.
  *
- * <p>Only the album row changes here. The new link then reaches the buyer by the usual paths: the image-hosting
- * sync sees the Flickr album description differ from the generated one and updates it, and BrickLink
- * reconciliation reports the lot Description as drifted and queues its update.
+ * <p>Only the album row changes here. The new link then reaches the buyer by the usual paths. The album is marked
+ * PENDING, because the image-hosting sync only revisits an item for a missing link, a failed or pending row or a
+ * changed photo, never for a changed short link. The next scheduled sync then plans the album, finds its Flickr
+ * description still carrying the old link and rewrites it, which marks the album SYNCED again. BrickLink
+ * reconciliation rebuilds the lot Description from the album row, reports it as drifted and queues its update.
  *
  * <p>For each album the report lists the item's BrickLink listings with the length their Description will have
  * with the new link, so a Description that would pass BrickLink's 255 characters can be shortened first. This is
@@ -65,6 +69,7 @@ public class ShortUrlBackfillService {
             List<Listing> listings = bricklinkListings(album.getItemInventoryId(), shortUrl);
             if (apply) {
                 album.setShortUrl(shortUrl);
+                album.setSyncStatus(PENDING);
                 externalImageAlbumDao.update(album);
             }
             rows.add(new Row(album.getExternalImageAlbumId(), album.getItemInventoryId(), album.getExternalAlbumId(),
