@@ -336,6 +336,47 @@ class PhotoProcessingServiceTest {
         );
     }
 
+    /**
+     * HOMELAB-82: Lightroom writes nothing for an empty caption, so a replacement without a caption is how the owner
+     * removes one. Before, the stored caption was kept and the upload was skipped as an unchanged duplicate.
+     */
+    @Test
+    void process_replacementWithoutACaptionClearsTheStoredCaption() {
+        PhotoUploadEvent event = new PhotoUploadEvent("lego-uploads-sandbox", "photos/test.jpg");
+        ItemInventory existingInventory = itemInventory(999, "uuid-1");
+        ItemInventoryPhoto existingPhoto = photo(
+                10,
+                999,
+                "same-md5",
+                "test.jpg",
+                "lego-photos-sandbox",
+                "3001/uuid-1/same-md5.jpg"
+        );
+        existingPhoto.setCaption("Small mark on one side panel.");
+
+        when(s3Service.getObject("lego-uploads-sandbox", "photos/test.jpg"))
+                .thenReturn(new ByteArrayInputStream(originalBytes));
+        when(metadataExtractorService.extractMetadata(originalBytes))
+                .thenReturn(metadata("uuid-1", "3001", false, false, true, null));
+        when(photoFingerprintService.fingerprint(originalBytes))
+                .thenReturn("same-md5");
+        when(itemInventoryDao.findByUuid("uuid-1"))
+                .thenReturn(Optional.of(existingInventory));
+        when(itemInventoryPhotoDao.findByItemInventoryIdAndFileName(999, "test.jpg"))
+                .thenReturn(Optional.of(existingPhoto));
+        when(itemInventoryPhotoDao.findByMd5("same-md5"))
+                .thenReturn(Optional.of(existingPhoto));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
+                .thenReturn(Optional.of(externalCatalogItem(123)));
+        when(itemInventoryPhotoDao.updateMetadata(10, "test.jpg", "metadata-hash", false, null, PROCESSED))
+                .thenReturn(1);
+
+        service.process(event);
+
+        verify(itemInventoryPhotoDao).updateMetadata(10, "test.jpg", "metadata-hash", false, null, PROCESSED);
+        verify(s3Service, never()).putObject(any(), any(), any(), anyLong(), any());
+    }
+
     @Test
     void process_updatesExistingPhotoMetadataWithoutUploadingWhenMd5IsUnchanged() {
         PhotoUploadEvent event = new PhotoUploadEvent("lego-uploads-sandbox", "photos/test.jpg");

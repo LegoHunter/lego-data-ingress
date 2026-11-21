@@ -353,6 +353,12 @@ condition grades (`item:`, `bc:`, `ic:`), and sealed, built once and New/Used un
 else on the item stays as entered, including its description: a caption is stored on the photo
 (`item_inventory_photo.caption`) and no longer overwrites `item_inventory.description`.
 
+**The file's caption is the photo's caption, also when it has none (HOMELAB-82).** Lightroom writes nothing for
+an empty caption, so a replacement upload (same item, same file name) without a caption clears the stored caption.
+That is how the owner removes one. The cleared caption then leaves the Flickr photo and album descriptions and the
+lot's Extended Description, and the lot Description loses its "See Extended Description" sentence when no caption
+is left. An export preset that drops metadata clears captions the same way, so export with All Metadata.
+
 **Sealed and built-once rules** (`PhotoKeywordRules`), across all photos of one item. The photos win over what was
 entered at intake. `sealed` alone means `sealed:true`.
 
