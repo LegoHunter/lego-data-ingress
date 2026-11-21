@@ -390,8 +390,9 @@ means Flickr may have changed the form, so check the link by hand.
 To move existing albums (bit.ly or empty) to their flic.kr link, run the backfill as a dry run first:
 `POST /internal/image-hosting/short-url-backfill`. Read `rows[].bricklinkListings`: a lot with `tooLong: true`
 would pass BrickLink's 255 characters with the new link, so shorten that listing's description first. Then run
-it with `?apply=true`. The album descriptions on Flickr follow through the image-hosting sync, and the BrickLink
-lot Descriptions through reconciliation's `DESCRIPTION_DRIFT`. This is also the step that moves the legacy PROD
+it with `?apply=true`. Each changed album is marked `PENDING`, so the next scheduled image-hosting sync rewrites
+its Flickr description with the new link (`UPDATE_ALBUM_METADATA`) and marks it `SYNCED` again; the BrickLink lot
+Descriptions follow through reconciliation's `DESCRIPTION_DRIFT`. This is also the step that moves the legacy PROD
 listings from bit.ly to flic.kr at the PROD cutover.
 
 **The database is the system of record; Flickr is a published copy** (owner decision 2026-11-17).

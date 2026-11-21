@@ -390,8 +390,10 @@ which only production made.
   album row its calculated link: empty, bit.ly or any other value. It is a dry
   run unless `apply=true`. For each album it also lists the item's BrickLink lots
   with the length their Description will have with the new link, and flags any
-  over BrickLink's 255 characters, so that text can be shortened first. The new
-  link then reaches Flickr through the normal description sync, and BrickLink
+  over BrickLink's 255 characters, so that text can be shortened first. Applying
+  also marks each changed album `PENDING`: the scheduled sync never revisits an
+  item for a changed short link alone, so this is what makes it plan the album and
+  rewrite its Flickr description (`UPDATE_ALBUM_METADATA`). BrickLink follows
   through reconciliation's description drift.
 
 Transient provider errors are retried according to
