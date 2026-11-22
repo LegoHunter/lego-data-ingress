@@ -652,3 +652,35 @@ and defaults are in these classes (`src/main/java/io/legohunter/ingress/` unless
 
 `RepriceConfigurationBindingTest` checks that the SANDBOX and DEV profiles bind the guard and selection settings.
 If you rename a key, that test fails rather than the key silently falling back to a default.
+
+## Lightroom photo upload (HOMELAB-134)
+
+The Lightroom Silo publisher uploads photos through this service. Routes under `/internal/photo-upload/`:
+
+| Route | Who calls it | Auth |
+|---|---|---|
+| `POST /presign` | the plugin, per batch of up to 25 files | access token (`Authorization: Bearer`) |
+| `POST /token/refresh` | the plugin, with a refresh token in the body | refresh token; rotates it |
+| `GET /token/status` | the plugin, when the Export dialog opens | refresh token in `Authorization`; does not rotate |
+
+- A refresh token is retired the moment it is exchanged. A retired token is never accepted again; a second
+  use is refused and logged as `refused reason=retired-token-reused`.
+- Access tokens last 1 hour and refresh tokens 12 hours, in every environment.
+- A PROD presign needs `"prodConfirmation": "PROD"`, or it is refused with 403.
+- Presigned PUT URLs expire after 300 seconds. Files must be `.jpg`/`.jpeg`, at most 10,000,000 bytes, and at most
+  25 per request.
+
+**Configuration** (`lego.photo-upload.*`; secrets from the environment's secret store, never logged):
+
+- `environment`: `sandbox`, `dev` or `prod`. Presigns and tokens for any other environment are refused.
+- `token-secret`: the HMAC key for stored token hashes, one per environment. Changing it invalidates every token
+  in that environment. If it is blank, every token check fails closed.
+- `silo-url`, `silo-access-key`, `silo-secret-key`: Silo's S3 endpoint and the `lcms-ingress-<env>` user.
+  Uploads go to the bucket `lego-uploads-<env>`. If `silo-url` is blank, presign answers 503.
+
+**Checks.** The photo-upload security chain (`SecurityConfiguration`, order 1) matches `/internal/photo-upload/**`
+only. The actuator and Prometheus paths stay on the existing chain. A blocked upload shows as 401 on
+`/presign`; the plugin then needs a new token from the owner.
+
+**Open:** how the first token is issued (the admin path is not built), and whether reuse of a retired token
+should also revoke its token family (owner decision pending on HOMELAB-134).

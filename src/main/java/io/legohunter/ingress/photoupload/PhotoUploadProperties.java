@@ -1,0 +1,36 @@
+package io.legohunter.ingress.photoupload;
+
+import lombok.Getter;
+import lombok.Setter;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.time.Duration;
+
+/**
+ * Settings for the Lightroom photo upload (HOMELAB-134). Secrets come from the environment's secret store and are
+ * never logged. This ingress instance serves one environment only.
+ */
+@Getter
+@Setter
+@ConfigurationProperties(prefix = "lego.photo-upload")
+public class PhotoUploadProperties {
+    /** sandbox, dev or prod: the only environment this instance issues tokens for and uploads to. */
+    private String environment = "";
+    /** HMAC key for stored token hashes. A secret: changing it invalidates every token in this environment. */
+    private String tokenSecret = "";
+    /** Silo's S3 endpoint for this environment. Presigned URLs point here. */
+    private String siloUrl = "";
+    private String siloAccessKey = "";
+    private String siloSecretKey = "";
+    /** The uploads bucket is this prefix plus the environment, for example lego-uploads-sandbox. */
+    private String uploadsBucketPrefix = "lego-uploads-";
+    private int maxFiles = 25;
+    private long maxUploadBytes = 10_000_000L;
+    private Duration presignExpiry = Duration.ofSeconds(300);
+    private Duration accessTokenLifetime = Duration.ofHours(1);
+    private Duration refreshTokenLifetime = Duration.ofHours(12);
+
+    public String uploadsBucket() {
+        return uploadsBucketPrefix + environment;
+    }
+}
