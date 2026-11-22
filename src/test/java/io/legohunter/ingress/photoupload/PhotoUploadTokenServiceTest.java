@@ -47,6 +47,18 @@ class PhotoUploadTokenServiceTest {
         });
         when(dao.findByTokenHmac(any())).thenAnswer(invocation ->
                 Optional.ofNullable(rowsByHmac.get((String) invocation.getArgument(0))));
+        when(dao.revokeFamily(any(), any())).thenAnswer(invocation -> {
+            String family = invocation.getArgument(0);
+            java.time.ZonedDateTime at = invocation.getArgument(1);
+            int changed = 0;
+            for (PhotoUploadToken row : rowsById.values()) {
+                if (family.equals(row.getFamilyId()) && row.getRevokedAt() == null) {
+                    row.setRevokedAt(at);
+                    changed++;
+                }
+            }
+            return changed;
+        });
         when(dao.retire(anyLong(), any())).thenAnswer(invocation -> {
             PhotoUploadToken row = rowsById.get((Long) invocation.getArgument(0));
             if (row.getRetiredAt() != null || row.getRevokedAt() != null) return false;
@@ -101,14 +113,45 @@ class PhotoUploadTokenServiceTest {
     }
 
     @Test
-    void theNewRefreshTokenStillWorksAfterTheOldOneWasReused() {
+    void reusingARetiredRefreshTokenRevokesTheWholeLogin() {
         PhotoUploadTokenService.IssuedTokens first = service.issue("owner-laptop");
         PhotoUploadTokenService.IssuedTokens second = service.refresh(first.refreshToken()).orElseThrow();
-        assertThat(service.refresh(first.refreshToken())).isEmpty();
 
-        // Reuse of the retired token is refused; this test pins that the family's newest token is unaffected
-        // until the owner decides on family revocation (HOMELAB-134, open question).
-        assertThat(service.status(second.refreshToken())).isEqualTo(PhotoUploadTokenService.RefreshStatus.VALID);
+        // The copy of the old token is used: refused, and the newest token of the login is revoked with it.
+        assertThat(service.refresh(first.refreshToken())).isEmpty();
+        assertThat(service.status(second.refreshToken())).isEqualTo(PhotoUploadTokenService.RefreshStatus.REVOKED);
+        assertThat(service.refresh(second.refreshToken())).isEmpty();
+        assertThat(service.authenticateAccess(second.accessToken())).isEmpty();
+    }
+
+    @Test
+    void aLoginIsNotTouchedByAnotherLoginsReuse() {
+        PhotoUploadTokenService.IssuedTokens laptop = service.issue("owner-laptop");
+        PhotoUploadTokenService.IssuedTokens other = service.issue("owner-other");
+        PhotoUploadTokenService.IssuedTokens laptopNext = service.refresh(laptop.refreshToken()).orElseThrow();
+        service.refresh(laptop.refreshToken());
+
+        assertThat(service.status(other.refreshToken())).isEqualTo(PhotoUploadTokenService.RefreshStatus.VALID);
+        assertThat(service.status(laptopNext.refreshToken())).isEqualTo(PhotoUploadTokenService.RefreshStatus.REVOKED);
+    }
+
+    @Test
+    void theAdminRevokeStopsEveryTokenOfTheNameInThisEnvironment() {
+        PhotoUploadTokenService.IssuedTokens issued = service.issue("owner-laptop");
+        when(dao.revokeByName(any(), any(), any())).thenAnswer(invocation -> {
+            int changed = 0;
+            for (PhotoUploadToken row : rowsById.values()) {
+                if ("owner-laptop".equals(row.getTokenName()) && row.getRevokedAt() == null) {
+                    row.setRevokedAt(ZonedDateTime.now(clock()));
+                    changed++;
+                }
+            }
+            return changed;
+        });
+
+        assertThat(service.revokeByName("owner-laptop")).isEqualTo(2);
+        assertThat(service.status(issued.refreshToken())).isEqualTo(PhotoUploadTokenService.RefreshStatus.REVOKED);
+        assertThat(service.authenticateAccess(issued.accessToken())).isEmpty();
     }
 
     @Test

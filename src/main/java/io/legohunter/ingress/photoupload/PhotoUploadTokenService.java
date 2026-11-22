@@ -57,20 +57,26 @@ public class PhotoUploadTokenService {
             return Optional.empty();
         }
         if (token.getRetiredAt() != null) {
-            log.warn("photo_upload.refresh refused reason=retired-token-reused tokenName={}", token.getTokenName());
+            // A retired token presented again means a copy is in use: revoke the whole login (owner decision, HOMELAB-134).
+            revokeFamilyOf(token, now, "retired-token-reused");
             return Optional.empty();
         }
         if (!now.isBefore(token.getExpiresAt())) {
             log.info("photo_upload.refresh refused reason=expired tokenName={}", token.getTokenName());
             return Optional.empty();
         }
-        // Only the first caller to retire the token wins; a concurrent second use is refused.
+        // Only the first caller to retire the token wins. A second use at the same moment is a reuse too.
         if (!photoUploadTokenDao.retire(token.getPhotoUploadTokenId(), now)) {
-            log.warn("photo_upload.refresh refused reason=retired-concurrently tokenName={}", token.getTokenName());
+            revokeFamilyOf(token, now, "retired-concurrently");
             return Optional.empty();
         }
         log.info("photo_upload.refresh rotated tokenName={}", token.getTokenName());
         return Optional.of(issueInFamily(token.getTokenName(), token.getFamilyId()));
+    }
+
+    /** Revokes every live token issued to this name in this environment (the admin revoke). Returns the rows changed. */
+    public int revokeByName(String tokenName) {
+        return photoUploadTokenDao.revokeByName(properties.getEnvironment(), tokenName, ZonedDateTime.now(clock));
     }
 
     /** Reports whether a refresh token can still be exchanged. Does not rotate it. */
@@ -91,6 +97,13 @@ public class PhotoUploadTokenService {
         if (token.getRevokedAt() != null) return Optional.empty();
         if (!ZonedDateTime.now(clock).isBefore(token.getExpiresAt())) return Optional.empty();
         return row;
+    }
+
+    /** Revokes every token of the login the given token belongs to, and logs why. */
+    private void revokeFamilyOf(PhotoUploadToken token, ZonedDateTime now, String reason) {
+        int revoked = photoUploadTokenDao.revokeFamily(token.getFamilyId(), now);
+        log.warn("photo_upload.refresh refused reason={} tokenName={} revokedFamilyRows={}",
+                reason, token.getTokenName(), revoked);
     }
 
     private IssuedTokens issueInFamily(String tokenName, String familyId) {

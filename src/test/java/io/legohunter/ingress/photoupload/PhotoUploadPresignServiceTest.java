@@ -16,7 +16,7 @@ class PhotoUploadPresignServiceTest {
     private PhotoUploadPresignService service(String environment) {
         PhotoUploadProperties properties = new PhotoUploadProperties();
         properties.setEnvironment(environment);
-        return new PhotoUploadPresignService(properties);
+        return new PhotoUploadPresignService(properties, new io.legohunter.ingress.config.storage.S3ClientProperties());
     }
 
     private static FileRequest jpg(String name) {

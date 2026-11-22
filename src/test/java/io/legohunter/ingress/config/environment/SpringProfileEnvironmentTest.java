@@ -32,6 +32,8 @@ class SpringProfileEnvironmentTest {
             "file:${import-path}/database-configuration.yml",
             "file:${import-path}/kafka-configuration.yml",
             "file:${import-path}/s3-configuration.yml",
+            // HOMELAB-134: the Lightroom token secret and admin key. Optional, so an environment without it still starts.
+            "optional:file:${import-path}/photo-upload-configuration.yml",
             "file:${import-path}/flickr-api-keys.yml",
             "file:${import-path}/flickr-configuration.yml",
             "file:${import-path}/bitly-configuration.yml",
@@ -45,6 +47,8 @@ class SpringProfileEnvironmentTest {
             "file:${import-path}/database-configuration.yml",
             "file:${import-path}/kafka-configuration.yml",
             "file:${import-path}/s3-configuration.yml",
+            // HOMELAB-134: the Lightroom token secret and admin key. Optional, so an environment without it still starts.
+            "optional:file:${import-path}/photo-upload-configuration.yml",
             "file:${import-path}/flickr-api-keys.yml",
             "file:${import-path}/flickr-configuration.yml",
             "file:${import-path}/bitly-configuration.yml",

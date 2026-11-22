@@ -18,10 +18,13 @@ public class PhotoUploadProperties {
     private String environment = "";
     /** HMAC key for stored token hashes. A secret: changing it invalidates every token in this environment. */
     private String tokenSecret = "";
-    /** Silo's S3 endpoint for this environment. Presigned URLs point here. */
+    /**
+     * Silo's external S3 endpoint for this environment, as the plugin reaches it. Presigned URLs carry this host.
+     * The access key and secret are the existing lego.s3 credentials (the lcms-ingress-<env> user), not copies.
+     */
     private String siloUrl = "";
-    private String siloAccessKey = "";
-    private String siloSecretKey = "";
+    /** Admin key for /internal/photo-upload/admin. Blank turns the admin path off (it answers 404). A secret. */
+    private String adminKey = "";
     /** The uploads bucket is this prefix plus the environment, for example lego-uploads-sandbox. */
     private String uploadsBucketPrefix = "lego-uploads-";
     private int maxFiles = 25;

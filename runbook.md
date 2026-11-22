@@ -662,25 +662,70 @@ The Lightroom Silo publisher uploads photos through this service. Routes under `
 | `POST /presign` | the plugin, per batch of up to 25 files | access token (`Authorization: Bearer`) |
 | `POST /token/refresh` | the plugin, with a refresh token in the body | refresh token; rotates it |
 | `GET /token/status` | the plugin, when the Export dialog opens | refresh token in `Authorization`; does not rotate |
+| `POST /admin/tokens`, `POST /admin/tokens/revoke` | the owner, from Bruno | `X-Admin-Key` (see below) |
 
-- A refresh token is retired the moment it is exchanged. A retired token is never accepted again; a second
-  use is refused and logged as `refused reason=retired-token-reused`.
-- Access tokens last 1 hour and refresh tokens 12 hours, in every environment.
+- A refresh token is retired the moment it is exchanged. A retired token is never accepted again.
+- **Reuse revokes the login.** If a retired refresh token is presented again, or two refreshes arrive at the same
+  moment with one token, every token of that login is revoked. The plugin then needs a new token. This is logged as
+  `refused reason=retired-token-reused` (or `retired-concurrently`) with `revokedFamilyRows`.
+- Access tokens last 1 hour and refresh tokens 12 hours, in every environment. A refresh token that is not used for
+  12 hours expires, and the plugin then needs a new token.
 - A PROD presign needs `"prodConfirmation": "PROD"`, or it is refused with 403.
 - Presigned PUT URLs expire after 300 seconds. Files must be `.jpg`/`.jpeg`, at most 10,000,000 bytes, and at most
   25 per request.
 
-**Configuration** (`lego.photo-upload.*`; secrets from the environment's secret store, never logged):
+**Configuration.** The non-secret settings are in each environment profile (`application-<env>.yml`):
+`lego.photo-upload.environment` and `lego.photo-upload.silo-url` (the external Silo endpoint: `api.silo.dev` for
+SANDBOX and DEV, `api.silo.prod` for PROD). The upload reuses `lego.s3.access-key` and `lego.s3.secret-key`, the
+existing `lcms-ingress-<env>` credentials. The secrets come from the Infisical file `photo-upload-configuration.yml`
+(HOMELAB-138), which the profiles import as optional:
 
-- `environment`: `sandbox`, `dev` or `prod`. Presigns and tokens for any other environment are refused.
-- `token-secret`: the HMAC key for stored token hashes, one per environment. Changing it invalidates every token
-  in that environment. If it is blank, every token check fails closed.
-- `silo-url`, `silo-access-key`, `silo-secret-key`: Silo's S3 endpoint and the `lcms-ingress-<env>` user.
-  Uploads go to the bucket `lego-uploads-<env>`. If `silo-url` is blank, presign answers 503.
+```yaml
+lego:
+  photo-upload:
+    token-secret: "..."   # HMAC key for stored token hashes; changing it revokes every token in the environment
+    admin-key: "..."      # the admin path's X-Admin-Key; blank turns the admin path off
+```
+
+If `token-secret` is blank, every token check fails closed. If `silo-url` is blank, presign answers 503.
 
 **Checks.** The photo-upload security chain (`SecurityConfiguration`, order 1) matches `/internal/photo-upload/**`
-only. The actuator and Prometheus paths stay on the existing chain. A blocked upload shows as 401 on
-`/presign`; the plugin then needs a new token from the owner.
+only. The actuator and Prometheus paths stay on the existing chain.
 
-**Open:** how the first token is issued (the admin path is not built), and whether reuse of a retired token
-should also revoke its token family (owner decision pending on HOMELAB-134).
+## Administer Lightroom publisher tokens (HOMELAB-139)
+
+Use these steps to give the publisher its first token, or to replace a lost one. The requests are in the Bruno
+collection `lego-server-configuration/bruno/lego-collection/photo-upload-admin/`.
+
+**One-time Bruno setup (per environment).** In Bruno, create an environment named `sandbox`, `dev` or `prod` with:
+
+- `photoUploadIngressBase`: `https://lego-data-ingress.<env>.internal.legohunter.io`
+- `photoUploadAdminKey`: the value of `admin-key` from the environment's `photo-upload-configuration.yml`. Mark it
+  as a **secret** in Bruno, so it is stored in Bruno's secret store and not in the environment file.
+
+Do not commit a Bruno environment file that holds the key.
+
+**Issue a token** (request `01 issue token`):
+
+1. Select the environment, then send `01 issue token`. The body names the publisher: `"tokenName": "owner-laptop"`.
+2. Copy `refreshToken` from the response. It is shown once; the response is not stored anywhere.
+3. Paste it into the publisher's token field (HOMELAB-136 panel). The plugin keeps it in Lightroom's preferences.
+4. Discard the response. Do not paste the token into Jira, chat or a file.
+
+**Revoke a publisher's tokens** (request `02 revoke tokens`): send it for the same `tokenName`. It revokes every live
+token of that name in this environment. `revokedRows` tells you how many changed. The plugin then gets a 401 on its
+next refresh, so issue a new token (above) and paste it into the plugin.
+
+**Expected responses.**
+
+| Status | Meaning |
+|---|---|
+| 200 | Done. |
+| 400 | `tokenName` is missing or not 1 to 100 letters, digits, dots, dashes or underscores. |
+| 401 | The `X-Admin-Key` is missing or wrong. Check the environment's `photoUploadAdminKey`. |
+| 404 | The admin path is off: `admin-key` is blank in the environment's secret. |
+
+**Notes.** Each call logs `photo_upload.admin action=issue|revoke`, the environment and the token name. Neither the
+token nor the key is logged. The admin key and the token-secret are different values: never reuse one for the other.
+
+**Open:** the admin path issues tokens for a name you choose. There is no list of issued tokens yet.

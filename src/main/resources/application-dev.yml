@@ -4,6 +4,9 @@ spring:
       - file:${import-path}/database-configuration.yml
       - file:${import-path}/kafka-configuration.yml
       - file:${import-path}/s3-configuration.yml
+      # Lightroom photo upload (HOMELAB-134): the token secret and admin key. Optional, so an environment
+      # without the secret still starts; its token checks then fail closed.
+      - optional:file:${import-path}/photo-upload-configuration.yml
       # Flickr is split (HOMELAB-107): the API application's key and secret are one copy for every
       # environment (Infisical Global); the account (userId, token, tokenSecret) is per environment.
       - file:${import-path}/flickr-api-keys.yml
@@ -38,6 +41,9 @@ spring:
       pool-name: rasppi5-01-mysql-jdbc-pool
 
 lego:
+  photo-upload:
+    environment: dev
+    silo-url: https://api.silo.dev.internal.legohunter.io
   environment:
     code: dev
   s3:

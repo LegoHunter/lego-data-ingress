@@ -1,5 +1,6 @@
 package io.legohunter.ingress.photoupload;
 
+import io.legohunter.ingress.config.storage.S3ClientProperties;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.http.Method;
@@ -38,6 +39,7 @@ public class PhotoUploadPresignService {
     }
 
     private final PhotoUploadProperties properties;
+    private final S3ClientProperties s3Properties;
 
     public PresignResponse presign(PresignRequest request, String tokenName) {
         String environment = properties.getEnvironment();
@@ -115,7 +117,7 @@ public class PhotoUploadPresignService {
         }
         return MinioClient.builder()
                 .endpoint(properties.getSiloUrl())
-                .credentials(properties.getSiloAccessKey(), properties.getSiloSecretKey())
+                .credentials(s3Properties.getAccessKey(), s3Properties.getSecretKey())
                 .build();
     }
 }
