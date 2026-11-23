@@ -32,6 +32,8 @@ public class PhotoUploadProperties {
     private Duration presignExpiry = Duration.ofSeconds(300);
     private Duration accessTokenLifetime = Duration.ofHours(1);
     private Duration refreshTokenLifetime = Duration.ofHours(12);
+    /** A batch file still pending this long after its batch was created is reported as failed (upload-design section 13). */
+    private Duration statusFailedAfter = Duration.ofMinutes(15);
 
     public String uploadsBucket() {
         return uploadsBucketPrefix + environment;

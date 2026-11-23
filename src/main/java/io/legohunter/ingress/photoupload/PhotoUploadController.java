@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -34,6 +35,7 @@ public class PhotoUploadController {
 
     private final PhotoUploadTokenService tokenService;
     private final PhotoUploadPresignService presignService;
+    private final PhotoUploadStatusService statusService;
 
     @PostMapping("/presign")
     public ResponseEntity<PresignResponse> presign(@RequestBody PresignRequest request, Principal principal) {
@@ -57,6 +59,14 @@ public class PhotoUploadController {
                 : null;
         RefreshStatus status = tokenService.status(token);
         return Map.of("state", status.name().toLowerCase(java.util.Locale.ROOT));
+    }
+
+    /** The state of each file in a batch (HOMELAB-135). Needs a valid access token. */
+    @GetMapping("/batches/{batchId}")
+    public ResponseEntity<PhotoUploadStatusService.BatchStatus> batch(@PathVariable String batchId) {
+        return statusService.status(batchId)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
     }
 
     @ExceptionHandler(PhotoUploadRefusedException.class)

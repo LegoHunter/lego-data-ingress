@@ -663,6 +663,15 @@ The Lightroom Silo publisher uploads photos through this service. Routes under `
 | `POST /token/refresh` | the plugin, with a refresh token in the body | refresh token; rotates it |
 | `GET /token/status` | the plugin, when the Export dialog opens | refresh token in `Authorization`; does not rotate |
 | `POST /admin/tokens`, `POST /admin/tokens/revoke` | the owner, from Bruno | `X-Admin-Key` (see below) |
+| `GET /batches/{batchId}` | the plugin, after its uploads finish | access token (`Authorization: Bearer`) |
+
+**Batch status (HOMELAB-135).** `GET /batches/{batchId}` returns each file of a batch and its state: `pending`
+(not yet decided by ingest), `accepted`, `rejected` (with the reason from ingest), `duplicate`, or `failed`. A file
+still `pending` 15 minutes after its batch was presigned is reported as `failed`: its URL expired and nothing
+arrived. `complete` is true when no file is still pending. Unknown batches, and batches from another environment,
+answer 404. The state is kept in `photo_upload_batch` and `photo_upload_batch_file` (changeset `2.9.0`), which
+ingest updates as it decides each file. Recording never stops an ingest: a failed write is logged as
+`photo.batch.outcome.failed`.
 
 - A refresh token is retired the moment it is exchanged. A retired token is never accepted again.
 - **Reuse revokes the login.** If a retired refresh token is presented again, or two refreshes arrive at the same

@@ -29,6 +29,7 @@ class PhotoUploadSecurityWebTest {
     @Autowired MockMvc mvc;
     @MockBean PhotoUploadTokenService tokenService;
     @MockBean PhotoUploadPresignService presignService;
+    @MockBean PhotoUploadStatusService statusService;
 
     private static final String PRESIGN_BODY = "{\"environment\":\"sandbox\",\"files\":[]}";
 

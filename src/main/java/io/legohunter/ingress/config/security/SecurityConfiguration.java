@@ -35,6 +35,7 @@ public class SecurityConfiguration {
                         UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/internal/photo-upload/presign").hasRole("PHOTO_UPLOAD")
+                        .requestMatchers("/internal/photo-upload/batches/**").hasRole("PHOTO_UPLOAD")
                         .anyRequest().permitAll())
                 .exceptionHandling(handling -> handling.authenticationEntryPoint((request, response, ex) ->
                         response.sendError(HttpStatus.UNAUTHORIZED.value())));

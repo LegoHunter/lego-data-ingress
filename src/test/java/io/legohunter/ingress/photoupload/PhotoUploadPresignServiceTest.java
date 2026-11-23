@@ -16,7 +16,7 @@ class PhotoUploadPresignServiceTest {
     private PhotoUploadPresignService service(String environment) {
         PhotoUploadProperties properties = new PhotoUploadProperties();
         properties.setEnvironment(environment);
-        return new PhotoUploadPresignService(properties, new io.legohunter.ingress.config.storage.S3ClientProperties());
+        return new PhotoUploadPresignService(properties, new io.legohunter.ingress.config.storage.S3ClientProperties(), org.mockito.Mockito.mock(io.legohunter.data.dao.PhotoUploadBatchDao.class));
     }
 
     private static FileRequest jpg(String name) {

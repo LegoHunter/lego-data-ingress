@@ -49,6 +49,7 @@ public class PhotoProcessingService {
     private static final int BRICKLINK_SERVICE_ID = 2;
 
     private final S3Service s3Service;
+    private final io.legohunter.data.dao.PhotoUploadBatchDao photoUploadBatchDao;
     private final MetadataExtractorService metadataExtractorService;
     private final MetadataFingerprintService metadataFingerprintService;
     private final PhotoFingerprintService photoFingerprintService;
@@ -161,6 +162,8 @@ public class PhotoProcessingService {
                         REJECTED_PHOTO_PREFIX,
                         "rejected"
                 );
+
+                recordBatchOutcome(event, io.legohunter.data.dto.PhotoUploadBatchFile.REJECTED, e.getMessage(), null, null);
 
                 if (moved) {
                     log.warn(
@@ -394,6 +397,7 @@ public class PhotoProcessingService {
                         DUPLICATE_PHOTO_PREFIX,
                         "duplicate"
                 );
+                recordBatchOutcome(event, io.legohunter.data.dto.PhotoUploadBatchFile.DUPLICATE, null, null, null);
             }
 
             return;
@@ -480,6 +484,7 @@ public class PhotoProcessingService {
                         DUPLICATE_PHOTO_PREFIX,
                         "duplicate"
                 );
+                recordBatchOutcome(event, io.legohunter.data.dto.PhotoUploadBatchFile.DUPLICATE, null, null, null);
             }
 
             return;
@@ -627,6 +632,8 @@ public class PhotoProcessingService {
                     metadata.builtOnceOptional().orElse(null),
                     metadata.keywords()
             );
+
+            recordAcceptedOutcome(event, md5);
 
             return persistedItem;
           });
@@ -956,6 +963,27 @@ public class PhotoProcessingService {
         }
 
         return normalizedFileName;
+    }
+
+    /** Records an accepted photo's outcome for its upload batch. Never fails the ingest. */
+    private void recordAcceptedOutcome(PhotoUploadEvent event, String md5) {
+        Integer photoId = itemInventoryPhotoDao.findByMd5(md5)
+                .map(io.legohunter.data.dto.ItemInventoryPhoto::getItemInventoryPhotoId)
+                .orElse(null);
+        recordBatchOutcome(event, io.legohunter.data.dto.PhotoUploadBatchFile.ACCEPTED, null, photoId, md5);
+    }
+
+    /** Records a file's outcome when the upload came from a publisher batch (photos/<batchId>/<name>). */
+    private void recordBatchOutcome(PhotoUploadEvent event, String state, String reason, Integer photoId, String md5) {
+        if (event == null) {
+            return;
+        }
+        try {
+            io.legohunter.ingress.photoupload.PhotoUploadBatchKey.parse(event.getObjectKey()).ifPresent(key ->
+                    photoUploadBatchDao.recordOutcome(key.batchId(), key.fileName(), state, reason, photoId, md5));
+        } catch (RuntimeException ex) {
+            log.warn("photo.batch.outcome.failed state={} reason={}", state, ex.getClass().getSimpleName());
+        }
     }
 
     private boolean moveSourceObject(

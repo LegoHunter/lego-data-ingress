@@ -88,6 +88,8 @@ class PhotoProcessingServiceTest {
     private org.springframework.transaction.support.TransactionOperations transactions =
             org.springframework.transaction.support.TransactionOperations.withoutTransaction();
 
+    @Mock io.legohunter.data.dao.PhotoUploadBatchDao photoUploadBatchDao;
+
     @InjectMocks
     private PhotoProcessingService service;
 
