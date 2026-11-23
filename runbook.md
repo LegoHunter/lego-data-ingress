@@ -695,7 +695,7 @@ only. The actuator and Prometheus paths stay on the existing chain.
 ## Administer Lightroom publisher tokens (HOMELAB-139)
 
 Use these steps to give the publisher its first token, or to replace a lost one. The requests are in the Bruno
-collection `lego-server-configuration/bruno/lego-collection/photo-upload-admin/`.
+collection `lego-server-configuration/bruno/lcms/photo-upload-admin/`.
 
 **One-time Bruno setup (per environment).** In Bruno, create an environment named `sandbox`, `dev` or `prod` with:
 
