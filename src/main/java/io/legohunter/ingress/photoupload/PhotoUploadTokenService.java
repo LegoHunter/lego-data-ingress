@@ -81,12 +81,25 @@ public class PhotoUploadTokenService {
 
     /** Reports whether a refresh token can still be exchanged. Does not rotate it. */
     public RefreshStatus status(String refreshToken) {
+        return refreshDetails(refreshToken).state();
+    }
+
+    /** The state of a refresh token and, when it can still be used, the time it expires (HOMELAB-146). */
+    public RefreshDetails refreshDetails(String refreshToken) {
         Optional<PhotoUploadToken> row = findOwned(refreshToken, PhotoUploadTokenKind.REFRESH);
-        if (row.isEmpty()) return RefreshStatus.REVOKED;
+        if (row.isEmpty()) return new RefreshDetails(RefreshStatus.REVOKED, null);
         PhotoUploadToken token = row.get();
-        if (token.getRevokedAt() != null || token.getRetiredAt() != null) return RefreshStatus.REVOKED;
-        if (!ZonedDateTime.now(clock).isBefore(token.getExpiresAt())) return RefreshStatus.EXPIRED;
-        return RefreshStatus.VALID;
+        if (token.getRevokedAt() != null || token.getRetiredAt() != null) {
+            return new RefreshDetails(RefreshStatus.REVOKED, null);
+        }
+        if (!ZonedDateTime.now(clock).isBefore(token.getExpiresAt())) {
+            return new RefreshDetails(RefreshStatus.EXPIRED, null);
+        }
+        return new RefreshDetails(RefreshStatus.VALID, token.getExpiresAt());
+    }
+
+    /** The state of a refresh token; expiresAt is set only when it is valid. */
+    public record RefreshDetails(RefreshStatus state, ZonedDateTime expiresAt) {
     }
 
     /** The access token's row when it is valid in this environment now, otherwise empty. */

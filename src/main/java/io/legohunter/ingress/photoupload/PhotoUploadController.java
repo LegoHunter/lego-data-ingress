@@ -3,7 +3,6 @@ package io.legohunter.ingress.photoupload;
 import io.legohunter.ingress.photoupload.PhotoUploadPresignService.PresignRequest;
 import io.legohunter.ingress.photoupload.PhotoUploadPresignService.PresignResponse;
 import io.legohunter.ingress.photoupload.PhotoUploadTokenService.IssuedTokens;
-import io.legohunter.ingress.photoupload.PhotoUploadTokenService.RefreshStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -52,13 +51,20 @@ public class PhotoUploadController {
     }
 
     /** Reports whether the refresh token in the Authorization header can still be exchanged. Does not rotate it. */
+    /** The token's state, and when a valid token expires (HOMELAB-146). Does not rotate the token. */
     @GetMapping("/token/status")
-    public Map<String, String> status(@RequestHeader(value = "Authorization", required = false) String authorization) {
+    public TokenStatusResponse status(@RequestHeader(value = "Authorization", required = false) String authorization) {
         String token = authorization != null && authorization.startsWith("Bearer ")
                 ? authorization.substring("Bearer ".length()).trim()
                 : null;
-        RefreshStatus status = tokenService.status(token);
-        return Map.of("state", status.name().toLowerCase(java.util.Locale.ROOT));
+        PhotoUploadTokenService.RefreshDetails details = tokenService.refreshDetails(token);
+        return new TokenStatusResponse(
+                details.state().name().toLowerCase(java.util.Locale.ROOT),
+                details.expiresAt() == null ? null : details.expiresAt().toInstant().toString());
+    }
+
+    /** state is valid, expired or revoked; refreshExpiresAt is an ISO-8601 time when valid, otherwise null. */
+    public record TokenStatusResponse(String state, String refreshExpiresAt) {
     }
 
     /** The state of each file in a batch (HOMELAB-135). Needs a valid access token. */

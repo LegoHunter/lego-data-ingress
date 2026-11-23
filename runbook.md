@@ -661,7 +661,7 @@ The Lightroom Silo publisher uploads photos through this service. Routes under `
 |---|---|---|
 | `POST /presign` | the plugin, per batch of up to 25 files | access token (`Authorization: Bearer`) |
 | `POST /token/refresh` | the plugin, with a refresh token in the body | refresh token; rotates it |
-| `GET /token/status` | the plugin, when the Export dialog opens | refresh token in `Authorization`; does not rotate |
+| `GET /token/status` | the plugin, when the Export dialog opens | refresh token in `Authorization`; does not rotate. Answers `state` (valid, expired or revoked) and `refreshExpiresAt` (ISO-8601 when valid, otherwise null) |
 | `POST /admin/tokens`, `POST /admin/tokens/revoke` | the owner, from Bruno | `X-Admin-Key` (see below) |
 | `GET /batches/{batchId}` | the plugin, after its uploads finish | access token (`Authorization: Bearer`) |
 

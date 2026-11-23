@@ -15,6 +15,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -68,9 +69,12 @@ class PhotoUploadSecurityWebTest {
 
     @Test
     void statusIsOpenAtThisLayer() throws Exception {
-        when(tokenService.status(any())).thenReturn(PhotoUploadTokenService.RefreshStatus.VALID);
+        when(tokenService.refreshDetails(any())).thenReturn(new PhotoUploadTokenService.RefreshDetails(
+                PhotoUploadTokenService.RefreshStatus.VALID, java.time.ZonedDateTime.parse("2026-11-24T01:00:00Z")));
         mvc.perform(get("/internal/photo-upload/token/status").header("Authorization", "Bearer x"))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("valid"))
+                .andExpect(jsonPath("$.refreshExpiresAt").value("2026-11-24T01:00:00Z"));
     }
 
     @Test
