@@ -397,7 +397,7 @@ public class PhotoProcessingService {
                         DUPLICATE_PHOTO_PREFIX,
                         "duplicate"
                 );
-                recordBatchOutcome(event, io.legohunter.data.dto.PhotoUploadBatchFile.DUPLICATE, null, null, null);
+                recordBatchOutcome(event, io.legohunter.data.dto.PhotoUploadBatchFile.DUPLICATE, null, null, md5);
             }
 
             return;
@@ -484,7 +484,7 @@ public class PhotoProcessingService {
                         DUPLICATE_PHOTO_PREFIX,
                         "duplicate"
                 );
-                recordBatchOutcome(event, io.legohunter.data.dto.PhotoUploadBatchFile.DUPLICATE, null, null, null);
+                recordBatchOutcome(event, io.legohunter.data.dto.PhotoUploadBatchFile.DUPLICATE, null, null, md5);
             }
 
             return;
