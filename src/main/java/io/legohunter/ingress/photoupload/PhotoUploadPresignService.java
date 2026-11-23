@@ -1,5 +1,7 @@
 package io.legohunter.ingress.photoupload;
 
+import io.legohunter.data.dao.PhotoUploadBatchDao;
+import io.legohunter.data.dto.PhotoUploadBatch;
 import io.legohunter.ingress.config.storage.S3ClientProperties;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
@@ -40,6 +42,7 @@ public class PhotoUploadPresignService {
 
     private final PhotoUploadProperties properties;
     private final S3ClientProperties s3Properties;
+    private final PhotoUploadBatchDao photoUploadBatchDao;
 
     public PresignResponse presign(PresignRequest request, String tokenName) {
         String environment = properties.getEnvironment();
@@ -79,6 +82,9 @@ public class PhotoUploadPresignService {
             log.error("photo_upload.presign failed to sign batchId={} reason={}", batchId, e.getClass().getSimpleName());
             throw new PhotoUploadRefusedException(HttpStatus.BAD_GATEWAY, "Silo did not sign the upload URLs");
         }
+        List<String> names = files.stream().map(FileRequest::name).toList();
+        photoUploadBatchDao.insertBatch(PhotoUploadBatch.builder()
+                .batchId(batchId).environment(environment).tokenName(tokenName).build(), names);
         log.info("photo_upload.presign tokenName={} environment={} files={} batchId={}",
                 tokenName, environment, files.size(), batchId);
         return new PresignResponse(batchId, uploads);
