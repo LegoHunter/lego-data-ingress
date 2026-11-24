@@ -214,4 +214,28 @@ class PhotoUploadTokenServiceTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> unconfigured.authenticateAccess("x"))
                 .isInstanceOf(IllegalStateException.class);
     }
+
+    @Test
+    void aValidTokenReportsItsExpiry() {
+        PhotoUploadTokenService.IssuedTokens issued = service.issue("owner-laptop");
+
+        PhotoUploadTokenService.RefreshDetails details = service.refreshDetails(issued.refreshToken());
+
+        assertThat(details.state()).isEqualTo(PhotoUploadTokenService.RefreshStatus.VALID);
+        assertThat(details.expiresAt()).isNotNull();
+        assertThat(details.expiresAt().toInstant()).isEqualTo(START.plusSeconds(43200));
+    }
+
+    @Test
+    void aRevokedOrExpiredTokenReportsNoExpiry() {
+        PhotoUploadTokenService.IssuedTokens issued = service.issue("owner-laptop");
+        service.refresh(issued.refreshToken()).orElseThrow();
+        assertThat(service.refreshDetails(issued.refreshToken()).expiresAt()).isNull();
+
+        PhotoUploadTokenService.IssuedTokens other = service.issue("owner-other");
+        now = START.plusSeconds(43200);
+        PhotoUploadTokenService.RefreshDetails expired = service.refreshDetails(other.refreshToken());
+        assertThat(expired.state()).isEqualTo(PhotoUploadTokenService.RefreshStatus.EXPIRED);
+        assertThat(expired.expiresAt()).isNull();
+    }
 }
