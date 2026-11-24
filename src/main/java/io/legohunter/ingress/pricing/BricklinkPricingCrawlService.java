@@ -13,13 +13,13 @@ import io.legohunter.data.dao.CrawlTargetDao;
 import io.legohunter.data.dao.MarketListingDao;
 import io.legohunter.data.dao.MarketSnapshotDao;
 import io.legohunter.data.dao.MarketplaceItemDao;
+import io.legohunter.data.dao.PricingCrawlerDaos;
 import io.legohunter.data.dto.CanonicalItem;
 import io.legohunter.data.dto.CrawlAttempt;
 import io.legohunter.data.dto.CrawlTarget;
 import io.legohunter.data.dto.MarketListing;
 import io.legohunter.data.dto.MarketSnapshot;
 import io.legohunter.data.dto.MarketplaceItem;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
@@ -62,9 +62,13 @@ import java.util.regex.Pattern;
  * <p>A BrickLink-wide outage (maintenance redirect, block, 5xx, I/O; see {@link BricklinkOutageClassifier}) is not a
  * failure of the item: the attempt is logged as {@code FAILED_OUTAGE}, the target keeps its failure count and is
  * retried after the backoff, and the run stops with outcome {@code OUTAGE} without touching the rest of the queue.
+ *
+ * <p>The crawler reads and writes the shared schema through {@link PricingCrawlerDaos}. Where
+ * {@code lego.marketplace-pricing.crawler.database-key-name} is set, that is the crawler's own MySQL account and
+ * connection, so the environment's account needs no write access to the crawl tables. The job lock stays on the
+ * environment connection.
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 @ConditionalOnProperty(prefix = "lego.bricklink.pricing.crawl", name = "enabled", havingValue = "true")
 public class BricklinkPricingCrawlService {
@@ -98,6 +102,26 @@ public class BricklinkPricingCrawlService {
     private final MarketSnapshotDao marketSnapshotDao;
     private final MarketListingDao marketListingDao;
     private final ObjectMapper objectMapper;
+
+    public BricklinkPricingCrawlService(
+            BricklinkAjaxClient bricklinkAjaxClient,
+            BricklinkPricingCrawlProperties properties,
+            PricingCrawlerDaos daos,
+            ObjectMapper objectMapper
+    ) {
+        this.bricklinkAjaxClient = bricklinkAjaxClient;
+        this.properties = properties;
+        this.canonicalItemDao = daos.canonicalItemDao();
+        this.marketplaceItemDao = daos.marketplaceItemDao();
+        this.crawlTargetDao = daos.crawlTargetDao();
+        this.crawlAttemptDao = daos.crawlAttemptDao();
+        this.marketSnapshotDao = daos.marketSnapshotDao();
+        this.marketListingDao = daos.marketListingDao();
+        this.objectMapper = objectMapper;
+        log.info("BrickLink price crawler: {}", daos.ownConnection()
+                ? "its own database connection"
+                : "the environment's database connection");
+    }
 
     public BricklinkPricingCrawlResult runOnce() {
         long start = System.currentTimeMillis();

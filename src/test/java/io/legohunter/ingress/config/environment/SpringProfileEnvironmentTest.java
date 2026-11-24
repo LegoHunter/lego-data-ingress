@@ -74,6 +74,21 @@ class SpringProfileEnvironmentTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"sandbox", "dev", "prod"})
+    void onlyTheEnvironmentThatRunsTheCrawlerHasTheCrawlerConnection(String env) {
+        // The crawler signs in with its own MySQL account (HOMELAB-126). A pod with this key set fails to start
+        // unless database-configuration.yml holds it, so it must be set exactly where the crawler is enabled.
+        // YAML booleans are Boolean values, which Properties.getProperty does not return.
+        boolean crawls = Boolean.TRUE.equals(podConfiguration(env).get("lego.bricklink.pricing.crawl.enabled"));
+        String crawlerKey = podConfiguration(env).getProperty("lego.marketplace-pricing.crawler.database-key-name");
+        if (crawls) {
+            assertThat(crawlerKey).isEqualTo("rasppi5-01-marketplace-pricing-crawler");
+        } else {
+            assertThat(crawlerKey).isNull();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sandbox", "dev", "prod"})
     void podImportsItsMountedCredentialFiles(String env) {
         Properties effective = podConfiguration(env);
 
