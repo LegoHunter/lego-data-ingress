@@ -13,6 +13,7 @@ import io.legohunter.data.dao.CrawlTargetDao;
 import io.legohunter.data.dao.MarketListingDao;
 import io.legohunter.data.dao.MarketSnapshotDao;
 import io.legohunter.data.dao.MarketplaceItemDao;
+import io.legohunter.data.dao.PricingCrawlerDaos;
 import io.legohunter.data.dto.CanonicalItem;
 import io.legohunter.data.dto.CrawlAttempt;
 import io.legohunter.data.dto.CrawlTarget;
@@ -101,8 +102,10 @@ class BricklinkPricingCrawlServiceTest {
         when(canonicalItemDao.findByCanonicalItemId(7)).thenReturn(Optional.of(
                 CanonicalItem.builder().canonicalItemId(7).itemTypeCode("S").itemNumber("6390-1").itemName("Main Street").build()));
 
-        service = new BricklinkPricingCrawlService(ajaxClient, properties, canonicalItemDao, marketplaceItemDao,
-                crawlTargetDao, crawlAttemptDao, marketSnapshotDao, marketListingDao, new ObjectMapper()) {
+        service = new BricklinkPricingCrawlService(ajaxClient, properties,
+                new PricingCrawlerDaos(canonicalItemDao, marketplaceItemDao, crawlTargetDao, crawlAttemptDao,
+                        marketSnapshotDao, marketListingDao, false),
+                new ObjectMapper()) {
             @Override
             ZonedDateTime now() {
                 return now;

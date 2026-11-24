@@ -46,6 +46,12 @@ lego:
     silo-url: https://api.silo.dev.internal.legohunter.io
   environment:
     code: sandbox
+  # The shared price crawler runs here (see lego.bricklink.pricing.crawl below) and signs in to MySQL with its own
+  # account, lcms_pricing_crawler, through this key in database-configuration.yml (HOMELAB-126). The environment
+  # account can then only read the crawl tables. Move this line together with crawl.enabled when the crawler moves.
+  marketplace-pricing:
+    crawler:
+      database-key-name: rasppi5-01-marketplace-pricing-crawler
   s3:
     # silo-dev serves SANDBOX and DEV (HOMELAB-54); each environment has its own S3 user and buckets.
     url: http://silo-dev.silo-dev.svc.cluster.local:9000
