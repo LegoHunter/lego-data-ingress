@@ -309,9 +309,16 @@ the marketplace sync's mode are both `APPLY`.
 
 Each run compares the local database only (no BrickLink request), queues a request for every listing that is out
 of date, and sends `batch-size` (3) of them. The text is built again when it is sent. Hand edits made on BrickLink
-are not noticed. If the text the gateway reads back is only the start of the one sent, BrickLink cut it short: the
-request is `BLOCKED` with `EXTENDED_DESCRIPTION_TRUNCATED` and both lengths (shorten the captions). Log events:
-`bricklink.extended_description.{queued,sent,deferred,blocked,truncated,dry_run_verified}`.
+are not noticed.
+
+**Length of the Extended Description.** LCMS sends at most **20,000 characters**, counted as BrickLink stores them
+(`&` counts as 5). BrickLink names no limit; a 20,000-character text was shown in full on a SANDBOX lot
+(measured 2026-11-25), and longer texts are untested. A longer text is never sent or trimmed: the request is
+`BLOCKED` with `EXTENDED_DESCRIPTION_TOO_LONG` and the number of characters to remove, and the listing is queued
+again after `retry-backoff` until the item's photo captions are shortened. Should BrickLink still cut a text
+short (the gateway reads back only the start of the one sent), the request is `BLOCKED` with
+`EXTENDED_DESCRIPTION_TRUNCATED` and both lengths. Log events:
+`bricklink.extended_description.{queued,sent,deferred,blocked,too_long,truncated,dry_run_verified,dry_run_blocked}`.
 Where they run: SANDBOX (both `APPLY`), DEV (both `DRY_RUN`), PROD (off until the gateway is there, HOMELAB-114).
 
 ## Orders and fulfillment

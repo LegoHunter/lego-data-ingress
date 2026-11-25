@@ -132,6 +132,49 @@ class BricklinkExtendedDescriptionSyncServiceTest {
     }
 
     @Test
+    void aTextOver20000CharactersIsBlockedAndNeverSentOrRecorded() {
+        // 2026-11-25: BrickLink showed 20,000 characters in full; longer is untested, so it is not sent.
+        captions(row(100, null, 1, "x".repeat(20_001)));
+        when(itemInventoryPhotoDao.findProcessedCaptionsByItemInventoryId(200)).thenReturn(List.of("x".repeat(20_001)));
+        waiting(request());
+
+        BricklinkExtendedDescriptionSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isOne();
+        verify(gateway, never()).putExtendedDescription(anyLong(), anyString());
+        verify(bricklinkMarketplaceListingDao, never()).updateExtendedDescription(any(), any(), any());
+        assertThat(lastUpdate().getSyncRequestStatusCode()).isEqualTo("BLOCKED");
+        assertThat(lastUpdate().getLastErrorMessage()).startsWith("EXTENDED_DESCRIPTION_TOO_LONG")
+                .contains("20001 characters", "at most 20000", "photo captions");
+    }
+
+    @Test
+    void aTextOfExactly20000CharactersIsSent() {
+        String atLimit = "x".repeat(20_000);
+        captions(row(100, null, 1, atLimit));
+        when(itemInventoryPhotoDao.findProcessedCaptionsByItemInventoryId(200)).thenReturn(List.of(atLimit));
+        waiting(request());
+
+        BricklinkExtendedDescriptionSyncResult result = service.runOnce();
+
+        verify(gateway).putExtendedDescription(LOT, atLimit);
+        assertThat(result.stored()).isOne();
+    }
+
+    @Test
+    void dryRunReportsATextThatIsTooLongAsBlocked() {
+        properties.setMode("DRY_RUN");
+        captions(row(100, null, 1, "x".repeat(20_001)));
+        when(itemInventoryPhotoDao.findProcessedCaptionsByItemInventoryId(200)).thenReturn(List.of("x".repeat(20_001)));
+
+        BricklinkExtendedDescriptionSyncResult result = service.runOnce();
+
+        assertThat(result.blocked()).isOne();
+        assertThat(result.dryRunVerified()).isZero();
+        verifyNoInteractions(gateway);
+    }
+
+    @Test
     void htmlEscapingAndLineEndsAreNotTruncation() {
         assertThat(BricklinkExtendedDescriptionSyncService.truncation("Box \"dented\" & worn.\nOK", "Box &quot;dented&quot; &amp; worn.\r\nOK")).isNull();
         assertThat(BricklinkExtendedDescriptionSyncService.truncation("Box has a dent.", null)).isNull();
