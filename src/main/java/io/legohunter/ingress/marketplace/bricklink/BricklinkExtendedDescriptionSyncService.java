@@ -48,6 +48,8 @@ import java.util.Set;
  *       ownership and stockroom check as every other sync request. The gateway checks the stockroom again.</li>
  *   <li>The text is built again when the request is sent, so captions changed since it was queued are
  *       included.</li>
+ *   <li>A text over {@link BricklinkLotText#EXTENDED_DESCRIPTION_MAX_LENGTH} characters is never sent or trimmed:
+ *       the request is BLOCKED with {@value #EXTENDED_DESCRIPTION_TOO_LONG} and the owner shortens the captions.</li>
  *   <li>A gateway that cannot work (signed out, unreachable) or a BrickLink API outage costs no attempt: the
  *       request goes back to PENDING and the run stops sending.</li>
  * </ul>
@@ -62,6 +64,8 @@ public class BricklinkExtendedDescriptionSyncService {
     static final String SYNC_REASON = "EXTENDED_DESCRIPTION_OUT_OF_DATE";
     static final String CREATED_BY = "BricklinkExtendedDescriptionSync";
     static final String GATEWAY_NOT_CONFIGURED = "GATEWAY_NOT_CONFIGURED";
+    /** The captions make a text longer than LCMS sends; nothing was sent (HOMELAB-82). */
+    static final String EXTENDED_DESCRIPTION_TOO_LONG = "EXTENDED_DESCRIPTION_TOO_LONG";
     /** BrickLink kept only the start of the text: its Extended Description has a length limit (HOMELAB-82). */
     static final String EXTENDED_DESCRIPTION_TRUNCATED = "EXTENDED_DESCRIPTION_TRUNCATED";
 
@@ -206,6 +210,12 @@ public class BricklinkExtendedDescriptionSyncService {
                 return;
             }
             String text = lotTextSource.extendedDescription(context.itemInventory().getItemInventoryId());
+            if (BricklinkLotText.extendedDescriptionTooLong(text)) {
+                counters.blocked++;
+                log.warn("bricklink.extended_description.dry_run_blocked marketplaceListingId={} bricklinkInventoryId={} statusCode={} message={}",
+                        marketplaceListingId, context.lotId(), EXTENDED_DESCRIPTION_TOO_LONG, BricklinkLotText.extendedDescriptionTooLongMessage(text));
+                return;
+            }
             counters.dryRunVerified++;
             log.info("bricklink.extended_description.dry_run_verified marketplaceListingId={} bricklinkInventoryId={} characters={} lines={}",
                     marketplaceListingId, context.lotId(), text.length(), text.isEmpty() ? 0 : text.split("\n").length);
@@ -235,6 +245,16 @@ public class BricklinkExtendedDescriptionSyncService {
             if (isCurrent(context.bricklinkListing().getExtendedDescriptionHash(), text)) {
                 counters.alreadyCurrent++;
                 requests().markSucceeded(request, remote, now());
+                return false;
+            }
+            if (BricklinkLotText.extendedDescriptionTooLong(text)) {
+                // Never sent and never trimmed: only shorter captions fix it. The hash is not recorded, so the listing
+                // is queued again after the retry backoff and stays visible until then.
+                String message = BricklinkLotText.extendedDescriptionTooLongMessage(text);
+                counters.blocked++;
+                requests().markBlocked(request, EXTENDED_DESCRIPTION_TOO_LONG, message, now());
+                log.error("bricklink.extended_description.too_long marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} message={}",
+                        request.getMarketplaceListingSyncRequestId(), request.getMarketplaceListingId(), context.lotId(), message);
                 return false;
             }
 
