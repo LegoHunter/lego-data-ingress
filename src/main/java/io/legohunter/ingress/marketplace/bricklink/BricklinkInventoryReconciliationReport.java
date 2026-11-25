@@ -12,8 +12,9 @@ import java.util.Map;
  * @param ownedRemoteLots    lots whose system block names this environment
  * @param localListings      ACTIVE local BrickLink listings with a lot id
  * @param matchedListings    local listings whose lot the store returned
- * @param inFlightListings   matched listings with a PENDING or CLAIMED sync request, so price drift is
- *                           expected for a moment and not reported
+ * @param inFlightListings   matched listings with a PENDING or CLAIMED sync request other than a web gateway one
+ *                           (lot image, Extended Description), so price and Description drift are expected for a
+ *                           moment and not reported
  * @param driftCounts        drifts found, by type; every type is present
  */
 public record BricklinkInventoryReconciliationReport(
