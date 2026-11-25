@@ -40,8 +40,11 @@ import java.util.Set;
  * logged and published as metrics; nothing is changed. It is the base for first-sale-wins delisting
  * later: a lot that disappeared has usually been sold.
  *
- * <p>Price drift is not reported for a listing with a PENDING or CLAIMED sync request: the price
- * change is in flight, and the sync worker moves the local price only after BrickLink confirms it.
+ * <p>Price and Description drift are not reported for a listing with a PENDING or CLAIMED sync
+ * request: the change is in flight, and the sync worker moves the local price only after BrickLink
+ * confirms it. A request that goes through the web gateway (lot image, Extended Description) does
+ * not count: it changes neither the price nor the Description, and it can stay open for days while
+ * the gateway cannot work, which would hide real drift for as long (HOMELAB-82).
  */
 @Service
 @RequiredArgsConstructor
@@ -50,6 +53,9 @@ import java.util.Set;
 public class BricklinkInventoryReconciliationService {
     private static final String LISTING_STATUS_ACTIVE = "ACTIVE";
     private static final Set<String> OPEN_SYNC_STATUSES = Set.of("PENDING", "CLAIMED");
+    /** Request types sent through the web gateway. They change neither the lot's price nor its Description. */
+    private static final Set<String> WEB_GATEWAY_SYNC_TYPES = Set.of(
+            BricklinkLotImageSyncService.TYPE, BricklinkExtendedDescriptionSyncService.TYPE);
 
     private final BricklinkInventoryReconciliationProperties properties;
     private final LegoEnvironmentProperties environment;
@@ -216,8 +222,13 @@ public class BricklinkInventoryReconciliationService {
                 .toList();
     }
 
+    /**
+     * Whether a request that may change the lot's price or Description is still open. A request of an unknown type
+     * counts, so a new type is treated as a change in flight until it is listed as a web gateway type.
+     */
     private boolean hasOpenSyncRequest(Integer marketplaceListingId) {
         return marketplaceListingSyncRequestDao.findByMarketplaceListingId(marketplaceListingId).stream()
+                .filter(request -> !WEB_GATEWAY_SYNC_TYPES.contains(trim(request.getSyncRequestTypeCode()).toUpperCase()))
                 .map(MarketplaceListingSyncRequest::getSyncRequestStatusCode)
                 .map(status -> trim(status).toUpperCase())
                 .anyMatch(OPEN_SYNC_STATUSES::contains);

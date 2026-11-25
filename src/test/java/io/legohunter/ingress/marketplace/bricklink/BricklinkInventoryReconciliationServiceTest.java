@@ -319,6 +319,47 @@ class BricklinkInventoryReconciliationServiceTest {
         assertThat(service.reconcile().outcome()).isEqualTo("IN_SYNC");
     }
 
+    @Test
+    void anOpenWebGatewayRequestDoesNotHidePriceOrDescriptionDrift() {
+        // HOMELAB-82: a lot image request stuck PENDING for days hid the Description drift of SANDBOX listing 959.
+        MarketplaceListing titled = listing(956, "70.14");
+        titled.setTitle("Summer Cottage");
+        arrangeListings(titled);
+        arrangeBricklink(mapping(956, 1001));
+        arrangeStore(lot(1001, 75.00, 956));
+        when(syncRequestDao.findByMarketplaceListingId(956)).thenReturn(Set.of(
+                MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(1L)
+                        .syncRequestTypeCode("LOT_IMAGE_UPDATE").syncRequestStatusCode("PENDING").build(),
+                MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(2L)
+                        .syncRequestTypeCode("EXTENDED_DESCRIPTION_UPDATE").syncRequestStatusCode("CLAIMED").build()));
+
+        BricklinkInventoryReconciliationReport report = service.reconcile();
+
+        assertThat(report.outcome()).isEqualTo("DRIFT_FOUND");
+        assertThat(report.driftCounts().get(BricklinkInventoryDriftType.PRICE_DRIFT)).isOne();
+        assertThat(report.driftCounts().get(BricklinkInventoryDriftType.DESCRIPTION_DRIFT)).isOne();
+        assertThat(report.inFlightListings()).isZero();
+    }
+
+    @Test
+    void anOpenDescriptionUpdateStillHidesDescriptionDriftBesideAWebGatewayRequest() {
+        MarketplaceListing titled = listing(956, "70.14");
+        titled.setTitle("Summer Cottage");
+        arrangeListings(titled);
+        arrangeBricklink(mapping(956, 1001));
+        arrangeStore(lot(1001, 70.14, 956));
+        when(syncRequestDao.findByMarketplaceListingId(956)).thenReturn(Set.of(
+                MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(1L)
+                        .syncRequestTypeCode("LOT_IMAGE_UPDATE").syncRequestStatusCode("PENDING").build(),
+                MarketplaceListingSyncRequest.builder().marketplaceListingSyncRequestId(2L)
+                        .syncRequestTypeCode("DESCRIPTION_UPDATE").syncRequestStatusCode("PENDING").build()));
+
+        BricklinkInventoryReconciliationReport report = service.reconcile();
+
+        assertThat(report.outcome()).isEqualTo("IN_SYNC");
+        assertThat(report.inFlightListings()).isOne();
+    }
+
     private void arrangeListings(MarketplaceListing... listings) {
         when(marketplaceListingDao.findAll()).thenReturn(Set.of(listings));
     }

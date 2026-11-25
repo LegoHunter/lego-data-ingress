@@ -270,7 +270,10 @@ Mode `DRY_RUN` verifies and logs without claiming or writing. The `local` enviro
     example after the album link arrived; fix the listing's text, nothing is queued);
   - `UNTRACKED_REMOTE_LOT` (the block names this environment, but no listing points at the lot).
 
-  Changes still in flight are not reported. Each drift logs `bricklink.inventory_reconciliation.drift`.
+  Price and Description changes still in flight (a `PENDING` or `CLAIMED` sync request on the listing) are not
+  reported. An open web gateway request (`LOT_IMAGE_UPDATE`, `EXTENDED_DESCRIPTION_UPDATE`) does not count as in
+  flight: it changes neither, and it may stay open for days while the gateway cannot work.
+  Each drift logs `bricklink.inventory_reconciliation.drift`.
   With `inventory-reconciliation.queue-description-updates: true` (SANDBOX), each run also queues a
   `DESCRIPTION_UPDATE` for every `DESCRIPTION_DRIFT` (`bricklink.description_drift.queued`). That is how a new
   album link, or a caption added or removed, reaches the lot. A listing whose last `DESCRIPTION_UPDATE` ended
