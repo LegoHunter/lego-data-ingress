@@ -88,6 +88,7 @@ public class ShortUrlBackfillService {
             return List.of();
         }
         boolean anyCaption = !itemInventoryPhotoDao.findProcessedCaptionsByItemInventoryId(itemInventoryId).isEmpty();
+        int photoCount = itemInventoryPhotoDao.countProcessedByItemInventoryId(itemInventoryId);
         boolean extendedDescriptionSync = description.writesExtendedDescription();
         return marketplaceListingDao.findByItemInventoryId(itemInventoryId).stream()
                 .filter(listing -> BRICKLINK.equals(listing.getListingExternalServiceId()))
@@ -96,7 +97,7 @@ public class ShortUrlBackfillService {
                 .map(listing -> {
                     BricklinkLotText.Description text = BricklinkLotText.description(
                             BricklinkLotText.shortText(listing.getDescription(), listing.getTitle()),
-                            link, anyCaption, extendedDescriptionSync);
+                            link, photoCount, anyCaption, extendedDescriptionSync);
                     return new Listing(listing.getMarketplaceListingId(), listing.getExternalListingId(),
                             listing.getListingStatusCode(), text.present() ? text.length() : 0, text.present() && text.tooLong());
                 })

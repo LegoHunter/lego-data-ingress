@@ -54,11 +54,12 @@ class ShortUrlBackfillServiceTest {
         when(albumDao.findAll()).thenReturn(Set.of(bitlyAlbum, currentAlbum, noLinkYet, notCreatedYet, otherService));
 
         when(photoDao.findProcessedCaptionsByItemInventoryId(any())).thenReturn(List.of());
+        when(photoDao.countProcessedByItemInventoryId(any())).thenReturn(6);
         when(listingDao.findByItemInventoryId(any())).thenReturn(Set.of());
         // Item 958: one BrickLink lot whose text gets too long with the new link, one short lot, one listing
         // with no lot yet and one listing on another marketplace.
         when(listingDao.findByItemInventoryId(958)).thenReturn(Set.of(
-                listing(1, BRICKLINK, "301", "x".repeat(200)),
+                listing(1, BRICKLINK, "301", "x".repeat(210)),
                 listing(2, BRICKLINK, "302", "Test Car"),
                 listing(3, BRICKLINK, null, "Not listed yet"),
                 listing(4, 3, "ebay-1", "On eBay")));
