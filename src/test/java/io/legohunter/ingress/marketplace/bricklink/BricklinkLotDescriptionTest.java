@@ -37,9 +37,10 @@ class BricklinkLotDescriptionTest {
     void theAlbumLinkFollowsTheText() {
         when(albums.findByExternalServiceIdAndItemInventoryId(10, 958)).thenReturn(Optional.of(
                 ExternalImageAlbum.builder().albumUrl("https://www.flickr.com/photos/u/sets/1/").build()));
+        when(photos.countProcessedByItemInventoryId(958)).thenReturn(6);
 
         assertThat(lotDescription.expected(listing("Test Car", null)).text())
-                .isEqualTo("Test Car. <a href=\"https://www.flickr.com/photos/u/sets/1/\">View all photos</a>.");
+                .isEqualTo("Test Car. Visit https://www.flickr.com/photos/u/sets/1/ to see 6 photos.");
     }
 
     @Test
@@ -67,11 +68,15 @@ class BricklinkLotDescriptionTest {
     }
 
     @Test
-    void theAlbumLinkMatchesWhatBricklinkStores() {
-        // Measured 2026-11-19 on a SANDBOX lot: the tag comes back as sent, the ampersand escaped.
+    void theAlbumAddressMatchesWhatBricklinkStores() {
+        // Measured on a SANDBOX lot: the plain address comes back as sent (2026-11-25), the ampersand escaped (2026-11-19).
         assertThat(BricklinkLotDescription.matches(
-                "Test & Car. <a href=\"https://www.flickr.com/photos/u/sets/1/\">View all photos</a>.",
-                "Test &amp; Car. <a href=\"https://www.flickr.com/photos/u/sets/1/\">View all photos</a>.")).isTrue();
+                "Test & Car. Visit https://flic.kr/s/aHBqjDaRCA to see 6 photos.",
+                "Test &amp; Car. Visit https://flic.kr/s/aHBqjDaRCA to see 6 photos.")).isTrue();
+        // A lot still holding the earlier anchor form differs, so reconciliation rewrites it.
+        assertThat(BricklinkLotDescription.matches(
+                "Test Car. Visit https://flic.kr/s/aHBqjDaRCA to see 6 photos.",
+                "Test Car. <a href=\"https://flic.kr/s/aHBqjDaRCA\">View all photos</a>.")).isFalse();
     }
 
     private static MarketplaceListing listing(String title, String description) {

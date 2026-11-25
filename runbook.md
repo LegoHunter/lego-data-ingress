@@ -223,13 +223,20 @@ The only code that writes to BrickLink lots. It takes `PENDING` requests that ar
 
 **The lot Description (HOMELAB-82)** is one rule, `BricklinkLotText` in lego-data, also used by lego-data-service:
 1. the listing's description, otherwise its title;
-2. `<a href="ALBUM">View all photos</a>.`, when the item's Flickr album has an address (its short link first);
+2. `Visit ALBUM to see N photos.`, with the address as plain text and N the item's processed photos, when the
+   item's Flickr album has an address (its short link first);
 3. "See Extended Description for additional Item Condition notes.", when a processed photo has a caption **and**
    the Extended Description sync runs in `APPLY` here (otherwise buyers would be pointed at an empty field).
 
-A text on its own is sent as typed; with a link or the sentence after it, it ends with a period. BrickLink keeps
-the anchor tag (the link is clickable) but drops a `target` attribute, stores `&` as `&amp;`, and **silently cuts
-the stored text at 255 characters**, mid-link if need be (measured 2026-11-19). So the length is counted as stored,
+A text on its own is sent as typed; with the album sentence or the note after it, it ends with a period.
+
+The address is plain text because BrickLink's store pages no longer show a link in a Description: an `<a>` tag is
+stored but shown as its words only, and a plain address is shown in full but cannot be clicked (seen 2026-11-19
+and 2026-11-25). Buyers copy the address. A lot that still holds the earlier `<a href>` form, or an old photo
+count, shows as `DESCRIPTION_DRIFT` and is rewritten.
+
+BrickLink stores `&` as `&amp;` and **silently cuts the stored text at 255 characters**, mid-address if need be
+(measured 2026-11-19). So the length is counted as stored,
 and a text that does not fit is never sent or trimmed: the owner shortens the listing's description or title.
 lego-data-service refuses such an edit with the length in the message.
 
