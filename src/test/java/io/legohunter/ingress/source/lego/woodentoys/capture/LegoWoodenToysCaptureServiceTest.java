@@ -265,6 +265,21 @@ class LegoWoodenToysCaptureServiceTest {
     }
 
     @Test
+    void aPictureWhoseSizeIsNotTheSizeLegoStatesIsKeptAndReported() throws IOException {
+        threeEntries();
+        source.pictures.put(url("bltB", "train.jpg"), bytes("a longer train"));
+
+        LegoWoodenToysCaptureResult result = service.capture(true, false);
+
+        assertThat(result.outcome()).isEqualTo(Outcome.COMPLETED);
+        assertThat(result.pictureProblems()).isEmpty();
+        assertThat(result.pictureSizeDifferences()).hasSize(1);
+        assertThat(result.pictureSizeDifferences().get(0))
+                .contains("410-train-1950").contains("LEGO states 5 bytes, received 14");
+        assertThat(captureFile().entries().get(2).pictures().get(0).byteSize()).isEqualTo(14L);
+    }
+
+    @Test
     void aPictureOverTheSizeLimitIsReportedAndNotDownloaded() {
         threeEntries();
         properties.setMaxPictureBytes(4);

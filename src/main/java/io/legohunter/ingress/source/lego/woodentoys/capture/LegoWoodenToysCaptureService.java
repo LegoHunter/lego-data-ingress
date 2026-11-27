@@ -298,6 +298,7 @@ public class LegoWoodenToysCaptureService {
                 throw new IllegalStateException("could not read " + key + " from the bucket", e);
             }
             tally.picturesReusedFromBucket++;
+            noteSizeDifference(tally, label, picture, inBucket.bytes());
             return Optional.of(picture.stored(key, inBucket.bytes(), inBucket.sha256()));
         }
 
@@ -335,6 +336,7 @@ public class LegoWoodenToysCaptureService {
             }
             tally.picturesDownloaded++;
             tally.bytesDownloaded += downloaded.bytes();
+            noteSizeDifference(tally, label, picture, downloaded.bytes());
             return Optional.of(picture.stored(key, downloaded.bytes(), downloaded.sha256()));
         } catch (IOException e) {
             throw new IllegalStateException("could not handle the downloaded picture " + label, e);
@@ -346,6 +348,14 @@ public class LegoWoodenToysCaptureService {
                     log.warn("lego_wooden_toys.capture.temp_file_not_deleted file={}", file);
                 }
             }
+        }
+    }
+
+    /** LEGO states each picture's size. A different size received is worth a look, and is not a reason to drop it. */
+    private static void noteSizeDifference(Tally tally, String label, Picture picture, long received) {
+        if (picture.byteSize() != null && picture.byteSize() != received) {
+            tally.pictureSizeDifferences.add("%s: LEGO states %d bytes, received %d"
+                    .formatted(label, picture.byteSize(), received));
         }
     }
 
@@ -411,6 +421,7 @@ public class LegoWoodenToysCaptureService {
         int picturesReusedFromBucket;
         long bytesDownloaded;
         final List<String> pictureProblems = new ArrayList<>();
+        final List<String> pictureSizeDifferences = new ArrayList<>();
         final List<SharedPicture> suspectSharedPictures = new ArrayList<>();
         String captureFileKey;
 
@@ -429,6 +440,7 @@ public class LegoWoodenToysCaptureService {
                     reportedCount, entriesCaptured, entriesInDatabase, entriesNew, entriesChanged, picturesListed,
                     stockPicturesRefused, picturesAlreadyHeld, picturesToCapture, picturesDownloaded,
                     picturesReusedFromBucket, bytesDownloaded, List.copyOf(pictureProblems),
+                    List.copyOf(pictureSizeDifferences),
                     List.copyOf(suspectSharedPictures), captureFileKey);
         }
     }

@@ -21,6 +21,8 @@ import java.util.List;
  * @param picturesReusedFromBucket pictures an earlier run had already put in the bucket, not downloaded again
  * @param bytesDownloaded          total size of the downloaded pictures
  * @param pictureProblems          pictures that were not captured, each with the reason
+ * @param pictureSizeDifferences   captured pictures whose size is not the size LEGO states for them; they are
+ *                                 kept, with the size received
  * @param suspectSharedPictures    pictures attached to more entries than the limit and not known as the stock
  *                                 picture; not downloaded
  * @param captureFileKey           key of the capture file written, or null when none was written
@@ -45,6 +47,7 @@ public record LegoWoodenToysCaptureResult(
         int picturesReusedFromBucket,
         long bytesDownloaded,
         List<String> pictureProblems,
+        List<String> pictureSizeDifferences,
         List<SharedPicture> suspectSharedPictures,
         String captureFileKey
 ) {

@@ -583,7 +583,8 @@ checksum to the configuration.
 
 A picture the site answers "not found" for, or one over `max-picture-bytes` (60 MB; the database packet limit
 is 64 MB), is listed in `pictureProblems` and left out; its entry is still captured. Such a picture is tried
-again on every run.
+again on every run. A captured picture whose size is not the size LEGO states for it is kept and listed in
+`pictureSizeDifferences`.
 
 **Switches** (`lego.catalog-capture.lego-wooden-toys`). `enabled` creates the capture and its endpoint;
 `scheduled.enabled` adds the monthly run (`scheduled.cron`, 04:15 on the 2nd). SANDBOX has `enabled` on and the

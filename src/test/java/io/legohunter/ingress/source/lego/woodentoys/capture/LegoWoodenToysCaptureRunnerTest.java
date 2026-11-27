@@ -118,7 +118,7 @@ class LegoWoodenToysCaptureRunnerTest {
 
     private static LegoWoodenToysCaptureResult result(Outcome outcome, boolean apply, int entries, List<String> problems) {
         return new LegoWoodenToysCaptureResult(outcome, apply, ENDED.minusSeconds(60), ENDED, "", 23, 667, entries, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0L, problems, List.of(), null);
+                0, 0, 0, 0, 0, 0, 0, 0, 0L, problems, List.of(), List.of(), null);
     }
 
     private double counter(String outcome) {
