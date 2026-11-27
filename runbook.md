@@ -71,6 +71,7 @@ From `application-<profile>.yml`. Kubernetes runs `<env>,kubernetes`, and the la
 | `BricklinkOpenOrderProbeJob` | every 5 min, writes local staging only | every 5 min, local staging only | hourly |
 | `FulfillmentScheduledSyncJob` | maps only (apply off) | maps only (apply off) | hourly, applies |
 | `ImageHostingScheduledSyncJob` | every 5 min, applies (`kubernetes` profile) | same | same |
+| `LegoWoodenToysCaptureJob` (monthly) | off; by hand only | off | off |
 
 PROD go-live for pricing and sync is tracked in epic HOMELAB-84. When PROD runs them, the lot audit should move
 to PROD, where a SANDBOX feature deploy cannot switch it off.
@@ -541,6 +542,76 @@ database.
 - Settings: `lego.image-hosting.sync.difference-report.enabled` (on under the `kubernetes` profile), `cron`,
   `zone`, `full-check-days`.
 
+## LEGO wooden toys catalog capture
+
+LEGO publishes its catalog of wooden toys at `https://www.lego.com/en-us/history/wooden-toys/overview`. The capture
+copies it into this environment's uploads bucket: every entry's fields, and every picture except LEGO's stock
+"image on its way" picture. It reads lego.com and the database and writes only to the bucket. Loading the capture
+into the database is a separate step, started by the capture file arriving in the bucket.
+
+**What a run does** (`LegoWoodenToysCaptureService`):
+
+1. **Reads the catalog.** About 23 overview pages, requested as page data, with a pause between requests. A
+   server error is tried again.
+2. **Checks it.** The run stops, writing nothing, when a page cannot be read, when the entries read are not
+   exactly the number the site reports, or when it read under 90 percent of the captured entries the database
+   holds. A changed page layout must not look like an emptied catalog.
+3. **Compares with the database.** An entry is changed when it is new, when LEGO's version or update time
+   differs, or when its pictures differ. When nothing is changed the run ends as `UNCHANGED` and writes nothing.
+4. **Puts the new pictures in the bucket**, one at a time, at
+   `lego/wooden-toys/images/<entry id>/<picture id>-<file name>`. Only pictures the database does not hold are
+   downloaded. A picture an earlier run already put in the bucket is not downloaded again.
+5. **Puts the capture file last**, at `lego/wooden-toys/catalog/<capture time>.json`
+   (`WoodenToysCaptureFile`). It lists every entry, and for each picture its object key, size and SHA-256.
+
+**The stock picture.** LEGO attaches the same placeholder picture to every entry that has none (226 of 667
+entries on 2026-11-26). It is refused by its id before download and by its checksum after; both are in
+configuration (`stock-picture-asset-ids`, `stock-picture-sha256`). A picture attached to more than
+`shared-picture-limit` (20) entries is taken for a new stock picture: it is not downloaded and is reported in
+`suspectSharedPictures`. If that happens, look at the picture; if it is a new placeholder, add its id and
+checksum to the configuration.
+
+**Outcomes.**
+
+| Outcome | Meaning |
+| --- | --- |
+| `COMPLETED` | Pictures and a capture file were written |
+| `UNCHANGED` | Nothing differs from the database; nothing written |
+| `DRY_RUN` | The counts say what a run would do; nothing downloaded or written |
+| `STOPPED` | A check on the site's answer did not pass; no capture file. `message` says which |
+| `FAILED` | A request or a write failed after its retries; no capture file. Pictures already in the bucket stay and are reused |
+
+A picture the site answers "not found" for, or one over `max-picture-bytes` (60 MB; the database packet limit
+is 64 MB), is listed in `pictureProblems` and left out; its entry is still captured. Such a picture is tried
+again on every run.
+
+**Switches** (`lego.catalog-capture.lego-wooden-toys`). `enabled` creates the capture and its endpoint;
+`scheduled.enabled` adds the monthly run (`scheduled.cron`, 04:15 on the 2nd). SANDBOX has `enabled` on and the
+monthly run off; DEV and PROD have both off. The monthly run starts the capture in the background, so it does
+not hold up the other scheduled jobs.
+
+**Run it by hand.**
+
+```bash
+# What would a run do? Reads lego.com and the database; writes nothing. Takes about a minute.
+curl -X POST "$INGRESS/internal/catalog-capture/lego-wooden-toys"
+# A real run. The first one downloads about 500 pictures, 1.4 GB.
+curl -X POST "$INGRESS/internal/catalog-capture/lego-wooden-toys?apply=true"
+# Is it still running, and how did the last run go? (kept in memory; lost when the pod restarts)
+curl "$INGRESS/internal/catalog-capture/lego-wooden-toys"
+```
+
+`force=true` writes a capture file even when nothing is changed. The result is also logged as
+`lego_wooden_toys.capture.result`.
+
+**Metrics** (label `source="lego_wooden_toys"`): `catalog_capture_job_total{outcome}`,
+`catalog_capture_last_run_failed` (1 after a `STOPPED` or `FAILED` run), `catalog_capture_last_success_timestamp_seconds`,
+`catalog_capture_entries_current`, and `catalog_capture_attention_current{kind}` for `picture_problems` and
+`suspect_shared_pictures`. A dry run is counted and changes no gauge. Alerts `CatalogCaptureFailed` and
+`CatalogCaptureNeedsAttention` are in `lego-server-configuration/prometheus/prometheus-alerting-values.yaml`.
+
+The pictures are LEGO's property. They stay inside the system; nothing publishes them.
+
 ## Operating
 
 **Deploy.**
@@ -574,6 +645,8 @@ DEV and PROD each publish to their own Flickr account.
 | `POST /internal/bricklink/inventory/reconciliation` | Run the reconciliation now (404 when off) |
 | `POST /internal/bricklink/inventory/lot-audit` | Run the lot audit now (404 when off) |
 | `POST /internal/bricklink/marketplace-sync/description-backfill?apply=false` | See above |
+| `POST /internal/catalog-capture/lego-wooden-toys?apply=false&force=false` | Start a capture of LEGO's wooden toys catalog in the background (dry run unless `apply=true`; 409 while one runs; 404 when off) |
+| `GET /internal/catalog-capture/lego-wooden-toys` | Whether a capture is running, and the last result |
 | `/internal/image-hosting/...` | See above |
 
 **Watching it.** The Grafana dashboard `lego-data-ingress` has a row per plane. Every job logs one

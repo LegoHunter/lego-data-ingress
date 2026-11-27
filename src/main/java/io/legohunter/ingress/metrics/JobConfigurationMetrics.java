@@ -8,6 +8,7 @@ import io.legohunter.ingress.orders.BricklinkOrderSyncProperties;
 import io.legohunter.ingress.pricing.BricklinkPricingCrawlProperties;
 import io.legohunter.ingress.pricing.RepriceMode;
 import io.legohunter.ingress.pricing.RepriceProperties;
+import io.legohunter.ingress.source.lego.woodentoys.capture.LegoWoodenToysCaptureProperties;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
@@ -23,7 +24,8 @@ public class JobConfigurationMetrics {
             FulfillmentSyncProperties fulfillmentSyncProperties,
             BricklinkPricingCrawlProperties bricklinkPricingCrawlProperties,
             BricklinkMarketplaceSyncProperties bricklinkMarketplaceSyncProperties,
-            RepriceProperties repriceProperties
+            RepriceProperties repriceProperties,
+            LegoWoodenToysCaptureProperties legoWoodenToysCaptureProperties
     ) {
         register(
                 meterRegistry,
@@ -66,6 +68,13 @@ public class JobConfigurationMetrics {
                 "BrickLink Marketplace Sync",
                 bricklinkMarketplaceSyncProperties.isEnabled() && bricklinkMarketplaceSyncProperties.getScheduled().isEnabled(),
                 bricklinkMarketplaceSyncProperties.effectiveMode() == BricklinkMarketplaceSyncMode.APPLY
+        );
+        register(
+                meterRegistry,
+                "lego_wooden_toys_capture",
+                "LEGO Wooden Toys Catalog Capture",
+                legoWoodenToysCaptureProperties.isEnabled() && legoWoodenToysCaptureProperties.getScheduled().isEnabled(),
+                true
         );
     }
 

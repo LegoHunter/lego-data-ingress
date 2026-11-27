@@ -23,6 +23,7 @@ lego:
     url: http://localhost
     buckets:
       final-photo: lego-photos-sandbox
+      uploads: lego-uploads-sandbox
 
 kafka:
   bootstrap-servers: localhost:31092

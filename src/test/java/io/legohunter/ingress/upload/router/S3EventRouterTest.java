@@ -63,6 +63,17 @@ class S3EventRouterTest {
                 .send(topic, key, event);
     }
 
+    @ParameterizedTest
+    @CsvSource({
+            "lego/wooden-toys/images/blt1/bltA-ferry.jpg",
+            "lego/wooden-toys/catalog/20261202T041500Z.json"
+    })
+    void routeUpload_leavesWoodenToysCaptureObjectsUnrouted(String key) {
+        router.routeUpload(uploadEvent("lego-uploads-sandbox", key));
+
+        verifyNoInteractions(kafkaTemplate);
+    }
+
     @Test
     void routeUpload_rejectsUnsupportedUploadKey() {
         ObjectUploadedEvent event = uploadEvent("lego-upload-sandbox", "unsupported/item.jpg");

@@ -20,6 +20,32 @@ lego:
   # photos/rejected/); zero or less turns the limit off.
   photos:
     max-upload-bytes: 10000000
+  # Hands-off captures of a catalog from its website into the uploads bucket (HOMELAB-162). A capture reads the
+  # website and the database and writes only to the bucket; the capture file arriving there starts the load.
+  catalog-capture:
+    # LEGO's wooden toys catalog on lego.com. enabled creates the capture and its on-demand endpoint
+    # (/internal/catalog-capture/lego-wooden-toys); scheduled.enabled adds the monthly run. Off here; each
+    # profile switches it on for itself. The remaining settings and their defaults are in
+    # LegoWoodenToysCaptureProperties.
+    lego-wooden-toys:
+      enabled: false
+      scheduled:
+        enabled: false
+        # 04:15 on the 2nd of each month.
+        cron: "0 15 4 2 * *"
+        lock-at-most-for: 15m
+        lock-at-least-for: 10m
+      page-pause: 2s
+      picture-pause: 1s
+      # LEGO's stock "image on its way" picture is never kept: refused by id before download, by checksum after.
+      stock-picture-asset-ids:
+        - blt360cf3fd32e46eb8
+      stock-picture-sha256:
+        - 8675dfe7f799366bea86e039f5d1032050762777b823a8ea125cc6a317797a37
+      # A picture on more entries than this is taken for a new stock picture: reported, not downloaded.
+      shared-picture-limit: 20
+      # The run stops when it reads fewer entries than this share of what the database holds.
+      minimum-entry-ratio: 0.9
   # The shared marketplace_pricing schema on the same MySQL server (HOMELAB-31/32).
   marketplace-pricing:
     schema: marketplace_pricing

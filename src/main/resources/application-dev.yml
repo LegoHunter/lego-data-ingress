@@ -51,6 +51,7 @@ lego:
     url: http://silo-dev.silo-dev.svc.cluster.local:9000
     buckets:
       final-photo: lego-photos-dev
+      uploads: lego-uploads-dev
   pricing:
     # Reprice (HOMELAB-65/66), the one pricing job, in DRY_RUN: it writes PROPOSED/BLOCKED decisions only,
     # with no sync requests and no BrickLink calls. It moves to APPLY once DEV has listings and the owner has

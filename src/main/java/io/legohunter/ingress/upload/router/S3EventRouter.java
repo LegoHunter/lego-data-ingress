@@ -16,6 +16,7 @@ import java.util.regex.Pattern;
 public class S3EventRouter {
 
     private static final String PHOTO_UPLOAD_PREFIX = "photos/";
+    private static final String LEGO_WOODEN_TOYS_PREFIX = "lego/wooden-toys/";
     private static final String REJECTED_PHOTO_PREFIX = "photos/rejected/";
     private static final String DUPLICATE_PHOTO_PREFIX = "photos/duplicate/";
     private static final String JPEG_EXTENSION = ".jpg";
@@ -63,6 +64,13 @@ public class S3EventRouter {
 
         if (key.startsWith("bricklink/") || key.startsWith("rebrickable/")) {
             routeDataUpload(event);
+            return;
+        }
+
+        if (key.startsWith(LEGO_WOODEN_TOYS_PREFIX)) {
+            // The capture of LEGO's wooden toys catalog writes here. Its picture objects are never routed: they
+            // are read when their entry is loaded. Its capture file is not routed either until the load exists.
+            log.debug("Not routing upload event with key {}", key);
             return;
         }
 
