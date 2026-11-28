@@ -319,6 +319,25 @@ class SpringProfileEnvironmentTest {
     }
 
     @Test
+    void theWoodenToysCaptureRunsByHandInSandboxOnlyAndEveryProfileNamesItsUploadsBucket() {
+        Properties shared = load("application.yml");
+        assertThat(String.valueOf(shared.get("lego.catalog-capture.lego-wooden-toys.enabled"))).isEqualTo("false");
+        assertThat(String.valueOf(shared.get("lego.catalog-capture.lego-wooden-toys.scheduled.enabled"))).isEqualTo("false");
+
+        Properties sandbox = load("application-sandbox.yml");
+        assertThat(String.valueOf(sandbox.get("lego.catalog-capture.lego-wooden-toys.enabled"))).isEqualTo("true");
+        assertThat(String.valueOf(sandbox.get("lego.catalog-capture.lego-wooden-toys.scheduled.enabled"))).isEqualTo("false");
+
+        for (String env : new String[]{"sandbox", "dev", "prod"}) {
+            Properties profile = load("application-" + env + ".yml");
+            assertThat(profile.get("lego.s3.buckets.uploads")).as(env).isEqualTo("lego-uploads-" + env);
+            if (!env.equals("sandbox")) {
+                assertThat(profile).as(env).doesNotContainKey("lego.catalog-capture.lego-wooden-toys.enabled");
+            }
+        }
+    }
+
+    @Test
     void sharedProfilesDoNotChooseADatabase() {
         for (String shared : new String[]{"application.yml", "application-kubernetes.yml"}) {
             assertThat(load(shared)).as(shared)

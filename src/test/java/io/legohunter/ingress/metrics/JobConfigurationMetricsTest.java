@@ -44,7 +44,8 @@ class JobConfigurationMetricsTest {
                 fulfillmentProperties,
                 crawlProperties,
                 marketplaceSyncProperties,
-                repriceProperties
+                repriceProperties,
+                new io.legohunter.ingress.source.lego.woodentoys.capture.LegoWoodenToysCaptureProperties()
         );
 
         assertThat(meterRegistry.get(METRIC_NAME)

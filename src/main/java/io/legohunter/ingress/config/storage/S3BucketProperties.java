@@ -20,9 +20,18 @@ public class S3BucketProperties {
         return buckets.getFinalPhoto().trim();
     }
 
+    /** The bucket everything comes in through; a put into it raises the event that starts a load. */
+    public String uploadsBucket() {
+        if (!StringUtils.hasText(buckets.getUploads())) {
+            throw new IllegalStateException("lego.s3.buckets.uploads must be configured");
+        }
+        return buckets.getUploads().trim();
+    }
+
     @Getter
     @Setter
     public static class Buckets {
         private String finalPhoto;
+        private String uploads;
     }
 }
