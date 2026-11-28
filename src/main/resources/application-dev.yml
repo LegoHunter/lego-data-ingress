@@ -46,6 +46,15 @@ lego:
     silo-url: https://api.silo.dev.internal.legohunter.io
   environment:
     code: dev
+  # The capture of LEGO's wooden toys catalog (HOMELAB-162) runs every two weeks here (HOMELAB-182), and by
+  # hand. Cron has no 14-day interval, so it is the 1st and the 15th of each month.
+  catalog-capture:
+    lego-wooden-toys:
+      enabled: true
+      scheduled:
+        enabled: true
+        # 04:15 on the 1st and the 15th of each month.
+        cron: "0 15 4 1,15 * *"
   s3:
     # silo-dev serves SANDBOX and DEV (HOMELAB-54); each environment has its own S3 user and buckets.
     url: http://silo-dev.silo-dev.svc.cluster.local:9000

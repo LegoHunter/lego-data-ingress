@@ -24,8 +24,8 @@ lego:
   # website and the database and writes only to the bucket; the capture file arriving there starts the load.
   catalog-capture:
     # LEGO's wooden toys catalog on lego.com. enabled creates the capture and its on-demand endpoint
-    # (/internal/catalog-capture/lego-wooden-toys); scheduled.enabled adds the monthly run. Off here; each
-    # profile switches it on for itself. The remaining settings and their defaults are in
+    # (/internal/catalog-capture/lego-wooden-toys); scheduled.enabled adds the scheduled run. Off here; each
+    # profile switches it on for itself, with its own interval (the default below is monthly). The remaining settings and their defaults are in
     # LegoWoodenToysCaptureProperties.
     lego-wooden-toys:
       enabled: false
