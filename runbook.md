@@ -71,7 +71,7 @@ From `application-<profile>.yml`. Kubernetes runs `<env>,kubernetes`, and the la
 | `BricklinkOpenOrderProbeJob` | every 5 min, writes local staging only | every 5 min, local staging only | hourly |
 | `FulfillmentScheduledSyncJob` | maps only (apply off) | maps only (apply off) | hourly, applies |
 | `ImageHostingScheduledSyncJob` | every 5 min, applies (`kubernetes` profile) | same | same |
-| `LegoWoodenToysCaptureJob` (monthly) | off; by hand only | off | off |
+| `LegoWoodenToysCaptureJob` | weekly (Sunday 04:15) | every two weeks (1st and 15th, 04:15) | off (monthly when switched on) |
 
 PROD go-live for pricing and sync is tracked in epic HOMELAB-84. When PROD runs them, the lot audit should move
 to PROD, where a SANDBOX feature deploy cannot switch it off.
@@ -587,9 +587,12 @@ again on every run. A captured picture whose size is not the size LEGO states fo
 `pictureSizeDifferences`.
 
 **Switches** (`lego.catalog-capture.lego-wooden-toys`). `enabled` creates the capture and its endpoint;
-`scheduled.enabled` adds the monthly run (`scheduled.cron`, 04:15 on the 2nd). SANDBOX has `enabled` on and the
-monthly run off; DEV and PROD have both off. The monthly run starts the capture in the background, so it does
-not hold up the other scheduled jobs.
+`scheduled.enabled` adds the scheduled run (`scheduled.cron`; the default is monthly, 04:15 on the 2nd). SANDBOX
+runs it every Sunday at 04:15, DEV on the 1st and the 15th at 04:15 (cron has no 14-day interval), and PROD has
+both switches off; when PROD is switched on it takes the monthly default. The scheduled run starts the capture
+in the background, so it does not hold up the other scheduled jobs. Until the capture file is loaded into the
+database, every scheduled run finds all entries new and writes a capture file; pictures already in the bucket
+are not downloaded again.
 
 **Run it by hand.**
 

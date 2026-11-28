@@ -52,13 +52,15 @@ lego:
   marketplace-pricing:
     crawler:
       database-key-name: rasppi5-01-marketplace-pricing-crawler
-  # The capture of LEGO's wooden toys catalog (HOMELAB-162) can be run by hand here. The monthly run stays off
-  # until the load of the capture file exists (HOMELAB-165): without it a capture file is never loaded.
+  # The capture of LEGO's wooden toys catalog (HOMELAB-162) runs every 7 days here (HOMELAB-182), and by hand.
+  # Until the load of the capture file exists (HOMELAB-165) nothing reads the file a run writes.
   catalog-capture:
     lego-wooden-toys:
       enabled: true
       scheduled:
-        enabled: false
+        enabled: true
+        # 04:15 every Sunday.
+        cron: "0 15 4 * * SUN"
   s3:
     # silo-dev serves SANDBOX and DEV (HOMELAB-54); each environment has its own S3 user and buckets.
     url: http://silo-dev.silo-dev.svc.cluster.local:9000

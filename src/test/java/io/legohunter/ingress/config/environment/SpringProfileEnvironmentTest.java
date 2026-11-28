@@ -319,20 +319,28 @@ class SpringProfileEnvironmentTest {
     }
 
     @Test
-    void theWoodenToysCaptureRunsByHandInSandboxOnlyAndEveryProfileNamesItsUploadsBucket() {
+    void theWoodenToysCaptureRunsWeeklyInSandboxEveryTwoWeeksInDevNotInProdAndEveryProfileNamesItsUploadsBucket() {
         Properties shared = load("application.yml");
         assertThat(String.valueOf(shared.get("lego.catalog-capture.lego-wooden-toys.enabled"))).isEqualTo("false");
         assertThat(String.valueOf(shared.get("lego.catalog-capture.lego-wooden-toys.scheduled.enabled"))).isEqualTo("false");
 
         Properties sandbox = load("application-sandbox.yml");
         assertThat(String.valueOf(sandbox.get("lego.catalog-capture.lego-wooden-toys.enabled"))).isEqualTo("true");
-        assertThat(String.valueOf(sandbox.get("lego.catalog-capture.lego-wooden-toys.scheduled.enabled"))).isEqualTo("false");
+        assertThat(String.valueOf(sandbox.get("lego.catalog-capture.lego-wooden-toys.scheduled.enabled"))).isEqualTo("true");
+        assertThat(sandbox.get("lego.catalog-capture.lego-wooden-toys.scheduled.cron")).isEqualTo("0 15 4 * * SUN");
+
+        Properties dev = load("application-dev.yml");
+        assertThat(String.valueOf(dev.get("lego.catalog-capture.lego-wooden-toys.enabled"))).isEqualTo("true");
+        assertThat(String.valueOf(dev.get("lego.catalog-capture.lego-wooden-toys.scheduled.enabled"))).isEqualTo("true");
+        assertThat(dev.get("lego.catalog-capture.lego-wooden-toys.scheduled.cron")).isEqualTo("0 15 4 1,15 * *");
 
         for (String env : new String[]{"sandbox", "dev", "prod"}) {
             Properties profile = load("application-" + env + ".yml");
             assertThat(profile.get("lego.s3.buckets.uploads")).as(env).isEqualTo("lego-uploads-" + env);
-            if (!env.equals("sandbox")) {
+            if (env.equals("prod")) {
                 assertThat(profile).as(env).doesNotContainKey("lego.catalog-capture.lego-wooden-toys.enabled");
+                assertThat(profile).as(env)
+                        .doesNotContainKey("lego.catalog-capture.lego-wooden-toys.scheduled.enabled");
             }
         }
     }
